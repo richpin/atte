@@ -1,12 +1,17 @@
-import { defineConfig } from "vite";
-import solid from "vite-plugin-solid";
-// @ts-expect-error type error without @types/node package
 import process from "node:process";
+import solid from "vite-plugin-solid";
+import { defineConfig } from "vitest/config";
+
 const host = process.env.TAURI_DEV_HOST;
 
 // https://vite.dev/config/
 export default defineConfig(() => ({
   plugins: [solid()],
+  test: {
+    environment: "jsdom",
+    include: ["src/**/*.{test,spec}.{ts,tsx}"],
+    clearMocks: true,
+  },
 
   // Vite options tailored for Tauri development and only applied in `tauri dev` or `tauri build`
   //

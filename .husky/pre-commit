@@ -1,0 +1,48 @@
+set -eu
+
+# --no-renames checks both the old and new paths of a move between areas.
+# Pathspecs avoid splitting filenames on whitespace or newlines.
+changed() {
+  if git diff --cached --quiet --no-ext-diff --no-renames -- "$@"; then
+    return 1
+  else
+    status=$?
+    if [ "$status" -eq 1 ]; then
+      return 0
+    fi
+    exit "$status"
+  fi
+}
+
+solid=false
+rust=false
+
+if changed .husky/; then
+  solid=true
+  rust=true
+fi
+
+if changed src/ public/ package.json pnpm-lock.yaml pnpm-workspace.yaml .npmrc \
+  ':(glob)*.ts' ':(glob)*.js' ':(glob)*.mjs' ':(glob)*.cjs' \
+  ':(glob)*.json' ':(glob)*.jsonc' ':(glob)*.html'; then
+  solid=true
+fi
+
+if changed src-tauri/ .cargo/ Cargo.toml Cargo.lock rust-toolchain rust-toolchain.toml \
+  rustfmt.toml .rustfmt.toml clippy.toml .clippy.toml scripts/validate-rust.sh; then
+  rust=true
+fi
+
+if [ "$solid" = true ]; then
+  echo "pre-commit: validating SolidJS"
+  pnpm validate
+fi
+
+if [ "$rust" = true ]; then
+  echo "pre-commit: validating Rust"
+  sh scripts/validate-rust.sh
+fi
+
+if [ "$solid" = false ] && [ "$rust" = false ]; then
+  echo "pre-commit: no staged SolidJS or Rust changes; skipping validation"
+fi
