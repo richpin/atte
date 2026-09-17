@@ -544,3 +544,127 @@ it("does not disable the new conversation when old subscription cleanup fails", 
   ).toBe(false);
   expect(screen.queryByRole("alert")).toBeNull();
 });
+
+it("opens agent management when no agent is installed", async () => {
+  vi.mocked(invoke).mockImplementation(async (command) => {
+    if (command === "prepared_agents") return [];
+    if (command === "agent_catalog" || command === "refresh_agent_catalog")
+      return [
+        {
+          id: "codex",
+          name: "Codex",
+          installed: false,
+          availableVersion: "1.12.0",
+          distribution: {
+            kind: "npm",
+            package: "@agentclientprotocol/codex-acp@1.12.0",
+          },
+          authentication: {
+            connected: false,
+            authenticated: false,
+            methods: [],
+          },
+        },
+      ];
+  });
+  render(() => <App />);
+  expect(
+    await screen.findByRole("heading", { name: "에이전트 관리" }),
+  ).toBeTruthy();
+  expect(screen.getByRole("button", { name: "Codex 설치" })).toBeTruthy();
+});
+
+it("keeps streaming and the fixed conversation while management is open", async () => {
+  const ready = {
+    id: "draft-1",
+    workingFolder: "/project",
+    agentId: "codex",
+    status: "running",
+    revision: 2,
+    turns: [
+      { id: "turn-1", message: "hello", response: "Hi", stopReason: null },
+    ],
+  };
+  const original = vi.mocked(invoke).getMockImplementation();
+  vi.mocked(invoke).mockImplementation((command, args) => {
+    if (command === "agent_catalog" || command === "refresh_agent_catalog")
+      return Promise.resolve([]);
+    return original?.(command, args) ?? Promise.resolve();
+  });
+  requests.mockResolvedValue(ready);
+  render(() => <App />);
+  await userEvent.click(screen.getByRole("button", { name: "폴더 선택" }));
+  await userEvent.click(screen.getByRole("button", { name: "에이전트 관리" }));
+  receiveUpdate({
+    kind: "textDelta",
+    conversationId: "draft-1",
+    revision: 3,
+    turnId: "turn-1",
+    text: " there",
+  });
+  await userEvent.click(
+    screen.getByRole("button", { name: "대화로 돌아가기" }),
+  );
+  expect(screen.getByText("Hi there")).toBeTruthy();
+  expect(invoke).not.toHaveBeenCalledWith(
+    "unsubscribe_conversation",
+    expect.anything(),
+  );
+  expect(
+    vi
+      .mocked(invoke)
+      .mock.calls.filter(([command]) => command === "subscribe_conversation"),
+  ).toHaveLength(1);
+});
+
+it("retries a failed install and offers the installed agent without restarting", async () => {
+  let installed = false;
+  let attempts = 0;
+  const agent = () => ({
+    id: "codex",
+    name: "Codex",
+    installed,
+    installedVersion: installed ? "1.12.0" : null,
+    availableVersion: "1.12.0",
+    distribution: {
+      kind: "npm",
+      package: "@agentclientprotocol/codex-acp@1.12.0",
+    },
+    authentication: { connected: false, authenticated: false, methods: [] },
+  });
+  vi.mocked(invoke).mockImplementation(async (command, args) => {
+    if (command === "prepared_agents")
+      return installed ? [{ id: "codex", name: "Codex" }] : [];
+    if (command === "agent_catalog" || command === "refresh_agent_catalog")
+      return [agent()];
+    if (command === "install_agent") {
+      attempts++;
+      if (attempts === 1) throw "설치 실패. 다시 시도해주세요.";
+      installed = true;
+    }
+    if (command === "select_working_folder") {
+      expect(args).toEqual({ agentId: "codex" });
+      return null;
+    }
+  });
+  render(() => <App />);
+  await userEvent.click(
+    await screen.findByRole("button", { name: "Codex 설치" }),
+  );
+  expect(await screen.findByRole("alert")).toHaveProperty(
+    "textContent",
+    "설치 실패. 다시 시도해주세요.",
+  );
+  await userEvent.click(screen.getByRole("button", { name: "Codex 설치" }));
+  expect(await screen.findByText(/설치됨 · 1.12.0/)).toBeTruthy();
+  await userEvent.click(
+    screen.getByRole("button", { name: "대화로 돌아가기" }),
+  );
+  expect((screen.getByRole("combobox") as HTMLSelectElement).value).toBe(
+    "codex",
+  );
+  await userEvent.click(screen.getByRole("button", { name: "폴더 선택" }));
+  expect(invoke).toHaveBeenCalledWith("select_working_folder", {
+    agentId: "codex",
+  });
+});

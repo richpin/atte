@@ -49,6 +49,7 @@ pub enum ConversationStatus {
 pub enum AuthenticationStatus {
     Unknown,
     Required,
+    Authenticated,
 }
 
 /// Actionable connection failures without exposing agent payloads or credentials.
@@ -87,7 +88,8 @@ pub enum ConversationError {
 
 /// Owns conversation state and agent runtime lifetimes.
 pub struct Conversations {
-    agents: Vec<AgentDefinition>,
+    agents: Mutex<Vec<AgentDefinition>>,
+    authentication: Arc<Mutex<HashMap<String, AuthenticationStatus>>>,
     state: Mutex<State>,
 }
 
@@ -98,6 +100,7 @@ struct State {
 }
 
 struct Entry {
+    agent: AgentDefinition,
     state: Arc<Mutex<ConversationState>>,
     runtime: Option<Runtime>,
 }
@@ -126,13 +129,16 @@ impl Conversations {
     /// Uses trusted launch definitions supplied by the outer application adapter.
     pub fn new(agents: Vec<AgentDefinition>) -> Self {
         Self {
-            agents,
+            agents: Mutex::new(agents),
+            authentication: Arc::default(),
             state: Mutex::new(State::default()),
         }
     }
 
     pub fn prepared_agents(&self) -> Vec<PreparedAgent> {
         self.agents
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
             .iter()
             .map(|agent| PreparedAgent {
                 id: agent.id.clone(),
@@ -141,13 +147,42 @@ impl Conversations {
             .collect()
     }
 
+    /// Latest authentication evidence from setup or an actual conversation request.
+    pub fn authentication_status(&self, agent_id: &str) -> Option<AuthenticationStatus> {
+        self.authentication.lock().ok()?.get(agent_id).cloned()
+    }
+
+    pub(crate) fn record_authentication(&self, agent_id: &str, status: AuthenticationStatus) {
+        if let Ok(mut authentication) = self.authentication.lock() {
+            authentication.insert(agent_id.into(), status);
+        }
+    }
+
+    /// Publishes an installed execution definition without replacing conversation state.
+    pub fn register_agent(&self, agent: AgentDefinition) -> Result<(), ConversationError> {
+        let mut agents = self.agents.lock().map_err(|_| unavailable())?;
+        if let Some(existing) = agents.iter_mut().find(|entry| entry.id == agent.id) {
+            *existing = agent;
+        } else {
+            agents.push(agent);
+        }
+        Ok(())
+    }
+
     /// Creates a disconnected draft assigned to the first prepared target.
     ///
     /// # Errors
     /// Returns an error if the folder is invalid or application state is unavailable.
     pub fn create(&self, folder: &Path) -> Result<Conversation, ConversationError> {
-        let agent = self.agents.first().ok_or_else(not_found)?;
-        self.create_for_agent(folder, &agent.id)
+        let id = self
+            .agents
+            .lock()
+            .map_err(|_| unavailable())?
+            .first()
+            .ok_or_else(not_found)?
+            .id
+            .clone();
+        self.create_for_agent(folder, &id)
     }
 
     /// Creates a draft with a fixed prepared agent and validated working folder.
@@ -156,11 +191,14 @@ impl Conversations {
         folder: &Path,
         agent_id: &str,
     ) -> Result<Conversation, ConversationError> {
-        if !self.agents.iter().any(|agent| agent.id == agent_id) {
-            return Err(ConversationError::NotFound(
-                "준비된 에이전트를 찾을 수 없습니다.".into(),
-            ));
-        }
+        let agent = self
+            .agents
+            .lock()
+            .map_err(|_| unavailable())?
+            .iter()
+            .find(|agent| agent.id == agent_id)
+            .cloned()
+            .ok_or_else(not_found)?;
         if !folder.is_dir() {
             return Err(ConversationError::InvalidWorkingFolder(
                 "존재하는 작업 폴더를 선택해주세요.".into(),
@@ -187,6 +225,7 @@ impl Conversations {
         state.entries.insert(
             draft.id,
             Entry {
+                agent,
                 state: Arc::new(Mutex::new(ConversationState {
                     snapshot: draft.clone(),
                     generation: 0,
@@ -237,12 +276,7 @@ impl Conversations {
                 "작업 폴더를 찾을 수 없습니다. 폴더를 다시 선택해주세요.".into(),
             ));
         }
-        let agent = self
-            .agents
-            .iter()
-            .find(|agent| agent.id == snapshot.agent_id)
-            .ok_or_else(not_found)?
-            .clone();
+        let agent = entry.agent.clone();
         let handle = tokio::runtime::Handle::try_current().map_err(|_| unavailable())?;
         snapshot.status = ConversationStatus::Connecting;
         snapshot.remote_session_id = None;
@@ -254,6 +288,7 @@ impl Conversations {
         let snapshot = current.snapshot.clone();
         let (stop, receiver) = oneshot::channel();
         let updates = RuntimeUpdates {
+            authentication: self.authentication.clone(),
             state: entry.state.clone(),
             generation: current.generation,
         };
@@ -424,11 +459,24 @@ pub enum ConversationUpdate {
 /// A connection-scoped writer. Retired runtimes cannot overwrite a replacement.
 #[derive(Clone)]
 pub(crate) struct RuntimeUpdates {
+    authentication: Arc<Mutex<HashMap<String, AuthenticationStatus>>>,
     state: Arc<Mutex<ConversationState>>,
     generation: u64,
 }
 
 impl RuntimeUpdates {
+    pub fn record_authentication(&self, status: AuthenticationStatus) {
+        let Ok(state) = self.state.lock() else {
+            return;
+        };
+        if state.generation != self.generation {
+            return;
+        }
+        if let Ok(mut authentication) = self.authentication.lock() {
+            authentication.insert(state.snapshot.agent_id.clone(), status);
+        }
+    }
+
     pub fn append_text(&self, turn: Uuid, text: String) {
         let Ok(mut state) = self.state.lock() else {
             return;

@@ -146,11 +146,13 @@ pub(crate) async fn run(
                             if let Ok(mut active) = turn_active.lock() { *active = None; }
                             let failure = match result {
                                 Ok(response) => {
+                                    turn_updates.record_authentication(AuthenticationStatus::Authenticated);
                                     turn_updates.modify(Some(prompt.turn), |snapshot| {
                                         if let Some(turn) = snapshot.turns.last_mut() {
                                             turn.stop_reason = serde_json::to_value(response.stop_reason).ok().and_then(|value| value.as_str().map(str::to_owned));
                                         }
                                         snapshot.status = ConversationStatus::SessionReady;
+                                        snapshot.authentication = AuthenticationStatus::Authenticated;
                                     });
                                     None
                                 }
@@ -179,7 +181,16 @@ pub(crate) async fn run(
                 _ => Some(ConnectionFailure::ProcessExited),
             }
         },
-        result = &mut protocol => Some(result.unwrap_or(ConnectionFailure::ConnectionClosed)),
+        result = &mut protocol => {
+            let failure = result.unwrap_or(ConnectionFailure::ConnectionClosed);
+            // EOF can become readable just before the OS reports process exit.
+            if failure == ConnectionFailure::ConnectionClosed
+                && tokio::time::timeout(Duration::from_millis(100), child.wait()).await.is_ok_and(|result| result.is_ok()) {
+                Some(ConnectionFailure::ProcessExited)
+            } else {
+                Some(failure)
+            }
+        },
     };
     drop(group);
     let _ = child.kill().await;
@@ -206,6 +217,9 @@ fn classify(error: agent_client_protocol::Error, fallback: ConnectionFailure) ->
 }
 
 fn failed(updates: &RuntimeUpdates, failure: ConnectionFailure) {
+    if failure == ConnectionFailure::AuthenticationRequired {
+        updates.record_authentication(AuthenticationStatus::Required);
+    }
     updates.modify(None, |snapshot| {
         snapshot.status = ConversationStatus::Failed;
         if failure == ConnectionFailure::AuthenticationRequired {
@@ -215,7 +229,7 @@ fn failed(updates: &RuntimeUpdates, failure: ConnectionFailure) {
     });
 }
 
-struct ProcessGroup(Option<u32>);
+pub(crate) struct ProcessGroup(pub(crate) Option<u32>);
 
 impl Drop for ProcessGroup {
     fn drop(&mut self) {

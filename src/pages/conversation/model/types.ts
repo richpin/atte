@@ -15,7 +15,7 @@ export interface Conversation {
   agentId: string;
   status: "disconnected" | "connecting" | "sessionReady" | "running" | "failed";
   remoteSessionId: string | null;
-  authentication: "unknown" | "required";
+  authentication: "unknown" | "required" | "authenticated";
   failure: ConnectionFailure | null;
   revision: number;
   turns: Turn[];

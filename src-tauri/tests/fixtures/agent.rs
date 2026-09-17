@@ -67,7 +67,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 if mode == "init-error" {
                     error = Some(json!({"code": -32603, "message": "initialize rejected"}));
                 }
-                json!({"protocolVersion": if mode == "wrong-version" { 99 } else { 1 }, "agentCapabilities": {}, "authMethods": []})
+                json!({"protocolVersion": if mode == "wrong-version" { 99 } else { 1 }, "agentCapabilities": {}, "authMethods": if mode == "key-auth" { json!([{"id": "api-key", "name": "API Key"}]) } else if env::var_os("AUTH_FILE").is_some() { json!([{ "id": "fixture-login", "name": "Fixture login" }, { "id": "fixture-denied", "name": "Denied login" }]) } else { json!([]) }})
+            }
+            "authenticate" => {
+                if request["params"]["methodId"] == "fixture-denied" {
+                    send(
+                        &mut output,
+                        json!({"jsonrpc": "2.0", "id": request["id"], "error": {"code": -32603, "message": "login rejected"}}),
+                    )?;
+                    continue;
+                }
+                assert_eq!(request["params"]["methodId"], "fixture-login");
+                fs::write(
+                    env::var_os("AUTH_FILE").ok_or("auth file missing")?,
+                    "authenticated",
+                )?;
+                json!({})
             }
             "session/new" => {
                 assert_eq!(
@@ -145,6 +160,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
             _ => continue,
         };
+        if matches!(method, "session/new" | "session/prompt")
+            && env::var_os("AUTH_FILE").is_some_and(|path| !std::path::Path::new(&path).exists())
+        {
+            error = Some(json!({"code": -32000, "message": "Authentication required"}));
+        }
         let mut response = json!({"jsonrpc": "2.0", "id": request["id"]});
         if let Some(error) = error {
             response["error"] = error;

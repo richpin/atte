@@ -75,7 +75,10 @@ async fn settle(
     tokio::time::timeout(Duration::from_secs(5), async {
         loop {
             let snapshot = conversations.get(id).unwrap();
-            if snapshot.status != ConversationStatus::Connecting {
+            if !matches!(
+                snapshot.status,
+                ConversationStatus::Connecting | ConversationStatus::Running
+            ) {
                 return snapshot;
             }
             tokio::time::sleep(Duration::from_millis(10)).await;
@@ -258,7 +261,10 @@ async fn real_codex_initializes_and_creates_a_session() {
     let connected = tokio::time::timeout(Duration::from_secs(35), async {
         loop {
             let snapshot = conversations.get(draft.id).unwrap();
-            if snapshot.status != ConversationStatus::Connecting {
+            if !matches!(
+                snapshot.status,
+                ConversationStatus::Connecting | ConversationStatus::Running
+            ) {
                 break snapshot;
             }
             tokio::time::sleep(Duration::from_millis(50)).await;
@@ -620,4 +626,252 @@ async fn preserves_authentication_error_when_process_exit_races_with_buffered_ou
     );
     assert_eq!(failed.authentication, AuthenticationStatus::Required);
     assert_eq!(failed.turns[0].response, "Hello world");
+}
+
+#[tokio::test]
+async fn installing_an_agent_preserves_the_existing_connection_and_subscription() {
+    let folder = tempfile::tempdir().unwrap();
+    let conversations = Conversations::new(vec![mock_agent()]);
+    let draft = conversations.create(folder.path()).unwrap();
+    conversations.connect(draft.id).unwrap();
+    settle(&conversations, draft.id).await;
+    let mut updates = conversations.subscribe(draft.id).unwrap();
+    updates.recv().await.unwrap();
+    let mut installed = mock_agent();
+    installed.id = "installed".into();
+    conversations.register_agent(installed).unwrap();
+    assert_eq!(conversations.prepared_agents().len(), 2);
+    conversations
+        .send_message(draft.id, "hello".into())
+        .unwrap();
+    let ready = settle(&conversations, draft.id).await;
+    assert_eq!(ready.agent_id, "fixture");
+    assert_eq!(ready.turns[0].response, "Hello world");
+    assert!(updates.recv().await.is_some());
+    conversations.shutdown().await;
+}
+
+#[tokio::test]
+async fn all_targets_authenticate_then_retry_the_same_conversation_after_expiry() {
+    use atte_lib::agent_management::authentication::inspect;
+    use atte_lib::conversation::{AuthenticationStatus, ConnectionFailure};
+    for id in ["claude", "codex", "antigravity"] {
+        let root = tempfile::tempdir().unwrap();
+        let login = root.path().join("login");
+        let mut agent = mock_agent();
+        agent.id = id.into();
+        agent
+            .env
+            .insert("AUTH_FILE".into(), login.to_string_lossy().into_owned());
+        let before = inspect(&agent, root.path(), None).await.unwrap();
+        assert!(before.connected);
+        assert!(!before.authenticated);
+        assert_eq!(before.methods[0].id, "fixture-login");
+        assert!(inspect(&agent, root.path(), Some("invented"))
+            .await
+            .is_err());
+        assert!(inspect(&agent, root.path(), Some("fixture-denied"))
+            .await
+            .is_err());
+        let conversations = Conversations::new(vec![agent.clone()]);
+        let draft = conversations.create(root.path()).unwrap();
+        conversations.connect(draft.id).unwrap();
+        assert_eq!(
+            settle(&conversations, draft.id).await.failure,
+            Some(ConnectionFailure::AuthenticationRequired)
+        );
+        assert!(
+            inspect(&agent, root.path(), Some("fixture-login"))
+                .await
+                .unwrap()
+                .authenticated
+        );
+        conversations.connect(draft.id).unwrap();
+        settle(&conversations, draft.id).await;
+        conversations
+            .send_message(draft.id, "hello".into())
+            .unwrap();
+        assert_eq!(
+            settle(&conversations, draft.id).await.authentication,
+            AuthenticationStatus::Authenticated
+        );
+        std::fs::remove_file(&login).unwrap();
+        conversations
+            .send_message(draft.id, "expired".into())
+            .unwrap();
+        assert_eq!(
+            settle(&conversations, draft.id).await.authentication,
+            AuthenticationStatus::Required
+        );
+        inspect(&agent, root.path(), Some("fixture-login"))
+            .await
+            .unwrap();
+        conversations.connect(draft.id).unwrap();
+        settle(&conversations, draft.id).await;
+        conversations
+            .send_message(draft.id, "retry".into())
+            .unwrap();
+        let ready = settle(&conversations, draft.id).await;
+        assert_eq!(ready.id, draft.id);
+        assert_eq!(ready.agent_id, id);
+        assert_eq!(ready.turns.len(), 3);
+        conversations.shutdown().await;
+    }
+}
+
+#[tokio::test]
+async fn replacing_a_definition_only_changes_new_conversations() {
+    let folder = tempfile::tempdir().unwrap();
+    let conversations = Conversations::new(vec![mock_agent()]);
+    let original = conversations.create(folder.path()).unwrap();
+    let mut replacement = mock_agent();
+    replacement.command = folder.path().join("missing-agent");
+    conversations.register_agent(replacement).unwrap();
+    conversations.connect(original.id).unwrap();
+    assert_eq!(
+        settle(&conversations, original.id).await.status,
+        ConversationStatus::SessionReady
+    );
+    let new = conversations.create(folder.path()).unwrap();
+    conversations.connect(new.id).unwrap();
+    assert_eq!(
+        settle(&conversations, new.id).await.failure,
+        Some(atte_lib::conversation::ConnectionFailure::ExecutableNotFound)
+    );
+    conversations.shutdown().await;
+}
+
+#[tokio::test]
+async fn management_observes_expiry_and_login_without_restarting_the_failed_conversation() {
+    use atte_lib::{
+        agent_management::AgentManagement,
+        storage::{Installation, Store},
+    };
+    let root = tempfile::tempdir().unwrap();
+    let login = root.path().join("login");
+    let mut agent = mock_agent();
+    agent.id = "codex".into();
+    agent
+        .env
+        .insert("AUTH_FILE".into(), login.to_string_lossy().into_owned());
+    Store::open(&root.path().join("atte.sqlite"))
+        .unwrap()
+        .save_installation(&Installation {
+            definition: agent,
+            version: "1.12.0".into(),
+            artifact: root.path().into(),
+        })
+        .unwrap();
+    let management = AgentManagement::open(root.path()).unwrap();
+    let conversations = Conversations::new(vec![]);
+    management.restore(&conversations).unwrap();
+    management
+        .authenticate("codex", Some("fixture-login"), &conversations)
+        .await
+        .unwrap();
+    assert!(
+        management.catalog(&conversations).unwrap()[1]
+            .authentication
+            .authenticated
+    );
+    let draft = conversations.create(root.path()).unwrap();
+    conversations.connect(draft.id).unwrap();
+    settle(&conversations, draft.id).await;
+    std::fs::remove_file(login).unwrap();
+    conversations
+        .send_message(draft.id, "expired".into())
+        .unwrap();
+    settle(&conversations, draft.id).await;
+    let state = &management.catalog(&conversations).unwrap()[1].authentication;
+    assert!(state.required);
+    assert!(!state.authenticated);
+    management
+        .authenticate("codex", Some("fixture-login"), &conversations)
+        .await
+        .unwrap();
+    let state = &management.catalog(&conversations).unwrap()[1].authentication;
+    assert!(!state.required);
+    assert!(state.authenticated);
+    assert_eq!(
+        conversations.get(draft.id).unwrap().status,
+        ConversationStatus::Failed
+    );
+    conversations.shutdown().await;
+}
+
+#[tokio::test]
+async fn codex_key_auth_explains_its_prerequisite_without_logging_a_secret() {
+    use atte_lib::agent_management::authentication::inspect;
+    let root = tempfile::tempdir().unwrap();
+    let mut agent = mock_agent();
+    agent.id = "codex".into();
+    agent.env.insert("FIXTURE_MODE".into(), "key-auth".into());
+    agent.env.insert("CODEX_API_KEY".into(), String::new());
+    agent.env.insert("OPENAI_API_KEY".into(), String::new());
+    let methods = inspect(&agent, root.path(), None).await.unwrap().methods;
+    assert!(methods[0]
+        .description
+        .as_ref()
+        .unwrap()
+        .contains("CODEX_API_KEY"));
+    let error = inspect(&agent, root.path(), Some("api-key"))
+        .await
+        .unwrap_err();
+    assert!(error.to_string().contains("ChatGPT"));
+}
+
+#[tokio::test]
+async fn every_successful_prompt_refreshes_shared_authentication_evidence() {
+    use atte_lib::{
+        agent_management::AgentManagement,
+        storage::{Installation, Store},
+    };
+    let root = tempfile::tempdir().unwrap();
+    let login = root.path().join("login");
+    let mut agent = mock_agent();
+    agent.id = "codex".into();
+    agent
+        .env
+        .insert("AUTH_FILE".into(), login.to_string_lossy().into_owned());
+    Store::open(&root.path().join("atte.sqlite"))
+        .unwrap()
+        .save_installation(&Installation {
+            definition: agent,
+            version: "1.12.0".into(),
+            artifact: root.path().into(),
+        })
+        .unwrap();
+    let management = AgentManagement::open(root.path()).unwrap();
+    let conversations = Conversations::new(vec![]);
+    management.restore(&conversations).unwrap();
+    management
+        .authenticate("codex", Some("fixture-login"), &conversations)
+        .await
+        .unwrap();
+    let draft = conversations.create(root.path()).unwrap();
+    conversations.connect(draft.id).unwrap();
+    settle(&conversations, draft.id).await;
+    conversations
+        .send_message(draft.id, "first".into())
+        .unwrap();
+    settle(&conversations, draft.id).await;
+    assert!(management
+        .authenticate("codex", Some("fixture-denied"), &conversations)
+        .await
+        .is_err());
+    assert!(
+        !management.catalog(&conversations).unwrap()[1]
+            .authentication
+            .authenticated
+    );
+    conversations
+        .send_message(draft.id, "second".into())
+        .unwrap();
+    settle(&conversations, draft.id).await;
+    assert!(
+        management.catalog(&conversations).unwrap()[1]
+            .authentication
+            .authenticated
+    );
+    conversations.shutdown().await;
 }

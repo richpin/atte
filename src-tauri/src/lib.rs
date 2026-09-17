@@ -1,7 +1,9 @@
 //! Atte desktop application.
 pub mod agent;
+pub mod agent_management;
 mod agent_runtime;
 pub mod conversation;
+pub mod storage;
 
 use conversation::{Conversation, ConversationError, ConversationUpdate, Conversations};
 use std::{
@@ -140,7 +142,14 @@ fn unsubscribe_conversation(
 pub fn run() {
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
-        .manage(Conversations::default())
+        .setup(|app| {
+            let management = agent_management::AgentManagement::open(&app.path().app_data_dir()?)?;
+            let conversations = Conversations::new(Vec::new());
+            management.restore(&conversations)?;
+            app.manage(conversations);
+            app.manage(management);
+            Ok(())
+        })
         .manage(Subscriptions::default())
         .on_window_event(|window, event| {
             if matches!(event, tauri::WindowEvent::Destroyed) {
@@ -150,6 +159,10 @@ pub fn run() {
             }
         })
         .invoke_handler(tauri::generate_handler![
+            agent_catalog,
+            refresh_agent_catalog,
+            install_agent,
+            authenticate_agent,
             select_working_folder,
             get_conversation,
             prepared_agents,
@@ -170,4 +183,61 @@ pub fn run() {
             std::process::exit(1);
         }
     }
+}
+
+#[tauri::command]
+async fn agent_catalog(
+    conversations: State<'_, Conversations>,
+    management: State<'_, agent_management::AgentManagement>,
+) -> Result<Vec<agent_management::ManagedAgent>, String> {
+    management
+        .catalog(&conversations)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+async fn refresh_agent_catalog(
+    conversations: State<'_, Conversations>,
+    management: State<'_, agent_management::AgentManagement>,
+) -> Result<Vec<agent_management::ManagedAgent>, String> {
+    management
+        .refresh()
+        .await
+        .map_err(|error| error.to_string())?;
+    management
+        .catalog(&conversations)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+async fn install_agent(
+    id: String,
+    channel: tauri::ipc::Channel<String>,
+    management: State<'_, agent_management::AgentManagement>,
+    conversations: State<'_, Conversations>,
+) -> Result<(), String> {
+    management
+        .install(
+            &id,
+            &conversations,
+            &agent_management::installer::SystemInstaller,
+            &|message| {
+                let _ = channel.send(message.to_owned());
+            },
+        )
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+async fn authenticate_agent(
+    conversations: State<'_, Conversations>,
+    id: String,
+    method: Option<String>,
+    management: State<'_, agent_management::AgentManagement>,
+) -> Result<agent_management::authentication::Authentication, String> {
+    management
+        .authenticate(&id, method.as_deref(), &conversations)
+        .await
+        .map_err(|error| error.to_string())
 }

@@ -1,5 +1,6 @@
 import {
   createEffect,
+  createMemo,
   createResource,
   createSignal,
   For,
@@ -22,21 +23,35 @@ import {
 } from "../model/types";
 import { Transcript } from "./Transcript";
 
-export function ConversationPage() {
+export function ConversationPage(props: {
+  agentsRevision: number;
+  onManage: () => void;
+}) {
   const [conversation, setConversation] = createSignal<Conversation>();
   const [error, setError] = createSignal<string>();
+  const [agentsFailed, setAgentsFailed] = createSignal(false);
   const [selecting, setSelecting] = createSignal(false);
 
-  const [agents] = createResource(async () => {
-    try {
-      return await preparedAgents();
-    } catch {
-      setError("준비된 에이전트를 불러올 수 없습니다.");
-      return [];
-    }
-  });
+  const [agents] = createResource(
+    () => props.agentsRevision,
+    async () => {
+      try {
+        setAgentsFailed(false);
+        const installed = await preparedAgents();
+        if (!installed.length) props.onManage();
+        return installed;
+      } catch {
+        setAgentsFailed(true);
+        setError("준비된 에이전트를 불러올 수 없습니다.");
+        return [];
+      }
+    },
+  );
   const [selectedAgent, setSelectedAgent] = createSignal("");
-  const agentId = () => selectedAgent() || agents()?.[0]?.id || "";
+  const agentId = () =>
+    agents()?.some((agent) => agent.id === selectedAgent())
+      ? selectedAgent()
+      : agents()?.[0]?.id || "";
   const [connecting, setConnecting] = createSignal(false);
   const [connectionRejected, setConnectionRejected] = createSignal(false);
   const [message, setMessage] = createSignal("");
@@ -82,9 +97,10 @@ export function ConversationPage() {
     });
   }
 
+  const conversationId = createMemo(() => conversation()?.id);
   createEffect(
     on(
-      () => [conversation()?.id, subscriptionAttempt()] as const,
+      () => [conversationId(), subscriptionAttempt()] as const,
       ([id]) => {
         if (!id) return;
         setStreamError(false);
@@ -136,6 +152,10 @@ export function ConversationPage() {
   }
 
   async function selectFolder() {
+    if (!agentId()) {
+      props.onManage();
+      return;
+    }
     if (selecting()) return;
     setSelecting(true);
     setError(undefined);
@@ -195,10 +215,19 @@ export function ConversationPage() {
         <button
           type="button"
           class="ml-auto shrink-0 rounded-lg border border-line px-3 py-1.5 text-xs hover:bg-panel disabled:opacity-50"
-          disabled={selecting() || agents.loading || !agentId() || connecting()}
+          disabled={
+            agentsFailed() || selecting() || agents.loading || connecting()
+          }
           onClick={selectFolder}
         >
           {selecting() ? "선택 중…" : "폴더 선택"}
+        </button>
+        <button
+          type="button"
+          class="shrink-0 text-xs text-muted"
+          onClick={props.onManage}
+        >
+          에이전트 관리
         </button>
       </header>
       <Show when={error()}>
@@ -246,6 +275,11 @@ export function ConversationPage() {
                 {failureMessages[failure()]}
               </p>
             )}
+          </Show>
+          <Show when={conversation()?.failure === "authenticationRequired"}>
+            <button type="button" onClick={props.onManage}>
+              로그인 안내 열기
+            </button>
           </Show>
           <Show
             when={
