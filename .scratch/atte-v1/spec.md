@@ -6,7 +6,7 @@ Status: ready-for-agent
 
 코딩 에이전트마다 설치, 인증, 대화 화면과 실행 상태가 달라 사용자는 여러 도구를 오가며 작업해야 한다. 대화 기록과 실제 에이전트 상태도 서로 분리되어 있어 앱을 닫았다 다시 열거나 여러 작업을 동시에 진행할 때 작업의 연속성을 잃기 쉽다.
 
-Atte의 첫 버전은 macOS에서 Claude, Codex, Antigravity를 같은 사용 방식으로 다루고, 작업 폴더별 대화를 만들고 이어가며, 여러 대화의 실행과 승인 요청을 독립적으로 관리할 수 있어야 한다. 단순히 과거 메시지를 다시 보여주는 것만으로는 부족하다. 에이전트가 지원할 때 기존 맥락을 실제로 이어가는 대화 재개가 필요하다.
+Atte의 첫 버전은 macOS에서 공식 ACP Registry의 지원 배포 형식을 사용하는 에이전트를 같은 사용 방식으로 다루고, 작업 폴더별 대화를 만들고 이어가며, 여러 대화의 실행과 승인 요청을 독립적으로 관리할 수 있어야 한다. 단순히 과거 메시지를 다시 보여주는 것만으로는 부족하다. 에이전트가 지원할 때 기존 맥락을 실제로 이어가는 대화 재개가 필요하다.
 
 ## Solution
 
@@ -19,7 +19,7 @@ Atte는 표시용 대화 기록과 에이전트의 원격 세션 식별자를 �
 ## User Stories
 
 1. As an Atte user, I want to see the agent management screen when no agent is installed, so that I know what must be prepared before starting a conversation.
-2. As an Atte user, I want to see Claude, Codex, and Antigravity in one agent catalog, so that I can manage the initially supported agents consistently.
+2. As an Atte user, I want to discover agents from the ACP Registry in one catalog with platform compatibility shown, so that new agents can become available without an Atte code change.
 3. As an Atte user, I want agents to be obtained from the ACP Registry, so that installation uses the protocol ecosystem's official distribution metadata.
 4. As an Atte user, I want installation state, connection state, authentication state, and conversation readiness shown separately, so that one successful step is not mistaken for another.
 5. As an Atte user, I want to install and authenticate an agent from a dedicated management screen, so that setup does not clutter conversations.
@@ -67,7 +67,7 @@ Atte는 표시용 대화 기록과 에이전트의 원격 세션 식별자를 �
 47. As an Atte user, I want app relaunch not to auto-run interrupted work, so that potentially mutating instructions are never replayed silently.
 48. As an Atte user, I want conversation titles and project grouping restored across launches, so that navigation remains stable.
 49. As an Atte user, I want the first version verified with my authenticated Codex setup, so that the implemented end-to-end path has real protocol evidence.
-50. As an Atte user, I want Claude and Antigravity represented through the same ACP behavior rather than Codex-specific assumptions, so that I can validate them later without redesigning the product.
+50. As an Atte user, I want Registry agents, including Claude and Antigravity, to use common distribution and ACP behavior, so that adding an agent does not require provider-specific product code.
 
 ## Implementation Decisions
 
@@ -76,11 +76,12 @@ Atte는 표시용 대화 기록과 에이전트의 원격 세션 식별자를 �
 - A deep conversation application module is the primary seam for both Tauri and integration tests. Its interface exposes user-level operations: inspect current state, create/open a conversation, send or queue a message, delete a queued message, cancel the active turn, answer an approval request, retry a failed connection, and subscribe to ordered changes. Callers do not construct ACP requests or manage processes.
 - Tauri commands are narrow adapters over the conversation application interface. Long-running ordered output uses a channel; small application notifications may use events. Subscription begins with a consistent snapshot and then ordered changes carrying a monotonic revision so reopening a screen cannot miss a transition between snapshot and stream.
 - The product uses the official Rust ACP SDK's stable protocol surface over stdio. Draft protocol-v2 and other unstable features are excluded unless a later ticket establishes a requirement. The earlier TypeScript probe remains validation evidence, not product code.
-- Claude, Codex, and Antigravity share one ACP client implementation. Agent-specific launch commands, arguments, environment preparation, Registry distribution handling, and unavoidable compatibility behavior live in agent definitions at the outer adapter. Conversation execution does not hardcode Codex mode IDs, permission option IDs, or response shapes beyond the ACP contract.
+- Registry agents share one ACP client implementation. Registry metadata determines identity, launch commands, arguments, environment, and distribution. Generic distribution installers produce the existing execution definition. Authentication follows advertised methods and capabilities; unsupported behavior is reported instead of adding provider-name branches. Conversation execution does not hardcode provider mode IDs, permission option IDs, or response shapes beyond the ACP contract.
 - Atte consumes agent-advertised capabilities and values. It checks session load/resume support before attempting real conversation resumption, uses the modes returned by the session, and returns the exact permission option identifier selected by the user.
 - Creating a new conversation automatically starts its ACP connection and session preparation. No initial connect button is shown. A reconnect action is shown only after failure, and recovery remains user-triggered.
 - Installation, connection, authentication, and conversation readiness are distinct states. A process that initialized or a session that was created does not imply authentication is complete.
-- Agent installation is managed from a separate screen using ACP Registry metadata. Installed artifacts and their resolved versions are tracked locally. If no supported agent is installed, conversation creation routes to agent management.
+- Agent management follows the Zed Registry architecture documented in docs/research/zed-registry-installation.md: a dynamic cached catalog, current-platform binary selection before npx, generic archive/package installation, and a shared managed Node runtime when needed. Binary formats include ZIP, tar.gz/tgz, tar.bz2/tbz2, and raw executables. Unsupported platforms and distribution types remain visible with reasons. No fixed provider allowlist or provider-specific download URLs are maintained.
+- Agent installation is managed from a separate screen using ACP Registry metadata. Installed artifacts, Registry identities, and resolved versions are tracked locally and survive Registry refresh failures or removal of an entry. A machine without Node/npm must support npx installation through an app-managed runtime. If no usable agent is installed, conversation creation routes to agent management.
 - A conversation has an Atte-owned stable identifier separate from the agent-issued session identifier. It records one working folder and one fixed agent. Remote identifiers are scoped by their connection/agent identity so equal strings from different agents cannot collide.
 - Runtime status distinguishes at least idle, running, waiting for approval, connection failure, authentication required, cancelled, and unavailable. Status transitions belong to Rust; the frontend renders them without independently reconstructing protocol state.
 - One turn may run per conversation. Messages submitted during a non-idle turn become ordered queued messages. The next queued message is submitted only after the prior turn ends successfully; cancellation, failure, authentication loss, and unresolved approval do not silently drain the queue.
@@ -97,7 +98,7 @@ Atte는 표시용 대화 기록과 에이전트의 원격 세션 식별자를 �
 - Closing a window is distinct from quitting the application. Rust-owned work remains active with no visible window. A full quit with active turns requires confirmation; confirmed quit cancels turns, resolves pending approvals, persists terminal state, and reaps managed child processes. Relaunch restores history and statuses but never replays interrupted prompts.
 - The production frontend follows Feature-Sliced Design and Solid's fine-grained reactivity rules. The selected A/Workspace prototype is rewritten as production code rather than merged wholesale. Its durable decisions are project-grouped navigation, collapsible project rows with project-level creation, collapsible sidebar, compact header, right-aligned user bubbles, full-width unlabeled agent responses, compact queue rows, and composer-position approval.
 - The first version targets macOS. Capabilities and command scopes follow least privilege: working-folder inputs are validated again in Rust, agent processes receive only intentional arguments and environment, and the frontend is not given general shell or filesystem primitives.
-- First-version support claims distinguish implementation from verification. Codex is the real end-to-end validation target in the current authenticated environment. Claude and Antigravity must use the same common ACP paths, but their unverified authenticated behaviors remain explicitly marked until the user validates them.
+- First-version support claims distinguish implementation from verification. Codex is the real end-to-end validation target in the current authenticated environment. Other Registry agents, including Claude and Antigravity, use the same common paths, but catalog presence and successful installation do not imply verified authenticated compatibility.
 
 ## Testing Decisions
 
@@ -114,7 +115,7 @@ Atte는 표시용 대화 기록과 에이전트의 원격 세션 식별자를 �
 - UI tests assert roles, labels, visible content, enabled state, and dispatched user intentions rather than CSS implementation details. A small number of browser checks validate the chosen layout and responsive behavior because visual hierarchy cannot be proven through DOM assertions alone.
 - Existing Rust unit-test and Solid component-test patterns are retained as prior art, but the new highest-value coverage moves to the conversation application seam rather than adding tests around the starter greeting functions.
 - Real-agent acceptance testing runs only against the authenticated Codex environment initially. It covers initialize, create, prompt/stream, cancel, concurrent conversations, permission allow, permission-pending cancellation, process restart, session load, and context continuation. It records adapter version, steps, observed result, and unsupported or unverified claims.
-- Claude and Antigravity acceptance matrices retain “unverified” rather than being inferred from capability advertisement or Codex success. Their authentication and remaining scenarios can be completed by the user later without changing the common automated suite.
+- Registry acceptance tests add previously unknown agent IDs and arbitrary authentication method IDs through fixtures without product-code changes. They cover distribution selection, runtime preparation without system Node, cache failures, unsupported entries, installation migration, and preservation of existing conversations. Other agents’ authenticated acceptance remains “unverified” unless actually exercised; it is never inferred from capability advertisement or Codex success.
 - Each implementation ticket adds the smallest red test at the highest available seam, makes it pass, and preserves all earlier tracer-bullet behavior. The complete repository validation includes frontend checks, type checking, frontend tests, Rust formatting/linting, Rust tests, and a production Tauri build appropriate to the ticket.
 
 ## Out of Scope
@@ -132,7 +133,8 @@ Atte는 표시용 대화 기록과 에이전트의 원격 세션 식별자를 �
 - Non-macOS product support in the first version.
 - Remote projects, remote hosts, cloud synchronization, team collaboration, shared conversations, and external issue-tracker integration.
 - A generic non-ACP agent backend abstraction before a second protocol demonstrates a real varying implementation.
-- Draft ACP protocol-v2 features, MCP-over-ACP, proxy/conductor chains, and unrelated Registry agents.
+- Draft ACP protocol-v2 features, MCP-over-ACP, and proxy/conductor chains.
+- Automatic agent updates, custom registries or manual launch definitions, and distribution formats beyond binary/npx in ticket 04.
 - Production promotion of the throwaway prototype source code or its development-only variant switcher and evaluation toolbar.
 
 ## Further Notes
@@ -141,4 +143,16 @@ Atte는 표시용 대화 기록과 에이전트의 원격 세션 식별자를 �
 - The ACP validation prototype is preserved on `codex/prototype-acp-validation`. Its key evidence commits are `59d4e437e9193576f6c2a123a77214929a8078d1` and `65023dc16fc7d62e6065082f11e138e4b9f8385d`.
 - The UI prototype is preserved on `codex/prototype-ui`; the chosen refinements end at commit `b591a6e`.
 - The [official ACP Rust SDK](https://github.com/agentclientprotocol/rust-sdk) provides the product's protocol types and stable client surface. Dependency versions are pinned by each implementation ticket after checking the current release and compatibility.
-- The next step is `/to-tickets`, producing tracer-bullet issue files with explicit blocking edges. Tickets should grow a working product end to end rather than completing the entire backend before beginning the UI.
+- Tickets under issues/ have explicit blocking edges. Ticket 04 is complete for Registry-driven management, including uninstall; its earlier three-agent validation remains historical evidence. Its Comments record the expanded scope and verification results. No commits are made without an explicit user request.
+
+## 설치된 ACP 삭제
+
+에이전트 관리 화면에서 설치된 ACP를 확인 후 삭제할 수 있다. 해당 에이전트의 모든 연결과 진행 중인 작업을 종료한 뒤 설치 파일을 즉시 삭제한다. 파일 삭제 성공 후 설치 정보를 비우며 실패하면 설치 정보를 남겨 명시적으로 재시도할 수 있다. 기존 대화 내용, 다른 에이전트의 연결, 공용 Node 런타임, 로그인 정보와 작업 폴더는 유지한다. 삭제로 종료된 대화는 이전 실행 정의로 재연결하지 않으며, 재설치 후 새 대화를 시작한다.
+
+## 에이전트 아이콘
+
+에이전트 관리 화면에서 Registry의 선택적 `icon`을 이름 옆에 표시한다. 아이콘 URL은 Registry 목록과 함께 캐시하며, 아이콘이 없거나 로딩 중이거나 불러오지 못하면 기본 아이콘을 표시한다. 공식 Registry CDN의 이미지만 허용한다.
+
+## 에이전트 저장 구조
+
+SQLite v1의 `agents`에서 Registry ID당 한 행으로 Registry 메타데이터와 현재 설치 정보를 함께 관리한다. 전체 Registry 갱신 시각만 `app_metadata`에 저장한다. `installation_source`와 삭제 대기 테이블은 사용하지 않는다. Registry 갱신은 설치 정보를 덮어쓰지 않으며 정상 설치에 대한 중복 설치 요청은 기존 설치를 사용한다. 변경된 배포를 설치하려면 삭제 후 설치한다. 상세 컬럼·마이그레이션·실패 처리는 [DB 구조](../../docs/database.md)를 따른다.

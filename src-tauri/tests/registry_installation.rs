@@ -183,7 +183,8 @@ async fn bad_downloads_do_not_replace_a_working_installation_or_fall_back_to_npm
         if bad_checksum {
             binary.sha256 = Some("00".repeat(32));
         }
-        manager.set_registry(registry(binary)).unwrap();
+        let updated_registry = registry(binary);
+        manager.set_registry(updated_registry.clone()).unwrap();
         let installer = SystemInstaller::new(
             Downloads {
                 files: HashMap::from([(url.into(), bytes)]),
@@ -194,7 +195,20 @@ async fn bad_downloads_do_not_replace_a_working_installation_or_fall_back_to_npm
         assert!(manager
             .install("unknown-agent", &conversations, &installer, &|_| {})
             .await
+            .is_ok());
+        let empty_root = tempfile::tempdir().unwrap();
+        let empty_manager = AgentManagement::open(empty_root.path()).unwrap();
+        empty_manager.set_registry(updated_registry).unwrap();
+        assert!(empty_manager
+            .install(
+                "unknown-agent",
+                &Conversations::new(vec![]),
+                &installer,
+                &|_| {}
+            )
+            .await
             .is_err());
+        assert!(!empty_manager.catalog(&Conversations::new(vec![])).unwrap()[0].installed);
         assert_eq!(
             manager.catalog(&conversations).unwrap()[0].artifact,
             original
@@ -384,4 +398,79 @@ async fn binary_node_entrypoint_is_resolved_from_installation_not_working_folder
         b"script"
     );
     assert_eq!(installations[0].definition.args[1], "--acp");
+}
+
+#[tokio::test]
+async fn uninstall_stops_live_acp_and_removes_files_before_returning() {
+    let root = tempfile::tempdir().unwrap();
+    let url = "https://fixture/agent";
+    let bytes = fixture();
+    let manager = AgentManagement::open(root.path()).unwrap();
+    manager
+        .set_registry(registry(binary(url, "agent", &bytes)))
+        .unwrap();
+    let installer = SystemInstaller::new(
+        Downloads {
+            files: HashMap::from([(url.into(), bytes)]),
+            count: Arc::default(),
+        },
+        NodeRuntime::default(),
+    );
+    let conversations = Conversations::new(vec![]);
+    manager
+        .install("unknown-agent", &conversations, &installer, &|_| {})
+        .await
+        .unwrap();
+    let artifact = manager.catalog(&conversations).unwrap()[0]
+        .artifact
+        .clone()
+        .unwrap();
+    let draft = conversations
+        .create_for_agent(root.path(), "unknown-agent")
+        .unwrap();
+    conversations.connect(draft.id).unwrap();
+    wait_ready(&conversations, draft.id).await;
+    conversations
+        .send_message(draft.id, "first".into())
+        .unwrap();
+    wait_ready(&conversations, draft.id).await;
+    manager
+        .uninstall("unknown-agent", &conversations)
+        .await
+        .unwrap();
+    assert!(conversations
+        .send_message(draft.id, "second".into())
+        .is_err());
+    assert!(conversations.connect(draft.id).is_err());
+    let state = conversations.get(draft.id).unwrap();
+    assert_eq!(state.turns.len(), 1);
+    assert_eq!(state.turns[0].response, "Hello world");
+    assert_eq!(
+        state.failure,
+        Some(atte_lib::conversation::ConnectionFailure::AgentRemoved)
+    );
+    assert!(!artifact.exists());
+    assert!(conversations.prepared_agents().is_empty());
+    manager
+        .install("unknown-agent", &conversations, &installer, &|_| {})
+        .await
+        .unwrap();
+    let replacement = manager.catalog(&conversations).unwrap()[0]
+        .artifact
+        .clone()
+        .unwrap();
+    assert!(replacement.exists());
+    assert_ne!(artifact, replacement);
+    assert!(conversations.connect(draft.id).is_err());
+    let next = conversations
+        .create_for_agent(root.path(), "unknown-agent")
+        .unwrap();
+    conversations.connect(next.id).unwrap();
+    wait_ready(&conversations, next.id).await;
+    conversations.shutdown().await;
+    drop(conversations);
+    drop(manager);
+    let manager = AgentManagement::open(root.path()).unwrap();
+    assert!(!artifact.exists());
+    assert!(manager.catalog(&Conversations::new(vec![])).unwrap()[0].installed);
 }

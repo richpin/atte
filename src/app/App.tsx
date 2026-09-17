@@ -18,7 +18,7 @@ export default function App() {
         <AgentManagementPage
           active={management()}
           onBack={() => setManagement(false)}
-          onInstalled={() => setAgentsRevision((value) => value + 1)}
+          onAgentsChanged={() => setAgentsRevision((value) => value + 1)}
         />
       </div>
     </>

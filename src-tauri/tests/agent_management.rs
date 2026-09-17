@@ -9,7 +9,6 @@ fn installation_survives_reopening_the_store() {
     let path = root.path().join("atte.sqlite");
     let store = Store::open(&path).unwrap();
     let installation = Installation {
-        source: None,
         definition: AgentDefinition {
             id: "codex-acp".into(),
             name: "Codex".into(),
@@ -83,9 +82,10 @@ impl Installer for ControlledInstaller {
             if self.fail {
                 return Err(ManagementError::Install);
             }
-            std::fs::create_dir_all(root).unwrap();
+            let artifact = root.join(id);
+            std::fs::create_dir_all(&artifact).unwrap();
+            std::fs::write(artifact.join("fixture"), "installation").unwrap();
             Ok(Installation {
-                source: None,
                 definition: AgentDefinition {
                     id: id.into(),
                     name: entry.name.clone(),
@@ -94,7 +94,7 @@ impl Installer for ControlledInstaller {
                     env: Default::default(),
                 },
                 version: entry.version.clone(),
-                artifact: root.into(),
+                artifact,
             })
         })
     }
@@ -187,6 +187,19 @@ fn opens_the_oldest_committed_schema_fixture() {
         .execute_batch(include_str!("fixtures/schema-v1.sql"))
         .unwrap();
     let installations = Store::open(&path).unwrap().installations().unwrap();
+    let connection = rusqlite::Connection::open(&path).unwrap();
+    let version: u32 = connection
+        .pragma_query_value(None, "user_version", |row| row.get(0))
+        .unwrap();
+    assert_eq!(version, 1);
+    let tables: Vec<String> = connection
+        .prepare("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")
+        .unwrap()
+        .query_map([], |row| row.get(0))
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap();
+    assert_eq!(tables, ["agents", "app_metadata"]);
     assert_eq!(installations[0].definition.id, "codex-acp");
     assert_eq!(installations[0].version, "1.12.0");
 }
@@ -260,8 +273,33 @@ async fn cached_catalog_survives_failed_refresh_and_reuses_a_good_installation()
         .unwrap();
 }
 
+#[test]
+fn catalog_preserves_optional_registry_icons_after_restart() {
+    let root = tempfile::tempdir().unwrap();
+    let manager = AgentManagement::open(root.path()).unwrap();
+    let registry = serde_json::from_value(serde_json::json!({
+        "version": "1.0.0",
+        "agents": [
+            {"id": "with-icon", "name": "With icon", "version": "1", "distribution": {},
+             "icon": "https://cdn.agentclientprotocol.com/registry/v1/latest/example.svg"},
+            {"id": "without-icon", "name": "Without icon", "version": "1", "distribution": {}}
+        ]
+    }))
+    .unwrap();
+    manager.set_registry(registry).unwrap();
+    drop(manager);
+    let manager = AgentManagement::open(root.path()).unwrap();
+    let catalog =
+        serde_json::to_value(manager.catalog(&Conversations::new(vec![])).unwrap()).unwrap();
+    assert_eq!(
+        catalog[0]["icon"],
+        "https://cdn.agentclientprotocol.com/registry/v1/latest/example.svg"
+    );
+    assert!(catalog[1]["icon"].is_null());
+}
+
 #[tokio::test]
-async fn reordered_registry_environment_reuses_installation_after_restart() {
+async fn already_installed_agent_is_reused_after_restart() {
     let root = tempfile::tempdir().unwrap();
     let manager = AgentManagement::open(root.path()).unwrap();
     let mut registry = registry();
@@ -395,4 +433,246 @@ async fn initially_offline_catalog_is_empty_and_can_be_recovered() {
     assert!(manager.catalog(&conversations).unwrap().is_empty());
     manager.set_registry(registry()).unwrap();
     assert_eq!(manager.catalog(&conversations).unwrap().len(), 3);
+}
+
+#[tokio::test]
+async fn uninstall_removes_selection_and_files_and_survives_restart() {
+    let root = tempfile::tempdir().unwrap();
+    let artifact = root.path().join("agents/test-install");
+    std::fs::create_dir_all(&artifact).unwrap();
+    std::fs::write(artifact.join("agent"), "fixture").unwrap();
+    Store::open(&root.path().join("atte.sqlite"))
+        .unwrap()
+        .save_installation(&Installation {
+            definition: AgentDefinition {
+                id: "new-agent".into(),
+                name: "New".into(),
+                command: artifact.join("agent"),
+                args: vec![],
+                env: Default::default(),
+            },
+            version: "1".into(),
+            artifact: artifact.clone(),
+        })
+        .unwrap();
+    let manager = AgentManagement::open(root.path()).unwrap();
+    let conversations = Conversations::new(vec![]);
+    manager.restore(&conversations).unwrap();
+    manager
+        .uninstall("new-agent", &conversations)
+        .await
+        .unwrap();
+    assert!(conversations.prepared_agents().is_empty());
+    assert!(!artifact.exists());
+    assert!(manager.catalog(&conversations).unwrap().is_empty());
+    let restored = AgentManagement::open(root.path()).unwrap();
+    let conversations = Conversations::new(vec![]);
+    restored.restore(&conversations).unwrap();
+    assert!(conversations.prepared_agents().is_empty());
+}
+
+#[tokio::test]
+async fn uninstall_removes_files_and_retires_existing_drafts() {
+    let root = tempfile::tempdir().unwrap();
+    let artifact = root.path().join("agents/in-use");
+    std::fs::create_dir_all(&artifact).unwrap();
+    std::fs::write(artifact.join("agent"), "fixture").unwrap();
+    Store::open(&root.path().join("atte.sqlite"))
+        .unwrap()
+        .save_installation(&Installation {
+            definition: AgentDefinition {
+                id: "new-agent".into(),
+                name: "New".into(),
+                command: artifact.join("agent"),
+                args: vec![],
+                env: Default::default(),
+            },
+            version: "1".into(),
+            artifact: artifact.clone(),
+        })
+        .unwrap();
+    let manager = AgentManagement::open(root.path()).unwrap();
+    let conversations = Conversations::new(vec![]);
+    manager.restore(&conversations).unwrap();
+    let draft = conversations
+        .create_for_agent(root.path(), "new-agent")
+        .unwrap();
+    manager
+        .uninstall("new-agent", &conversations)
+        .await
+        .unwrap();
+    assert!(!artifact.exists());
+    assert!(conversations.prepared_agents().is_empty());
+    assert!(conversations
+        .create_for_agent(root.path(), "new-agent")
+        .is_err());
+    assert_eq!(
+        conversations.get(draft.id).unwrap().failure,
+        Some(atte_lib::conversation::ConnectionFailure::AgentRemoved)
+    );
+    assert!(conversations.connect(draft.id).is_err());
+    drop(conversations);
+    drop(manager);
+    AgentManagement::open(root.path()).unwrap();
+    assert!(!artifact.exists());
+}
+
+#[tokio::test]
+async fn uninstall_rejects_external_paths_and_shared_runtime_but_handles_missing_files() {
+    let root = tempfile::tempdir().unwrap();
+    let external = tempfile::tempdir().unwrap();
+    let manager = AgentManagement::open(root.path()).unwrap();
+    let store = Store::open(&root.path().join("atte.sqlite")).unwrap();
+    let conversations = Conversations::new(vec![]);
+    let runtime = root.path().join("agents/runtime");
+    std::fs::create_dir_all(&runtime).unwrap();
+    std::fs::write(runtime.join("keep"), "shared").unwrap();
+    for artifact in [external.path().to_path_buf(), runtime.clone()] {
+        store
+            .save_installation(&Installation {
+                definition: AgentDefinition {
+                    id: "new-agent".into(),
+                    name: "New".into(),
+                    command: artifact.join("agent"),
+                    args: vec![],
+                    env: Default::default(),
+                },
+                version: "1".into(),
+                artifact: artifact.clone(),
+            })
+            .unwrap();
+        assert!(manager
+            .uninstall("new-agent", &conversations)
+            .await
+            .is_err());
+        assert!(artifact.exists());
+        assert_eq!(store.installations().unwrap().len(), 1);
+    }
+    let missing = root.path().join("agents/missing");
+    let mut installation = store.installations().unwrap().remove(0);
+    installation.artifact = missing;
+    store.save_installation(&installation).unwrap();
+    manager
+        .uninstall("new-agent", &conversations)
+        .await
+        .unwrap();
+    assert!(store.installations().unwrap().is_empty());
+    assert_eq!(
+        std::fs::read_to_string(runtime.join("keep")).unwrap(),
+        "shared"
+    );
+}
+
+#[tokio::test]
+async fn registry_refresh_preserves_installation_and_uninstall_preserves_catalog_entry() {
+    let root = tempfile::tempdir().unwrap();
+    let manager = AgentManagement::open(root.path()).unwrap();
+    let conversations = Conversations::new(vec![]);
+    manager.set_registry(registry()).unwrap();
+    manager
+        .install(
+            "codex-acp",
+            &conversations,
+            &ControlledInstaller { fail: false },
+            &|_| {},
+        )
+        .await
+        .unwrap();
+    let original = manager
+        .catalog(&conversations)
+        .unwrap()
+        .into_iter()
+        .find(|a| a.id == "codex-acp")
+        .unwrap()
+        .artifact;
+    let mut newer = registry();
+    let codex = newer
+        .agents
+        .iter_mut()
+        .find(|a| a.id == "codex-acp")
+        .unwrap();
+    codex.version = "999".into();
+    codex.name = "New name".into();
+    manager.set_registry(newer).unwrap();
+    manager
+        .install(
+            "codex-acp",
+            &conversations,
+            &ControlledInstaller { fail: true },
+            &|_| {},
+        )
+        .await
+        .unwrap();
+    let current = manager
+        .catalog(&conversations)
+        .unwrap()
+        .into_iter()
+        .find(|a| a.id == "codex-acp")
+        .unwrap();
+    assert_eq!(current.artifact, original);
+    assert_eq!(current.name, "New name");
+    manager
+        .uninstall("codex-acp", &conversations)
+        .await
+        .unwrap();
+    let current = manager
+        .catalog(&conversations)
+        .unwrap()
+        .into_iter()
+        .find(|a| a.id == "codex-acp")
+        .unwrap();
+    assert!(!current.installed);
+    assert!(current.installed_version.is_none());
+    assert!(current.distribution.is_some());
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn failed_file_removal_keeps_installation_for_retry() {
+    use std::os::unix::fs::PermissionsExt;
+    let root = tempfile::tempdir().unwrap();
+    let manager = AgentManagement::open(root.path()).unwrap();
+    let conversations = Conversations::new(vec![]);
+    manager.set_registry(registry()).unwrap();
+    manager
+        .install(
+            "codex-acp",
+            &conversations,
+            &ControlledInstaller { fail: false },
+            &|_| {},
+        )
+        .await
+        .unwrap();
+    let artifact = manager
+        .catalog(&conversations)
+        .unwrap()
+        .into_iter()
+        .find(|a| a.id == "codex-acp")
+        .unwrap()
+        .artifact
+        .unwrap();
+    std::fs::set_permissions(&artifact, std::fs::Permissions::from_mode(0o500)).unwrap();
+    let result = manager.uninstall("codex-acp", &conversations).await;
+    std::fs::set_permissions(&artifact, std::fs::Permissions::from_mode(0o700)).unwrap();
+    assert!(result.is_err());
+    assert!(artifact.exists());
+    assert_eq!(
+        Store::open(&root.path().join("atte.sqlite"))
+            .unwrap()
+            .installations()
+            .unwrap()
+            .len(),
+        1
+    );
+    assert!(conversations.prepared_agents().is_empty());
+    manager
+        .uninstall("codex-acp", &conversations)
+        .await
+        .unwrap();
+    assert!(!artifact.exists());
+    assert!(Store::open(&root.path().join("atte.sqlite"))
+        .unwrap()
+        .installations()
+        .unwrap()
+        .is_empty());
 }

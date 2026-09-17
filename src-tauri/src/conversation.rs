@@ -84,6 +84,7 @@ pub enum ConnectionFailure {
     ConnectionClosed,
     TimedOut,
     PromptFailed,
+    AgentRemoved,
 }
 
 /// Failures exposed to application callers and the UI.
@@ -108,6 +109,7 @@ pub enum ConversationError {
 /// Owns conversation state and agent runtime lifetimes.
 pub struct Conversations {
     agents: Mutex<Vec<AgentDefinition>>,
+    lifecycle: tokio::sync::Mutex<()>,
     authentication: Arc<Mutex<HashMap<String, AuthenticationStatus>>>,
     state: Mutex<State>,
 }
@@ -120,6 +122,7 @@ struct State {
 
 struct Entry {
     agent: AgentDefinition,
+    removed: bool,
     state: Arc<Mutex<ConversationState>>,
     runtime: Option<Runtime>,
 }
@@ -150,6 +153,7 @@ impl Conversations {
     pub fn new(agents: Vec<AgentDefinition>) -> Self {
         Self {
             agents: Mutex::new(agents),
+            lifecycle: tokio::sync::Mutex::new(()),
             authentication: Arc::default(),
             state: Mutex::new(State::default()),
         }
@@ -189,6 +193,46 @@ impl Conversations {
         Ok(())
     }
 
+    /// Retires this agent's conversations and reaps their processes before file removal.
+    pub async fn unregister_agent(&self, id: &str) -> Result<(), ConversationError> {
+        let _lifecycle = self.lifecycle.lock().await;
+        let runtimes = {
+            let mut agents = self.agents.lock().map_err(|_| unavailable())?;
+            let mut state = self.lock()?;
+            agents.retain(|agent| agent.id != id);
+            let mut runtimes = Vec::new();
+            for entry in state
+                .entries
+                .values_mut()
+                .filter(|entry| entry.agent.id == id)
+            {
+                entry.removed = true;
+                let mut current = entry.state.lock().map_err(|_| unavailable())?;
+                current.generation += 1;
+                current.snapshot.status = ConversationStatus::Failed;
+                current.snapshot.failure = Some(ConnectionFailure::AgentRemoved);
+                current.snapshot.remote_session_id = None;
+                current.snapshot.authentication = AuthenticationStatus::Unknown;
+                current.clear_permissions();
+                if let Some(turn) = current
+                    .snapshot
+                    .turns
+                    .last_mut()
+                    .filter(|turn| turn.stop_reason.is_none())
+                {
+                    turn.stop_reason = Some("cancelled".into());
+                }
+                current.publish();
+                if let Some(runtime) = entry.runtime.take() {
+                    runtimes.push(runtime);
+                }
+            }
+            runtimes
+        };
+        stop_runtimes(runtimes).await;
+        Ok(())
+    }
+
     /// Creates a disconnected draft assigned to the first prepared target.
     ///
     /// # Errors
@@ -211,10 +255,9 @@ impl Conversations {
         folder: &Path,
         agent_id: &str,
     ) -> Result<Conversation, ConversationError> {
-        let agent = self
-            .agents
-            .lock()
-            .map_err(|_| unavailable())?
+        // Keep this guard until insertion so unregister cannot miss a new owner.
+        let agents = self.agents.lock().map_err(|_| unavailable())?;
+        let agent = agents
             .iter()
             .find(|agent| agent.id == agent_id)
             .cloned()
@@ -247,6 +290,7 @@ impl Conversations {
             draft.id,
             Entry {
                 agent,
+                removed: false,
                 state: Arc::new(Mutex::new(ConversationState {
                     snapshot: draft.clone(),
                     generation: 0,
@@ -283,6 +327,9 @@ impl Conversations {
             return Err(unavailable());
         }
         let entry = state.entries.get_mut(&id).ok_or_else(not_found)?;
+        if entry.removed {
+            return Err(ConversationError::NotReady("에이전트 삭제로 연결이 종료되었습니다. 설치 상태를 확인하고 새 대화를 시작해주세요.".into()));
+        }
         let mut current = entry.state.lock().map_err(|_| unavailable())?;
         let mut snapshot = current.snapshot.clone();
         if matches!(
@@ -462,6 +509,7 @@ impl Conversations {
 
     /// Stops and reaps all owned processes before application exit.
     pub async fn shutdown(&self) {
+        let _lifecycle = self.lifecycle.lock().await;
         let runtimes = {
             let Ok(mut state) = self.state.lock() else {
                 return;
@@ -473,23 +521,26 @@ impl Conversations {
                 .filter_map(|entry| entry.runtime.take())
                 .collect::<Vec<_>>()
         };
-        // Signal every connection before awaiting any one of them.
-        let mut tasks = Vec::new();
-        for mut runtime in runtimes {
-            if let Some(stop) = runtime.stop.take() {
-                let _ = stop.send(());
-            }
-            if let Some(task) = runtime.task.take() {
-                tasks.push(task);
-            }
-        }
-        for task in tasks {
-            let _ = task.await;
-        }
+        stop_runtimes(runtimes).await;
     }
 
     fn lock(&self) -> Result<std::sync::MutexGuard<'_, State>, ConversationError> {
         self.state.lock().map_err(|_| unavailable())
+    }
+}
+
+async fn stop_runtimes(runtimes: Vec<Runtime>) {
+    let mut tasks = Vec::new();
+    for mut runtime in runtimes {
+        if let Some(stop) = runtime.stop.take() {
+            let _ = stop.send(());
+        }
+        if let Some(task) = runtime.task.take() {
+            tasks.push(task);
+        }
+    }
+    for task in tasks {
+        let _ = task.await;
     }
 }
 

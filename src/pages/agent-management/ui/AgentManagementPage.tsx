@@ -1,11 +1,14 @@
+import { AgentIcon } from "shared/ui";
 import { createResource, createSignal, For, Show } from "solid-js";
 import { createStore, reconcile } from "solid-js/store";
-import { authenticate, catalog, install } from "../api/agents";
+import { authenticate, catalog, install, uninstall } from "../api/agents";
+
+import { UninstallAgentDialog } from "./UninstallAgentDialog";
 
 export function AgentManagementPage(props: {
   active: boolean;
   onBack: () => void;
-  onInstalled: () => void;
+  onAgentsChanged: () => void;
 }) {
   const [error, setError] = createSignal<string>();
   const [work, setWork] = createStore<
@@ -53,18 +56,27 @@ export function AgentManagementPage(props: {
 
   async function run(
     id: string,
-    operation: "install" | "inspect" | "login",
+    operation: "install" | "inspect" | "login" | "uninstall",
     method?: string,
   ) {
     setWork(id, {
       busy: true,
-      message: operation === "install" ? "설치 준비 중…" : "에이전트 연결 중…",
+      message:
+        operation === "uninstall"
+          ? "삭제 중…"
+          : operation === "install"
+            ? "설치 준비 중…"
+            : "에이전트 연결 중…",
       failed: false,
     });
     try {
-      if (operation === "install") {
+      if (operation === "uninstall") {
+        await uninstall(id);
+        props.onAgentsChanged();
+        setWork(id, "message", "삭제 완료.");
+      } else if (operation === "install") {
         await install(id, (message) => setWork(id, "message", message));
-        props.onInstalled();
+        props.onAgentsChanged();
         setWork(id, "message", "설치 완료. 연결·인증 확인을 진행하세요.");
       } else {
         if (operation === "login")
@@ -85,6 +97,7 @@ export function AgentManagementPage(props: {
       mutate(await catalog());
     } catch (cause) {
       setWork(id, { message: message(cause), failed: true });
+      if (operation === "uninstall") props.onAgentsChanged();
       try {
         mutate(await catalog());
       } catch {
@@ -133,7 +146,10 @@ export function AgentManagementPage(props: {
           {(agent) => (
             <article class="space-y-4 rounded-2xl border border-line bg-panel p-5">
               <div class="flex items-center justify-between">
-                <h2 class="font-medium">{agent.name}</h2>
+                <div class="flex items-center gap-3">
+                  <AgentIcon src={agent.icon} />
+                  <h2 class="font-medium">{agent.name}</h2>
+                </div>
                 <span class="text-xs text-muted">
                   {agent.installed
                     ? `설치됨 · ${agent.installedVersion}`
@@ -225,6 +241,13 @@ export function AgentManagementPage(props: {
                       </button>
                     )}
                   </For>
+                </Show>
+                <Show when={agent.installedVersion}>
+                  <UninstallAgentDialog
+                    name={agent.name}
+                    disabled={work[agent.id]?.busy ?? false}
+                    onConfirm={() => run(agent.id, "uninstall")}
+                  />
                 </Show>
               </div>
               <For each={agent.authentication.methods}>

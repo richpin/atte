@@ -20,3 +20,7 @@ export function authenticate(id: string, method?: string) {
     method: method ?? null,
   });
 }
+
+export function uninstall(id: string) {
+  return invoke<void>("uninstall_agent", { id });
+}

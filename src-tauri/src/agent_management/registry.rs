@@ -15,6 +15,7 @@ pub struct Registry {
 pub struct RegistryAgent {
     pub id: String,
     pub name: String,
+    pub icon: Option<String>,
     #[serde(default)]
     pub description: String,
     pub version: String,

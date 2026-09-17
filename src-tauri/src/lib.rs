@@ -3,6 +3,7 @@ pub mod agent;
 pub mod agent_management;
 mod agent_runtime;
 pub mod conversation;
+mod installation_files;
 pub mod storage;
 
 use conversation::{Conversation, ConversationError, ConversationUpdate, Conversations};
@@ -183,6 +184,7 @@ pub fn run() {
             agent_catalog,
             refresh_agent_catalog,
             install_agent,
+            uninstall_agent,
             authenticate_agent,
             select_working_folder,
             get_conversation,
@@ -251,6 +253,18 @@ async fn install_agent(
                 let _ = channel.send(message.to_owned());
             },
         )
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+async fn uninstall_agent(
+    id: String,
+    management: State<'_, agent_management::AgentManagement>,
+    conversations: State<'_, Conversations>,
+) -> Result<(), String> {
+    management
+        .uninstall(&id, &conversations)
         .await
         .map_err(|error| error.to_string())
 }

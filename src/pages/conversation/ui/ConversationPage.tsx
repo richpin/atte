@@ -334,7 +334,8 @@ export function ConversationPage(props: {
           <Show
             when={
               !connecting() &&
-              (conversation()?.status === "failed" || connectionRejected())
+              (conversation()?.status === "failed" || connectionRejected()) &&
+              conversation()?.failure !== "agentRemoved"
             }
           >
             <button

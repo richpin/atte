@@ -232,7 +232,6 @@ impl<D: Downloader> SystemInstaller<D> {
         };
         progress("설치 산출물 확인 중");
         Ok(Installation {
-            source: None,
             definition: AgentDefinition {
                 id: id.into(),
                 name: entry.name.clone(),

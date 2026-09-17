@@ -5,6 +5,7 @@ pub mod node_runtime;
 pub mod authentication;
 pub mod installer;
 pub mod registry;
+mod removal;
 
 use crate::{
     conversation::{AuthenticationStatus, Conversations},
@@ -33,6 +34,8 @@ pub enum ManagementError {
     NodeMissing,
     #[error("설치하지 못했습니다. 네트워크, 저장 공간과 폴더 권한을 확인한 뒤 다시 시도해주세요.")]
     Install,
+    #[error("설치 파일을 삭제하지 못했습니다. 위치와 폴더 권한을 확인하고 다시 시도해주세요.")]
+    Removal,
     #[error("다운로드 검증에 실패했습니다. 다시 설치해주세요.")]
     Integrity,
     #[error("ACP 연결에 실패했습니다. 설치 상태를 확인하고 다시 시도해주세요.")]
@@ -58,6 +61,7 @@ impl From<crate::storage::StorageError> for ManagementError {
 pub struct ManagedAgent {
     pub id: String,
     pub name: String,
+    pub icon: Option<String>,
     pub description: String,
     pub unavailable_reason: Option<String>,
     pub available_version: Option<String>,
@@ -71,7 +75,6 @@ pub struct ManagedAgent {
 pub struct AgentManagement {
     root: PathBuf,
     store: Store,
-    registry: Mutex<Option<Registry>>,
     refresh_lock: tokio::sync::Mutex<()>,
     last_attempt: Mutex<i64>,
     authentication: Mutex<HashMap<String, Authentication>>,
@@ -82,16 +85,10 @@ impl AgentManagement {
     pub fn open(root: &Path) -> Result<Self, ManagementError> {
         std::fs::create_dir_all(root).map_err(|_| ManagementError::Install)?;
         let store = Store::open(&root.join("atte.sqlite"))?;
-        let cache = store.registry_cache()?;
-        let registry = cache
-            .as_ref()
-            .map(|(json, _)| Registry::parse(json))
-            .transpose()?;
-        let fetched_at = cache.map_or(0, |(_, time)| time);
+        let fetched_at = store.registry_fetched_at()?;
         Ok(Self {
             root: root.into(),
             store,
-            registry: Mutex::new(registry),
             refresh_lock: tokio::sync::Mutex::new(()),
             last_attempt: Mutex::new(fetched_at),
             authentication: Mutex::new(HashMap::new()),
@@ -113,16 +110,11 @@ impl AgentManagement {
     pub fn set_registry(&self, registry: Registry) -> Result<(), ManagementError> {
         let json = serde_json::to_string(&registry).map_err(|_| ManagementError::Registry)?;
         Registry::parse(&json)?;
-        let mut current = self
-            .registry
-            .lock()
-            .map_err(|_| ManagementError::Registry)?;
-        self.store.save_registry(&json, now())?;
+        self.store.save_registry(&registry, now())?;
         *self
             .last_attempt
             .lock()
             .map_err(|_| ManagementError::Registry)? = now();
-        *current = Some(registry);
         Ok(())
     }
 
@@ -178,39 +170,20 @@ impl AgentManagement {
         &self,
         conversations: &Conversations,
     ) -> Result<Vec<ManagedAgent>, ManagementError> {
-        let installed = self.store.installations()?;
-        let registry = self
-            .registry
-            .lock()
-            .map_err(|_| ManagementError::Registry)?;
+        let agents = self.store.agents()?;
         let authentication = self
             .authentication
             .lock()
             .map_err(|_| ManagementError::Connection)?;
-        let mut ids = registry
-            .as_ref()
-            .map(|registry| {
-                registry
-                    .agents
-                    .iter()
-                    .map(|entry| entry.id.clone())
-                    .collect::<Vec<_>>()
-            })
-            .unwrap_or_default();
-        for installation in &installed {
-            if !ids.contains(&installation.definition.id) {
-                ids.push(installation.definition.id.clone());
-            }
-        }
-        Ok(ids
+        Ok(agents
             .iter()
-            .map(|id| {
-                let entry = registry.as_ref().and_then(|registry| registry.target(id));
-                let installation = installed
-                    .iter()
-                    .find(|installation| installation.definition.id == *id);
+            .map(|agent| {
+                let id = &agent.id;
+                let entry = agent.registry.as_ref();
+                let installation = agent.installation.as_ref();
                 ManagedAgent {
                     id: id.clone(),
+                    icon: entry.and_then(|entry| entry.icon.clone()),
                     name: entry
                         .map(|entry| entry.name.clone())
                         .or_else(|| installation.map(|item| item.definition.name.clone()))
@@ -252,30 +225,39 @@ impl AgentManagement {
         progress: &(dyn Fn(&str) + Send + Sync),
     ) -> Result<(), ManagementError> {
         let _operation = self.begin(id)?;
-        let entry = self
-            .registry
-            .lock()
-            .map_err(|_| ManagementError::Registry)?
-            .as_ref()
-            .and_then(|registry| registry.target(id))
-            .cloned()
+        let stored = self
+            .store
+            .agents()?
+            .into_iter()
+            .find(|agent| agent.id == id)
             .ok_or(ManagementError::Registry)?;
-        let distribution = entry
-            .distribution(&registry::platform())
-            .ok_or(ManagementError::Unsupported)?;
-        let source = serde_json::to_value((entry.version.as_str(), &distribution))
-            .and_then(|value| serde_json::to_string(&value))
-            .map_err(|_| ManagementError::Registry)?;
-        if let Some(existing) = self.store.installations()?.into_iter().find(|item| {
-            item.definition.id == id && item.source.as_deref() == Some(&source) && usable(item)
-        }) {
+        if let Some(existing) = stored.installation.as_ref().filter(|item| usable(item)) {
             conversations
-                .register_agent(existing.definition)
+                .register_agent(existing.definition.clone())
                 .map_err(|_| ManagementError::Install)?;
             progress("기존 설치 사용");
             return Ok(());
         }
-        let mut installation = installer
+        let entry = stored.registry.ok_or(ManagementError::Registry)?;
+        let distribution = entry
+            .distribution(&registry::platform())
+            .ok_or(ManagementError::Unsupported)?;
+        // A broken installation is retired before replacing its files or definition.
+        if let Some(existing) = stored.installation {
+            conversations
+                .unregister_agent(id)
+                .await
+                .map_err(|_| ManagementError::Connection)?;
+            let root = self.root.clone();
+            tokio::task::spawn_blocking(move || {
+                crate::installation_files::remove(&root, &existing.artifact)
+            })
+            .await
+            .map_err(|_| ManagementError::Removal)?
+            .map_err(|_| ManagementError::Removal)?;
+            self.store.remove_installation(id)?;
+        }
+        let installation = installer
             .install(
                 id,
                 &entry,
@@ -287,8 +269,10 @@ impl AgentManagement {
         if installation.definition.id != id || !usable(&installation) {
             return Err(ManagementError::Install);
         }
-        installation.source = Some(source);
-        self.store.save_installation(&installation)?;
+        if let Err(error) = self.store.save_installation(&installation) {
+            let _ = crate::installation_files::remove(&self.root, &installation.artifact);
+            return Err(error.into());
+        }
         conversations
             .register_agent(installation.definition)
             .map_err(|_| ManagementError::Install)?;

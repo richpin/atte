@@ -53,3 +53,7 @@ macOS Apple Silicon, production Tauri 앱, 04에서 Registry로 설치한 `@agen
 Claude·Antigravity의 실제 계정 동작은 미검증으로 남긴다. 다중 대화 UI 통합과 대기열은 07, 앱 종료 정책은 08 범위다.
 
 - 최종 production 앱에서 긴 승인 문구가 가로 넘침 없이 줄바꿈되고 작업 폴더와 같은 footer 행에 표시되는 것을 재확인했다. `final-cancelled.txt` 승인 대기에서도 중단 후 파일 미생성을 확인했다. 테스트 모드 앱은 종료했다. 구현·검증 완료.
+
+- 2026-09-18 최신 로컬 `main` (`dac3b22`) 통합: Registry 아이콘·삭제 확인, 삭제 시 연결 무효화와 프로세스 종료, SQLite v1 스키마 정책을 유지하면서 승인·취소 구현과 테스트를 병합했다. `origin/main`은 이전 커밋이므로 최신 로컬 `main`을 기준으로 사용했다.
+- 통합 회귀 테스트에서 승인 대기 중 에이전트를 삭제하면 승인 UI가 남는 문제를 재현했다. 삭제 시 미해결 승인과 snapshot을 함께 정리하도록 수정했다. 공개 대화 인터페이스에서 승인 제거, turn 취소, 늦은 승인 응답·재연결 거부와 구독 snapshot을 검증했다.
+- 병합 후 검증: frontend 25개·Rust 52개 테스트 통과(실제 Codex opt-in 2개 제외). Biome, FSD, TypeScript, nightly fmt, Cargo check/Clippy, `git diff --check`, production macOS `.app` 빌드 통과. 이번 통합에서는 실제 Codex 연결 시나리오를 재실행하지 않았으며 위 2026-09-17 기록과 구분한다.

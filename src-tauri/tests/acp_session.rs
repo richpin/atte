@@ -885,7 +885,6 @@ async fn management_observes_expiry_and_login_without_restarting_the_failed_conv
     Store::open(&root.path().join("atte.sqlite"))
         .unwrap()
         .save_installation(&Installation {
-            source: None,
             definition: agent,
             version: "1.12.0".into(),
             artifact: root.path().into(),
@@ -960,7 +959,6 @@ async fn every_successful_prompt_refreshes_shared_authentication_evidence() {
     Store::open(&root.path().join("atte.sqlite"))
         .unwrap()
         .save_installation(&Installation {
-            source: None,
             definition: agent,
             version: "1.12.0".into(),
             artifact: root.path().into(),
@@ -1016,4 +1014,144 @@ async fn unknown_authentication_type_is_not_treated_as_agent_login() {
         inspect(&agent, root.path(), Some("future-method")).await,
         Err(ManagementError::UnsupportedAuthentication)
     ));
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn removing_one_agent_stops_its_running_turn_and_preserves_other_agents() {
+    use atte_lib::conversation::ConnectionFailure;
+    use nix::{sys::signal::kill, unistd::Pid};
+    let folder = tempfile::tempdir().unwrap();
+    let mut agent = mock_agent();
+    let pid_file = folder.path().join("removed-pid");
+    let gate = folder.path().join("gate");
+    agent
+        .env
+        .insert("PID_FILE".into(), pid_file.to_string_lossy().into());
+    agent
+        .env
+        .insert("PROMPT_GATE".into(), gate.to_string_lossy().into());
+    let mut other = mock_agent();
+    other.id = "other".into();
+    let conversations = Conversations::new(vec![agent, other]);
+    let draft = conversations
+        .create_for_agent(folder.path(), "fixture")
+        .unwrap();
+    let other = conversations
+        .create_for_agent(folder.path(), "other")
+        .unwrap();
+    conversations.connect(draft.id).unwrap();
+    conversations.connect(other.id).unwrap();
+    assert_eq!(
+        settle(&conversations, draft.id).await.status,
+        ConversationStatus::SessionReady
+    );
+    assert_eq!(
+        settle(&conversations, other.id).await.status,
+        ConversationStatus::SessionReady
+    );
+    conversations
+        .send_message(draft.id, "blocked response".into())
+        .unwrap();
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while conversations.get(draft.id).unwrap().turns[0].response != "Hello" {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .unwrap();
+    let pid = Pid::from_raw(std::fs::read_to_string(pid_file).unwrap().parse().unwrap());
+    conversations.unregister_agent("fixture").await.unwrap();
+    assert!(kill(pid, None).is_err());
+    let removed = conversations.get(draft.id).unwrap();
+    assert_eq!(removed.failure, Some(ConnectionFailure::AgentRemoved));
+    assert_eq!(removed.turns[0].response, "Hello");
+    assert_eq!(removed.turns[0].stop_reason.as_deref(), Some("cancelled"));
+    assert!(conversations.connect(draft.id).is_err());
+    assert_eq!(conversations.prepared_agents()[0].id, "other");
+    conversations
+        .send_message(other.id, "still connected".into())
+        .unwrap();
+    assert_eq!(
+        settle(&conversations, other.id).await.turns[0].response,
+        "Hello world"
+    );
+    assert_eq!(conversations.get(draft.id).unwrap(), removed);
+    conversations.shutdown().await;
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn shutdown_waits_for_processes_being_removed() {
+    use nix::{sys::signal::kill, unistd::Pid};
+    let folder = tempfile::tempdir().unwrap();
+    let mut agent = mock_agent();
+    let pid_file = folder.path().join("pid");
+    agent
+        .env
+        .insert("PID_FILE".into(), pid_file.to_string_lossy().into());
+    let conversations = Conversations::new(vec![agent]);
+    let draft = conversations
+        .create_for_agent(folder.path(), "fixture")
+        .unwrap();
+    conversations.connect(draft.id).unwrap();
+    assert_eq!(
+        settle(&conversations, draft.id).await.status,
+        ConversationStatus::SessionReady
+    );
+    let pid = Pid::from_raw(std::fs::read_to_string(pid_file).unwrap().parse().unwrap());
+    let (removed, ()) = tokio::join!(conversations.unregister_agent("fixture"), async {
+        conversations.shutdown().await;
+        assert!(
+            kill(pid, None).is_err(),
+            "shutdown must await the uninstall-owned process"
+        );
+    });
+    removed.unwrap();
+}
+
+#[tokio::test]
+async fn removing_an_agent_clears_pending_permissions_and_rejects_late_decisions() {
+    use atte_lib::conversation::ConnectionFailure;
+    let folder = tempfile::tempdir().unwrap();
+    let mut agent = mock_agent();
+    agent
+        .env
+        .insert("FIXTURE_MODE".into(), "prompt-permission".into());
+    let conversations = Conversations::new(vec![agent]);
+    let draft = conversations.create(folder.path()).unwrap();
+    conversations.connect(draft.id).unwrap();
+    settle(&conversations, draft.id).await;
+    let mut stream = subscribe(&conversations, draft.id);
+    conversations
+        .send_message(draft.id, "request permission".into())
+        .unwrap();
+    let waiting = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let next = stream.recv().await.unwrap();
+            if next.status == ConversationStatus::WaitingForApproval {
+                break next;
+            }
+        }
+    })
+    .await
+    .unwrap();
+    conversations.unregister_agent("fixture").await.unwrap();
+    let removed = conversations.get(draft.id).unwrap();
+    assert_eq!(removed.failure, Some(ConnectionFailure::AgentRemoved));
+    assert!(
+        removed.permissions.is_empty(),
+        "removed agents must not leave approval controls visible"
+    );
+    assert_eq!(removed.turns[0].stop_reason.as_deref(), Some("cancelled"));
+    assert!(conversations
+        .answer_permission(
+            draft.id,
+            waiting.permissions[0].id,
+            "arbitrary-allow".into()
+        )
+        .is_err());
+    assert!(conversations.connect(draft.id).is_err());
+    assert_eq!(stream.recv().await.unwrap(), removed);
+    conversations.shutdown().await;
 }
