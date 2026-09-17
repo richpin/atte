@@ -3,7 +3,7 @@ pub mod agent;
 mod agent_runtime;
 pub mod conversation;
 
-use conversation::{Conversation, ConversationError, Conversations};
+use conversation::{Conversation, ConversationError, ConversationUpdate, Conversations};
 use std::{
     collections::HashMap,
     sync::{Arc, Mutex},
@@ -82,7 +82,7 @@ fn send_message(
 #[tauri::command]
 async fn subscribe_conversation(
     id: Uuid,
-    channel: tauri::ipc::Channel<Conversation>,
+    channel: tauri::ipc::Channel<ConversationUpdate>,
     window: tauri::WebviewWindow,
     conversations: State<'_, Conversations>,
     subscriptions: State<'_, Subscriptions>,

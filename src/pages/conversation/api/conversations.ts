@@ -1,5 +1,9 @@
 import { Channel, invoke } from "@tauri-apps/api/core";
-import type { Conversation, PreparedAgent } from "../model/types";
+import type {
+  Conversation,
+  ConversationUpdate,
+  PreparedAgent,
+} from "../model/types";
 
 export function selectWorkingFolder(agentId: string) {
   return invoke<Conversation | null>("select_working_folder", { agentId });
@@ -23,17 +27,19 @@ export function sendMessage(id: string, text: string) {
 
 export function subscribeConversation(
   id: string,
-  receive: (snapshot: Conversation) => void,
+  receive: (update: ConversationUpdate) => void,
   failed: () => void,
 ): () => void {
-  const channel = new Channel<Conversation>();
+  const channel = new Channel<ConversationUpdate>();
   let disposed = false;
   let subscription: string | undefined;
   channel.onmessage = (snapshot) => {
     if (!disposed) receive(snapshot);
   };
   const unsubscribe = (subscription: string) => {
-    void invoke("unsubscribe_conversation", { subscription }).catch(failed);
+    void invoke("unsubscribe_conversation", { subscription }).catch(() => {
+      if (!disposed) failed();
+    });
   };
   void invoke<string>("subscribe_conversation", { id, channel })
     .then((token) => {

@@ -314,7 +314,7 @@ async fn streams_ordered_turns_and_sends_followups_in_the_same_session() {
     let draft = conversations.create(folder.path()).unwrap();
     conversations.connect(draft.id).unwrap();
     settle(&conversations, draft.id).await;
-    let mut stream = conversations.subscribe(draft.id).unwrap();
+    let mut stream = subscribe(&conversations, draft.id);
     let initial = stream.recv().await.unwrap();
     conversations
         .send_message(draft.id, "hello".into())
@@ -372,7 +372,7 @@ async fn resubscription_is_coherent_and_detaching_does_not_stop_a_turn() {
     conversations
         .send_message(draft.id, "hello".into())
         .unwrap();
-    let mut stream = conversations.subscribe(draft.id).unwrap();
+    let mut stream = subscribe(&conversations, draft.id);
     let first = tokio::time::timeout(Duration::from_secs(5), async {
         loop {
             let next = stream.recv().await.unwrap();
@@ -384,7 +384,7 @@ async fn resubscription_is_coherent_and_detaching_does_not_stop_a_turn() {
     .await
     .unwrap();
     drop(stream);
-    let mut resumed = conversations.subscribe(draft.id).unwrap();
+    let mut resumed = subscribe(&conversations, draft.id);
     assert_eq!(resumed.recv().await.unwrap(), first);
     drop(resumed);
     std::fs::write(gate, "continue").unwrap();
@@ -399,7 +399,7 @@ async fn resubscription_is_coherent_and_detaching_does_not_stop_a_turn() {
     })
     .await
     .unwrap();
-    let mut resumed = conversations.subscribe(draft.id).unwrap();
+    let mut resumed = subscribe(&conversations, draft.id);
     assert_eq!(resumed.recv().await.unwrap(), completed);
     assert_eq!(completed.turns[0].response, "Hello world");
     assert_eq!(completed.revision, first.revision + 2);
@@ -411,6 +411,10 @@ async fn prompt_failures_preserve_partial_output_and_reject_stale_updates() {
     use atte_lib::conversation::ConnectionFailure;
     for (mode, failure) in [
         ("prompt-auth", ConnectionFailure::AuthenticationRequired),
+        (
+            "prompt-auth-exit",
+            ConnectionFailure::AuthenticationRequired,
+        ),
         ("prompt-error", ConnectionFailure::PromptFailed),
         ("prompt-exit", ConnectionFailure::ProcessExited),
     ] {
@@ -421,7 +425,7 @@ async fn prompt_failures_preserve_partial_output_and_reject_stale_updates() {
         let draft = conversations.create(folder.path()).unwrap();
         conversations.connect(draft.id).unwrap();
         settle(&conversations, draft.id).await;
-        let mut stream = conversations.subscribe(draft.id).unwrap();
+        let mut stream = subscribe(&conversations, draft.id);
         conversations
             .send_message(draft.id, "hello".into())
             .unwrap();
@@ -459,7 +463,7 @@ async fn permission_is_cancelled_with_a_visible_reason_and_foreign_output_is_ign
     let draft = conversations.create(folder.path()).unwrap();
     conversations.connect(draft.id).unwrap();
     settle(&conversations, draft.id).await;
-    let mut stream = conversations.subscribe(draft.id).unwrap();
+    let mut stream = subscribe(&conversations, draft.id);
     conversations
         .send_message(draft.id, "hello".into())
         .unwrap();
@@ -485,7 +489,7 @@ async fn real_codex_streams_and_continues_without_file_changes() {
     let conversations = Conversations::default();
     let draft = conversations.create(folder.path()).unwrap();
     let result = tokio::time::timeout(Duration::from_secs(120), async {
-        let mut stream = conversations.subscribe(draft.id).unwrap();
+        let mut stream = subscribe(&conversations, draft.id);
         conversations.connect(draft.id).unwrap();
         loop {
             let next = stream.recv().await.unwrap();
@@ -520,4 +524,100 @@ async fn real_codex_streams_and_continues_without_file_changes() {
     }).await;
     conversations.shutdown().await;
     result.unwrap().unwrap();
+}
+
+struct TranscriptSubscription {
+    receiver: tokio::sync::mpsc::UnboundedReceiver<atte_lib::conversation::ConversationUpdate>,
+    snapshot: Option<atte_lib::conversation::Conversation>,
+}
+
+fn subscribe(conversations: &Conversations, id: uuid::Uuid) -> TranscriptSubscription {
+    TranscriptSubscription {
+        receiver: conversations.subscribe(id).unwrap(),
+        snapshot: None,
+    }
+}
+
+impl TranscriptSubscription {
+    async fn recv(&mut self) -> Option<atte_lib::conversation::Conversation> {
+        use atte_lib::conversation::ConversationUpdate;
+        match self.receiver.recv().await? {
+            ConversationUpdate::Snapshot { snapshot } => self.snapshot = Some(*snapshot),
+            ConversationUpdate::TextDelta {
+                conversation_id,
+                revision,
+                turn_id,
+                text,
+            } => {
+                let snapshot = self
+                    .snapshot
+                    .as_mut()
+                    .expect("initial snapshot precedes deltas");
+                assert_eq!(conversation_id, snapshot.id);
+                assert_eq!(revision, snapshot.revision + 1);
+                let turn = snapshot.turns.last_mut().unwrap();
+                assert_eq!(turn_id, turn.id);
+                turn.response.push_str(&text);
+                snapshot.revision = revision;
+            }
+        }
+        self.snapshot.clone()
+    }
+}
+
+#[tokio::test]
+async fn preserves_authentication_error_when_process_exit_races_with_buffered_output() {
+    use atte_lib::conversation::{AuthenticationStatus, ConnectionFailure};
+    let folder = tempfile::tempdir().unwrap();
+    let gate = folder.path().join("continue");
+    let mut agent = mock_agent();
+    agent
+        .env
+        .insert("FIXTURE_MODE".into(), "prompt-auth-exit".into());
+    agent
+        .env
+        .insert("PROMPT_GATE".into(), gate.to_string_lossy().into());
+    let conversations = Conversations::new(vec![agent]);
+    let draft = conversations.create(folder.path()).unwrap();
+    conversations.connect(draft.id).unwrap();
+    settle(&conversations, draft.id).await;
+    let mut stream = subscribe(&conversations, draft.id);
+    conversations
+        .send_message(draft.id, "hello".into())
+        .unwrap();
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let next = stream.recv().await.unwrap();
+            if next
+                .turns
+                .last()
+                .is_some_and(|turn| turn.response == "Hello")
+            {
+                break;
+            }
+        }
+    })
+    .await
+    .unwrap();
+    std::fs::write(gate, "continue").unwrap();
+    // Hold this single-threaded executor while the peer writes its result and exits.
+    // On the next poll both process exit and buffered protocol data are available.
+    std::thread::sleep(Duration::from_millis(100));
+    let failed = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let next = stream.recv().await.unwrap();
+            if next.status == ConversationStatus::Failed {
+                break next;
+            }
+        }
+    })
+    .await
+    .unwrap();
+    conversations.shutdown().await;
+    assert_eq!(
+        failed.failure,
+        Some(ConnectionFailure::AuthenticationRequired)
+    );
+    assert_eq!(failed.authentication, AuthenticationStatus::Required);
+    assert_eq!(failed.turns[0].response, "Hello world");
 }

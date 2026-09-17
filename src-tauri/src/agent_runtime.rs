@@ -78,8 +78,7 @@ pub(crate) async fn run(
         .on_receive_request(
             async move |request: RequestPermissionRequest, responder, _cx| {
                 if let Ok(active) = permission_active.lock() {
-                    if let Some((session, turn)) = active.as_ref().filter(|(session, _)| *session == request.session_id.to_string()) {
-                        let _ = session;
+                    if let Some((_, turn)) = active.as_ref().filter(|(session, _)| *session == request.session_id.to_string()) {
                         permission_updates.modify(Some(*turn), |snapshot| snapshot.notice = Some("승인 UI가 아직 지원되지 않아 도구 실행 요청을 취소했습니다.".into()));
                     }
                 }
@@ -95,9 +94,7 @@ pub(crate) async fn run(
                     if let ContentBlock::Text(text) = chunk.content {
                         if let Ok(active) = notification_active.lock() {
                             if let Some((_, turn)) = active.as_ref().filter(|(session, _)| *session == notification.session_id.to_string()) {
-                                notification_updates.modify(Some(*turn), |snapshot| {
-                                    if let Some(turn) = snapshot.turns.last_mut() { turn.response.push_str(&text.text); }
-                                });
+                                notification_updates.append_text(*turn, text.text);
                             }
                         }
                     }
@@ -170,11 +167,19 @@ pub(crate) async fn run(
                 }
             },
         );
+    tokio::pin!(protocol);
     let failure = tokio::select! {
         biased;
         _ = &mut stop => None,
-        _ = child.wait() => Some(ConnectionFailure::ProcessExited),
-        result = protocol => Some(result.unwrap_or(ConnectionFailure::ConnectionClosed)),
+        _ = child.wait() => {
+            // EOF can race process exit. Drain already-written notifications before
+            // publishing failure; descendants retaining stdout cannot delay it forever.
+            match tokio::time::timeout(Duration::from_secs(1), &mut protocol).await {
+                Ok(Ok(failure)) if failure != ConnectionFailure::ConnectionClosed => Some(failure),
+                _ => Some(ConnectionFailure::ProcessExited),
+            }
+        },
+        result = &mut protocol => Some(result.unwrap_or(ConnectionFailure::ConnectionClosed)),
     };
     drop(group);
     let _ = child.kill().await;
@@ -191,7 +196,9 @@ pub(crate) async fn run(
 }
 
 fn classify(error: agent_client_protocol::Error, fallback: ConnectionFailure) -> ConnectionFailure {
-    if error.code == ErrorCode::AuthRequired {
+    if agent_client_protocol::is_incoming_transport_closed(&error) {
+        ConnectionFailure::ConnectionClosed
+    } else if error.code == ErrorCode::AuthRequired {
         ConnectionFailure::AuthenticationRequired
     } else {
         fallback

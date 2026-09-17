@@ -56,3 +56,13 @@ export const failureMessages: Record<ConnectionFailure, string> = {
   promptFailed: "메시지 실행에 실패했습니다. 다시 연결해주세요.",
   timedOut: "에이전트 연결 시간이 초과되었습니다.",
 };
+
+export type ConversationUpdate =
+  | { kind: "snapshot"; snapshot: Conversation }
+  | {
+      kind: "textDelta";
+      conversationId: string;
+      revision: number;
+      turnId: string;
+      text: string;
+    };

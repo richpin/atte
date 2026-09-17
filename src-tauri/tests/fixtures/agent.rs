@@ -133,10 +133,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
                 }
                 if mode == "prompt-exit" {
-                    thread::sleep(Duration::from_millis(50));
                     process::exit(14);
                 }
-                if mode == "prompt-auth" {
+                if mode == "prompt-auth" || mode == "prompt-auth-exit" {
                     error = Some(json!({"code": -32000, "message": "Authentication required"}));
                 }
                 if mode == "prompt-error" {
@@ -153,7 +152,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             response["result"] = result;
         }
         send(&mut output, response)?;
-        if method == "session/prompt" {
+        if method == "session/prompt" && mode == "prompt-auth-exit" {
+            process::exit(15);
+        }
+        // Inject stale output after failure. Successful v1 turns end at the prompt
+        // response; their next prompt must not be preceded by untagged old text.
+        if method == "session/prompt" && matches!(mode.as_str(), "prompt-auth" | "prompt-error") {
             send(
                 &mut output,
                 json!({"jsonrpc": "2.0", "method": "session/update", "params": {

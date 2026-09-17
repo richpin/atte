@@ -274,12 +274,14 @@ impl Conversations {
     pub fn subscribe(
         &self,
         id: Uuid,
-    ) -> Result<mpsc::UnboundedReceiver<Conversation>, ConversationError> {
+    ) -> Result<mpsc::UnboundedReceiver<ConversationUpdate>, ConversationError> {
         let state = self.lock()?;
         let entry = state.entries.get(&id).ok_or_else(not_found)?;
         let mut current = entry.state.lock().map_err(|_| unavailable())?;
         let (sender, receiver) = mpsc::unbounded_channel();
-        let _ = sender.send(current.snapshot.clone());
+        let _ = sender.send(ConversationUpdate::Snapshot {
+            snapshot: Box::new(current.snapshot.clone()),
+        });
         current
             .subscribers
             .retain(|subscriber| !subscriber.is_closed());
@@ -386,15 +388,37 @@ pub(crate) struct Prompt {
 struct ConversationState {
     snapshot: Conversation,
     generation: u64,
-    subscribers: Vec<mpsc::UnboundedSender<Conversation>>,
+    subscribers: Vec<mpsc::UnboundedSender<ConversationUpdate>>,
 }
 
 impl ConversationState {
     fn publish(&mut self) {
         self.snapshot.revision += 1;
-        self.subscribers
-            .retain(|sender| sender.send(self.snapshot.clone()).is_ok());
+        self.subscribers.retain(|sender| {
+            sender
+                .send(ConversationUpdate::Snapshot {
+                    snapshot: Box::new(self.snapshot.clone()),
+                })
+                .is_ok()
+        });
     }
+}
+
+/// Ordered subscription item. Text chunks carry only their delta, not history.
+#[derive(Clone, Debug, Serialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum ConversationUpdate {
+    Snapshot {
+        snapshot: Box<Conversation>,
+    },
+    TextDelta {
+        #[serde(rename = "conversationId")]
+        conversation_id: Uuid,
+        revision: u64,
+        #[serde(rename = "turnId")]
+        turn_id: Uuid,
+        text: String,
+    },
 }
 
 /// A connection-scoped writer. Retired runtimes cannot overwrite a replacement.
@@ -405,6 +429,31 @@ pub(crate) struct RuntimeUpdates {
 }
 
 impl RuntimeUpdates {
+    pub fn append_text(&self, turn: Uuid, text: String) {
+        let Ok(mut state) = self.state.lock() else {
+            return;
+        };
+        if state.generation != self.generation
+            || state.snapshot.status != ConversationStatus::Running
+            || state.snapshot.turns.last().map(|item| item.id) != Some(turn)
+        {
+            return;
+        }
+        if let Some(last) = state.snapshot.turns.last_mut() {
+            last.response.push_str(&text);
+        }
+        state.snapshot.revision += 1;
+        let change = ConversationUpdate::TextDelta {
+            conversation_id: state.snapshot.id,
+            revision: state.snapshot.revision,
+            turn_id: turn,
+            text,
+        };
+        state
+            .subscribers
+            .retain(|sender| sender.send(change.clone()).is_ok());
+    }
+
     pub fn modify(&self, turn: Option<Uuid>, update: impl FnOnce(&mut Conversation)) {
         let Ok(mut state) = self.state.lock() else {
             return;

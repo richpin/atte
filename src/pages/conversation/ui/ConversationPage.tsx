@@ -16,6 +16,7 @@ import {
 } from "../api/conversations";
 import {
   type Conversation,
+  type ConversationUpdate,
   failureMessages,
   statusLabels,
 } from "../model/types";
@@ -50,6 +51,36 @@ export function ConversationPage() {
       setConversation(snapshot);
   }
 
+  function applyUpdate(update: ConversationUpdate) {
+    if (update.kind === "snapshot") {
+      applySnapshot(update.snapshot);
+      return;
+    }
+    const current = conversation();
+    if (
+      !current ||
+      update.conversationId !== current.id ||
+      update.revision <= current.revision
+    )
+      return;
+    if (
+      update.revision !== current.revision + 1 ||
+      current.turns.at(-1)?.id !== update.turnId
+    ) {
+      setStreamError(true);
+      return;
+    }
+    setConversation({
+      ...current,
+      revision: update.revision,
+      turns: current.turns.map((turn) =>
+        turn.id === update.turnId
+          ? { ...turn, response: turn.response + update.text }
+          : turn,
+      ),
+    });
+  }
+
   createEffect(
     on(
       () => [conversation()?.id, subscriptionAttempt()] as const,
@@ -57,7 +88,7 @@ export function ConversationPage() {
         if (!id) return;
         setStreamError(false);
         onCleanup(
-          subscribeConversation(id, applySnapshot, () => setStreamError(true)),
+          subscribeConversation(id, applyUpdate, () => setStreamError(true)),
         );
       },
     ),

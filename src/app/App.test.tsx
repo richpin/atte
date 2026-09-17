@@ -10,7 +10,9 @@ vi.mock("@tauri-apps/api/core", () => ({
     onmessage = () => {};
   },
 }));
-let receive: (snapshot: Record<string, unknown>) => void;
+let receiveUpdate: (update: Record<string, unknown>) => void;
+const receive = (snapshot: Record<string, unknown>) =>
+  receiveUpdate({ kind: "snapshot", snapshot });
 afterEach(cleanup);
 const requests = vi.fn();
 beforeEach(() => {
@@ -19,8 +21,8 @@ beforeEach(() => {
     if (command === "prepared_agents")
       return Promise.resolve([{ id: "codex", name: "Codex" }]);
     if (command === "subscribe_conversation") {
-      receive = (args as { channel: { onmessage: typeof receive } }).channel
-        .onmessage;
+      receiveUpdate = (args as { channel: { onmessage: typeof receiveUpdate } })
+        .channel.onmessage;
       return Promise.resolve("subscription-1");
     }
     if (command === "unsubscribe_conversation") return Promise.resolve();
@@ -435,8 +437,8 @@ it("ignores updates after unmount and unsubscribes even when registration finish
     if (command === "prepared_agents")
       return Promise.resolve([{ id: "codex", name: "Codex" }]);
     if (command === "subscribe_conversation") {
-      receive = (args as { channel: { onmessage: typeof receive } }).channel
-        .onmessage;
+      receiveUpdate = (args as { channel: { onmessage: typeof receiveUpdate } })
+        .channel.onmessage;
       return new Promise((resolve) => {
         register = resolve;
       });
@@ -453,4 +455,70 @@ it("ignores updates after unmount and unsubscribes even when registration finish
   expect(invoke).toHaveBeenCalledWith("unsubscribe_conversation", {
     subscription: "late-subscription",
   });
+});
+
+it("appends each text delta once and rejects updates for another conversation", async () => {
+  const ready = {
+    id: "draft-1",
+    workingFolder: "/project",
+    agentId: "codex",
+    status: "running",
+    revision: 2,
+    turns: [{ id: "turn-1", message: "hello", response: "", stopReason: null }],
+  };
+  requests.mockResolvedValue(ready);
+  render(() => <App />);
+  await userEvent.click(screen.getByRole("button", { name: "폴더 선택" }));
+  const delta = {
+    kind: "textDelta",
+    conversationId: "draft-1",
+    revision: 3,
+    turnId: "turn-1",
+    text: "Hello",
+  };
+  receiveUpdate(delta);
+  receiveUpdate(delta);
+  receiveUpdate({
+    ...delta,
+    conversationId: "other",
+    revision: 4,
+    text: "wrong",
+  });
+  receiveUpdate({ ...delta, revision: 4, text: " world" });
+  expect(screen.getByText("Hello world")).toBeTruthy();
+  expect(screen.queryByText(/wrong/)).toBeNull();
+});
+
+it("does not disable the new conversation when old subscription cleanup fails", async () => {
+  const ready = {
+    id: "draft-1",
+    workingFolder: "/project",
+    agentId: "codex",
+    status: "sessionReady",
+    revision: 2,
+    turns: [],
+  };
+  requests
+    .mockResolvedValueOnce(ready)
+    .mockResolvedValueOnce({ ...ready, id: "draft-2" });
+  const original = vi.mocked(invoke).getMockImplementation();
+  if (!original) throw new Error("missing invocation fixture");
+  let rejectCleanup!: (reason: Error) => void;
+  vi.mocked(invoke).mockImplementation((command, args) => {
+    if (command === "unsubscribe_conversation")
+      return new Promise((_resolve, reject) => {
+        rejectCleanup = reject;
+      });
+    return original(command, args);
+  });
+  render(() => <App />);
+  await userEvent.click(screen.getByRole("button", { name: "폴더 선택" }));
+  await userEvent.click(screen.getByRole("button", { name: "폴더 선택" }));
+  rejectCleanup(new Error("old channel closed"));
+  await userEvent.type(screen.getByRole("textbox"), "next");
+  expect(
+    (screen.getByRole("button", { name: "전송" }) as HTMLButtonElement)
+      .disabled,
+  ).toBe(false);
+  expect(screen.queryByRole("alert")).toBeNull();
 });
