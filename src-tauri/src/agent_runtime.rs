@@ -1,30 +1,39 @@
 //! ACP stdio ownership. Process isolation is internal, not part of the UI contract.
 use crate::{
     agent::AgentDefinition,
-    conversation::{AuthenticationStatus, ConnectionFailure, Conversation, ConversationStatus},
+    conversation::{
+        AuthenticationStatus, ConnectionFailure, ConversationStatus, Prompt, RuntimeUpdates,
+    },
 };
 use agent_client_protocol::{
     schema::{
         v1::{
-            InitializeRequest, NewSessionRequest, RequestPermissionOutcome,
-            RequestPermissionRequest, RequestPermissionResponse,
+            ContentBlock, InitializeRequest, NewSessionRequest, PromptRequest,
+            RequestPermissionOutcome, RequestPermissionRequest, RequestPermissionResponse,
+            SessionNotification, SessionUpdate,
         },
         ProtocolVersion,
     },
     Agent, ByteStreams, Client, ConnectionTo, ErrorCode,
 };
-use std::{path::PathBuf, process::Stdio, time::Duration};
+use std::{
+    path::PathBuf,
+    process::Stdio,
+    sync::{Arc, Mutex},
+    time::Duration,
+};
 use tokio::{
     process::Command,
-    sync::{oneshot, watch},
+    sync::{mpsc, oneshot},
 };
 use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
 
 pub(crate) async fn run(
     agent: AgentDefinition,
     folder: PathBuf,
-    updates: watch::Sender<Conversation>,
+    updates: RuntimeUpdates,
     mut stop: oneshot::Receiver<()>,
+    mut prompts: mpsc::UnboundedReceiver<Prompt>,
 ) {
     let mut command = Command::new(&agent.command);
     command
@@ -59,15 +68,43 @@ pub(crate) async fn run(
     let Some(stdout) = child.stdout.take() else {
         return;
     };
+    let active = Arc::new(Mutex::new(None::<(String, uuid::Uuid)>));
+    let notification_active = active.clone();
+    let notification_updates = updates.clone();
+    let permission_updates = updates.clone();
+    let permission_active = active.clone();
     let protocol = Client
         .builder()
         .on_receive_request(
-            async move |_request: RequestPermissionRequest, responder, _cx| {
+            async move |request: RequestPermissionRequest, responder, _cx| {
+                if let Ok(active) = permission_active.lock() {
+                    if let Some((session, turn)) = active.as_ref().filter(|(session, _)| *session == request.session_id.to_string()) {
+                        let _ = session;
+                        permission_updates.modify(Some(*turn), |snapshot| snapshot.notice = Some("승인 UI가 아직 지원되지 않아 도구 실행 요청을 취소했습니다.".into()));
+                    }
+                }
                 responder.respond(RequestPermissionResponse::new(
                     RequestPermissionOutcome::Cancelled,
                 ))
             },
             agent_client_protocol::on_receive_request!(),
+        )
+        .on_receive_notification(
+            async move |notification: SessionNotification, _cx| {
+                if let SessionUpdate::AgentMessageChunk(chunk) = notification.update {
+                    if let ContentBlock::Text(text) = chunk.content {
+                        if let Ok(active) = notification_active.lock() {
+                            if let Some((_, turn)) = active.as_ref().filter(|(session, _)| *session == notification.session_id.to_string()) {
+                                notification_updates.modify(Some(*turn), |snapshot| {
+                                    if let Some(turn) = snapshot.turns.last_mut() { turn.response.push_str(&text.text); }
+                                });
+                            }
+                        }
+                    }
+                }
+                Ok(())
+            },
+            agent_client_protocol::on_receive_notification!(),
         )
         .connect_with(
             ByteStreams::new(stdin.compat_write(), stdout.compat()),
@@ -94,12 +131,43 @@ pub(crate) async fn run(
                     Ok(Err(failure)) => return Ok(failure),
                     Err(_) => return Ok(ConnectionFailure::TimedOut),
                 };
-                updates.send_modify(|snapshot| {
+                updates.modify(None, |snapshot| {
                     snapshot.remote_session_id = Some(session.session_id.to_string());
                     snapshot.status = ConversationStatus::SessionReady;
                 });
-                connection.incoming_closed().await;
-                Ok(ConnectionFailure::ConnectionClosed)
+                loop {
+                    let prompt = tokio::select! {
+                        _ = connection.incoming_closed() => return Ok(ConnectionFailure::ConnectionClosed),
+                        prompt = prompts.recv() => match prompt { Some(prompt) => prompt, None => return Ok(ConnectionFailure::ConnectionClosed) },
+                    };
+                    if let Ok(mut active) = active.lock() { *active = Some((session.session_id.to_string(), prompt.turn)); }
+                    let (finished, completion) = oneshot::channel();
+                    let turn_updates = updates.clone();
+                    let turn_active = active.clone();
+                    connection.send_request(PromptRequest::new(session.session_id.clone(), vec![prompt.text.into()]))
+                        .on_receiving_result(async move |result| {
+                            if let Ok(mut active) = turn_active.lock() { *active = None; }
+                            let failure = match result {
+                                Ok(response) => {
+                                    turn_updates.modify(Some(prompt.turn), |snapshot| {
+                                        if let Some(turn) = snapshot.turns.last_mut() {
+                                            turn.stop_reason = serde_json::to_value(response.stop_reason).ok().and_then(|value| value.as_str().map(str::to_owned));
+                                        }
+                                        snapshot.status = ConversationStatus::SessionReady;
+                                    });
+                                    None
+                                }
+                                Err(error) => Some(classify(error, ConnectionFailure::PromptFailed)),
+                            };
+                            let _ = finished.send(failure);
+                            Ok(())
+                        })?;
+                    match completion.await {
+                        Ok(None) => {},
+                        Ok(Some(failure)) => return Ok(failure),
+                        Err(_) => return Ok(ConnectionFailure::ConnectionClosed),
+                    }
+                }
             },
         );
     let failure = tokio::select! {
@@ -114,7 +182,7 @@ pub(crate) async fn run(
     match failure {
         Some(failure) => failed(&updates, failure),
         None => {
-            updates.send_modify(|snapshot| {
+            updates.modify(None, |snapshot| {
                 snapshot.status = ConversationStatus::Disconnected;
                 snapshot.remote_session_id = None;
             });
@@ -130,8 +198,8 @@ fn classify(error: agent_client_protocol::Error, fallback: ConnectionFailure) ->
     }
 }
 
-fn failed(updates: &watch::Sender<Conversation>, failure: ConnectionFailure) {
-    updates.send_modify(|snapshot| {
+fn failed(updates: &RuntimeUpdates, failure: ConnectionFailure) {
+    updates.modify(None, |snapshot| {
         snapshot.status = ConversationStatus::Failed;
         if failure == ConnectionFailure::AuthenticationRequired {
             snapshot.authentication = AuthenticationStatus::Required;

@@ -6,16 +6,27 @@ export type ConnectionFailure =
   | "authenticationRequired"
   | "processExited"
   | "connectionClosed"
-  | "timedOut";
+  | "timedOut"
+  | "promptFailed";
 
 export interface Conversation {
   id: string;
   workingFolder: string;
   agentId: string;
-  status: "disconnected" | "connecting" | "sessionReady" | "failed";
+  status: "disconnected" | "connecting" | "sessionReady" | "running" | "failed";
   remoteSessionId: string | null;
   authentication: "unknown" | "required";
   failure: ConnectionFailure | null;
+  revision: number;
+  turns: Turn[];
+  notice: string | null;
+}
+
+export interface Turn {
+  id: string;
+  message: string;
+  response: string;
+  stopReason: string | null;
 }
 
 export interface PreparedAgent {
@@ -27,7 +38,8 @@ export const statusLabels: Record<Conversation["status"], string> = {
   disconnected: "연결 전",
   connecting: "연결 중…",
   sessionReady: "세션 준비 완료",
-  failed: "연결 실패",
+  failed: "실패",
+  running: "응답 중…",
 };
 
 export const failureMessages: Record<ConnectionFailure, string> = {
@@ -41,5 +53,6 @@ export const failureMessages: Record<ConnectionFailure, string> = {
     "에이전트 로그인이 필요합니다. 로그인 후 다시 연결해주세요.",
   processExited: "에이전트 프로세스가 종료되었습니다.",
   connectionClosed: "에이전트와의 연결이 끊어졌습니다.",
+  promptFailed: "메시지 실행에 실패했습니다. 다시 연결해주세요.",
   timedOut: "에이전트 연결 시간이 초과되었습니다.",
 };

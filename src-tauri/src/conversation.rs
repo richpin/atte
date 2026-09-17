@@ -4,9 +4,9 @@ use serde::Serialize;
 use std::{
     collections::HashMap,
     path::{Path, PathBuf},
-    sync::Mutex,
+    sync::{Arc, Mutex},
 };
-use tokio::sync::{oneshot, watch};
+use tokio::sync::{mpsc, oneshot};
 use uuid::Uuid;
 
 /// A local snapshot. Creation does not establish an agent session.
@@ -26,6 +26,9 @@ pub struct Conversation {
     /// Connection success is not proof of authentication.
     pub authentication: AuthenticationStatus,
     pub failure: Option<ConnectionFailure>,
+    pub revision: u64,
+    pub turns: Vec<Turn>,
+    pub notice: Option<String>,
 }
 
 /// Current agent connection state.
@@ -36,6 +39,7 @@ pub enum ConversationStatus {
     Disconnected,
     Connecting,
     SessionReady,
+    Running,
     Failed,
 }
 
@@ -59,6 +63,7 @@ pub enum ConnectionFailure {
     ProcessExited,
     ConnectionClosed,
     TimedOut,
+    PromptFailed,
 }
 
 /// Failures exposed to application callers and the UI.
@@ -71,6 +76,10 @@ pub enum ConversationError {
     /// The requested app conversation does not exist.
     #[error("{0}")]
     NotFound(String),
+    #[error("{0}")]
+    NotReady(String),
+    #[error("{0}")]
+    InvalidMessage(String),
     /// Application state could not be accessed.
     #[error("{0}")]
     Unavailable(String),
@@ -89,11 +98,12 @@ struct State {
 }
 
 struct Entry {
-    snapshot: watch::Sender<Conversation>,
+    state: Arc<Mutex<ConversationState>>,
     runtime: Option<Runtime>,
 }
 
 struct Runtime {
+    prompts: mpsc::UnboundedSender<Prompt>,
     stop: Option<oneshot::Sender<()>>,
     task: Option<tokio::task::JoinHandle<()>>,
 }
@@ -166,6 +176,9 @@ impl Conversations {
             remote_session_id: None,
             authentication: AuthenticationStatus::Unknown,
             failure: None,
+            revision: 0,
+            turns: Vec::new(),
+            notice: None,
         };
         let mut state = self.lock()?;
         if state.closed {
@@ -174,7 +187,11 @@ impl Conversations {
         state.entries.insert(
             draft.id,
             Entry {
-                snapshot: watch::channel(draft.clone()).0,
+                state: Arc::new(Mutex::new(ConversationState {
+                    snapshot: draft.clone(),
+                    generation: 0,
+                    subscribers: Vec::new(),
+                })),
                 runtime: None,
             },
         );
@@ -188,7 +205,12 @@ impl Conversations {
     pub fn get(&self, id: Uuid) -> Result<Conversation, ConversationError> {
         let state = self.lock()?;
         let entry = state.entries.get(&id).ok_or_else(not_found)?;
-        let snapshot = entry.snapshot.borrow().clone();
+        let snapshot = entry
+            .state
+            .lock()
+            .map_err(|_| unavailable())?
+            .snapshot
+            .clone();
         Ok(snapshot)
     }
 
@@ -200,10 +222,13 @@ impl Conversations {
             return Err(unavailable());
         }
         let entry = state.entries.get_mut(&id).ok_or_else(not_found)?;
-        let mut snapshot = entry.snapshot.borrow().clone();
+        let mut current = entry.state.lock().map_err(|_| unavailable())?;
+        let mut snapshot = current.snapshot.clone();
         if matches!(
             snapshot.status,
-            ConversationStatus::Connecting | ConversationStatus::SessionReady
+            ConversationStatus::Connecting
+                | ConversationStatus::SessionReady
+                | ConversationStatus::Running
         ) {
             return Ok(snapshot);
         }
@@ -223,15 +248,83 @@ impl Conversations {
         snapshot.remote_session_id = None;
         snapshot.authentication = AuthenticationStatus::Unknown;
         snapshot.failure = None;
-        entry.snapshot.send_replace(snapshot.clone());
+        current.generation += 1;
+        current.snapshot = snapshot;
+        current.publish();
+        let snapshot = current.snapshot.clone();
         let (stop, receiver) = oneshot::channel();
-        let updates = entry.snapshot.clone();
+        let updates = RuntimeUpdates {
+            state: entry.state.clone(),
+            generation: current.generation,
+        };
+        let (prompts, requests) = mpsc::unbounded_channel();
         let folder = snapshot.working_folder.clone();
         entry.runtime = Some(Runtime {
+            prompts,
             stop: Some(stop),
-            task: Some(handle.spawn(crate::agent_runtime::run(agent, folder, updates, receiver))),
+            task: Some(handle.spawn(crate::agent_runtime::run(
+                agent, folder, updates, receiver, requests,
+            ))),
         });
         Ok(snapshot)
+    }
+
+    /// Atomically subscribes to a snapshot and every subsequent revision.
+    /// Dropping the receiver does not stop the conversation.
+    pub fn subscribe(
+        &self,
+        id: Uuid,
+    ) -> Result<mpsc::UnboundedReceiver<Conversation>, ConversationError> {
+        let state = self.lock()?;
+        let entry = state.entries.get(&id).ok_or_else(not_found)?;
+        let mut current = entry.state.lock().map_err(|_| unavailable())?;
+        let (sender, receiver) = mpsc::unbounded_channel();
+        let _ = sender.send(current.snapshot.clone());
+        current
+            .subscribers
+            .retain(|subscriber| !subscriber.is_closed());
+        current.subscribers.push(sender);
+        Ok(receiver)
+    }
+
+    /// Admits exactly one prompt while ready, before publishing it to the runtime.
+    pub fn send_message(&self, id: Uuid, text: String) -> Result<(), ConversationError> {
+        if text.trim().is_empty() {
+            return Err(ConversationError::InvalidMessage(
+                "메시지를 입력해주세요.".into(),
+            ));
+        }
+        let state = self.lock()?;
+        if state.closed {
+            return Err(unavailable());
+        }
+        let entry = state.entries.get(&id).ok_or_else(not_found)?;
+        let mut current = entry.state.lock().map_err(|_| unavailable())?;
+        if current.snapshot.status != ConversationStatus::SessionReady {
+            return Err(ConversationError::NotReady(
+                "응답이 완료된 연결된 대화에서 전송해주세요.".into(),
+            ));
+        }
+        let runtime = entry.runtime.as_ref().ok_or_else(unavailable)?;
+        let turn = Uuid::new_v4();
+        runtime
+            .prompts
+            .send(Prompt {
+                turn,
+                text: text.clone(),
+            })
+            .map_err(|_| unavailable())?;
+        current.snapshot.status = ConversationStatus::Running;
+        current.snapshot.failure = None;
+        current.snapshot.notice = None;
+        current.snapshot.turns.push(Turn {
+            id: turn,
+            message: text,
+            response: String::new(),
+            stop_reason: None,
+        });
+        current.publish();
+        Ok(())
     }
 
     /// Stops and reaps all owned processes before application exit.
@@ -273,4 +366,60 @@ fn unavailable() -> ConversationError {
 
 fn not_found() -> ConversationError {
     ConversationError::NotFound("대화를 찾을 수 없습니다.".into())
+}
+
+/// One accepted user message and its streamed response.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Turn {
+    pub id: Uuid,
+    pub message: String,
+    pub response: String,
+    pub stop_reason: Option<String>,
+}
+
+pub(crate) struct Prompt {
+    pub turn: Uuid,
+    pub text: String,
+}
+
+struct ConversationState {
+    snapshot: Conversation,
+    generation: u64,
+    subscribers: Vec<mpsc::UnboundedSender<Conversation>>,
+}
+
+impl ConversationState {
+    fn publish(&mut self) {
+        self.snapshot.revision += 1;
+        self.subscribers
+            .retain(|sender| sender.send(self.snapshot.clone()).is_ok());
+    }
+}
+
+/// A connection-scoped writer. Retired runtimes cannot overwrite a replacement.
+#[derive(Clone)]
+pub(crate) struct RuntimeUpdates {
+    state: Arc<Mutex<ConversationState>>,
+    generation: u64,
+}
+
+impl RuntimeUpdates {
+    pub fn modify(&self, turn: Option<Uuid>, update: impl FnOnce(&mut Conversation)) {
+        let Ok(mut state) = self.state.lock() else {
+            return;
+        };
+        if state.generation != self.generation {
+            return;
+        }
+        if let Some(turn) = turn {
+            if state.snapshot.status != ConversationStatus::Running
+                || state.snapshot.turns.last().map(|item| item.id) != Some(turn)
+            {
+                return;
+            }
+        }
+        update(&mut state.snapshot);
+        state.publish();
+    }
 }

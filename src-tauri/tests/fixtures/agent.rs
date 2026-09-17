@@ -94,6 +94,56 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 sessions += 1;
                 json!({"sessionId": format!("remote-{sessions}")})
             }
+            "session/prompt" => {
+                assert_eq!(request["params"]["sessionId"], "remote-1");
+                send(
+                    &mut output,
+                    json!({"jsonrpc": "2.0", "method": "session/update", "params": {
+                        "sessionId": "foreign", "update": {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "wrong session"}}
+                    }}),
+                )?;
+                if mode == "prompt-permission" {
+                    send(
+                        &mut output,
+                        json!({"jsonrpc": "2.0", "id": "permission", "method": "session/request_permission", "params": {
+                            "sessionId": "remote-1", "toolCall": {"toolCallId": "tool-1"}, "options": [{"optionId": "arbitrary-allow", "name": "Allow", "kind": "allow_once"}]
+                        }}),
+                    )?;
+                    let response: Value =
+                        serde_json::from_str(&input.next().ok_or("missing permission response")??)?;
+                    assert_eq!(response["result"]["outcome"]["outcome"], "cancelled");
+                }
+                for text in ["Hello", " world"] {
+                    send(
+                        &mut output,
+                        json!({"jsonrpc": "2.0", "method": "session/update", "params": {
+                            "sessionId": "remote-1", "update": {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": text}}
+                        }}),
+                    )?;
+                    if text == "Hello" {
+                        if let Some(path) = env::var_os("PROMPT_GATE") {
+                            let started = std::time::Instant::now();
+                            while !std::path::Path::new(&path).exists() {
+                                if started.elapsed() > Duration::from_secs(5) {
+                                    return Err("prompt gate timed out".into());
+                                }
+                                thread::sleep(Duration::from_millis(5));
+                            }
+                        }
+                    }
+                }
+                if mode == "prompt-exit" {
+                    thread::sleep(Duration::from_millis(50));
+                    process::exit(14);
+                }
+                if mode == "prompt-auth" {
+                    error = Some(json!({"code": -32000, "message": "Authentication required"}));
+                }
+                if mode == "prompt-error" {
+                    error = Some(json!({"code": -32603, "message": "Prompt failed"}));
+                }
+                json!({"stopReason": "end_turn"})
+            }
             _ => continue,
         };
         let mut response = json!({"jsonrpc": "2.0", "id": request["id"]});
@@ -103,6 +153,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             response["result"] = result;
         }
         send(&mut output, response)?;
+        if method == "session/prompt" {
+            send(
+                &mut output,
+                json!({"jsonrpc": "2.0", "method": "session/update", "params": {
+                    "sessionId": "remote-1", "update": {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "stale output"}}
+                }}),
+            )?;
+        }
         if method == "session/new" && mode == "exit-ready" {
             thread::sleep(Duration::from_millis(200));
             process::exit(13);

@@ -306,3 +306,218 @@ async fn connecting_a_draft_revalidates_a_removed_working_folder() {
         ConversationStatus::Disconnected
     );
 }
+
+#[tokio::test]
+async fn streams_ordered_turns_and_sends_followups_in_the_same_session() {
+    let folder = tempfile::tempdir().unwrap();
+    let conversations = Conversations::new(vec![mock_agent()]);
+    let draft = conversations.create(folder.path()).unwrap();
+    conversations.connect(draft.id).unwrap();
+    settle(&conversations, draft.id).await;
+    let mut stream = conversations.subscribe(draft.id).unwrap();
+    let initial = stream.recv().await.unwrap();
+    conversations
+        .send_message(draft.id, "hello".into())
+        .unwrap();
+    assert!(conversations
+        .send_message(draft.id, "duplicate".into())
+        .is_err());
+    let mut revision = initial.revision;
+    let mut texts = Vec::new();
+    loop {
+        let next = tokio::time::timeout(Duration::from_secs(5), stream.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(next.revision, revision + 1);
+        revision = next.revision;
+        texts.push(next.turns[0].response.clone());
+        if next.status == ConversationStatus::SessionReady {
+            break;
+        }
+    }
+    assert_eq!(texts, ["", "Hello", "Hello world", "Hello world"]);
+    conversations
+        .send_message(draft.id, "again".into())
+        .unwrap();
+    loop {
+        let next = tokio::time::timeout(Duration::from_secs(5), stream.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        if next.status == ConversationStatus::SessionReady {
+            assert_eq!(next.remote_session_id.as_deref(), Some("remote-1"));
+            assert_eq!(next.turns.len(), 2);
+            assert_eq!(next.turns[1].response, "Hello world");
+            assert_eq!(next.turns[1].stop_reason.as_deref(), Some("end_turn"));
+            break;
+        }
+    }
+    conversations.shutdown().await;
+}
+
+#[tokio::test]
+async fn resubscription_is_coherent_and_detaching_does_not_stop_a_turn() {
+    let folder = tempfile::tempdir().unwrap();
+    let gate = folder.path().join("continue");
+    let mut agent = mock_agent();
+    agent
+        .env
+        .insert("PROMPT_GATE".into(), gate.to_string_lossy().into());
+    let conversations = Conversations::new(vec![agent]);
+    let draft = conversations.create(folder.path()).unwrap();
+    conversations.connect(draft.id).unwrap();
+    settle(&conversations, draft.id).await;
+    assert!(conversations.send_message(draft.id, "  ".into()).is_err());
+    conversations
+        .send_message(draft.id, "hello".into())
+        .unwrap();
+    let mut stream = conversations.subscribe(draft.id).unwrap();
+    let first = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let next = stream.recv().await.unwrap();
+            if next.turns[0].response == "Hello" {
+                break next;
+            }
+        }
+    })
+    .await
+    .unwrap();
+    drop(stream);
+    let mut resumed = conversations.subscribe(draft.id).unwrap();
+    assert_eq!(resumed.recv().await.unwrap(), first);
+    drop(resumed);
+    std::fs::write(gate, "continue").unwrap();
+    let completed = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let snapshot = conversations.get(draft.id).unwrap();
+            if snapshot.status == ConversationStatus::SessionReady {
+                break snapshot;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    let mut resumed = conversations.subscribe(draft.id).unwrap();
+    assert_eq!(resumed.recv().await.unwrap(), completed);
+    assert_eq!(completed.turns[0].response, "Hello world");
+    assert_eq!(completed.revision, first.revision + 2);
+    conversations.shutdown().await;
+}
+
+#[tokio::test]
+async fn prompt_failures_preserve_partial_output_and_reject_stale_updates() {
+    use atte_lib::conversation::ConnectionFailure;
+    for (mode, failure) in [
+        ("prompt-auth", ConnectionFailure::AuthenticationRequired),
+        ("prompt-error", ConnectionFailure::PromptFailed),
+        ("prompt-exit", ConnectionFailure::ProcessExited),
+    ] {
+        let folder = tempfile::tempdir().unwrap();
+        let mut agent = mock_agent();
+        agent.env.insert("FIXTURE_MODE".into(), mode.into());
+        let conversations = Conversations::new(vec![agent]);
+        let draft = conversations.create(folder.path()).unwrap();
+        conversations.connect(draft.id).unwrap();
+        settle(&conversations, draft.id).await;
+        let mut stream = conversations.subscribe(draft.id).unwrap();
+        conversations
+            .send_message(draft.id, "hello".into())
+            .unwrap();
+        let failed = tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                let next = stream.recv().await.unwrap();
+                if next.status == ConversationStatus::Failed {
+                    break next;
+                }
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(failed.failure, Some(failure), "{mode}");
+        assert_eq!(failed.turns[0].response, "Hello world");
+        assert!(conversations
+            .send_message(draft.id, "retry".into())
+            .is_err());
+        conversations.connect(draft.id).unwrap();
+        let reconnected = settle(&conversations, draft.id).await;
+        assert_eq!(reconnected.status, ConversationStatus::SessionReady);
+        assert_eq!(reconnected.turns[0].response, "Hello world");
+        conversations.shutdown().await;
+    }
+}
+
+#[tokio::test]
+async fn permission_is_cancelled_with_a_visible_reason_and_foreign_output_is_ignored() {
+    let folder = tempfile::tempdir().unwrap();
+    let mut agent = mock_agent();
+    agent
+        .env
+        .insert("FIXTURE_MODE".into(), "prompt-permission".into());
+    let conversations = Conversations::new(vec![agent]);
+    let draft = conversations.create(folder.path()).unwrap();
+    conversations.connect(draft.id).unwrap();
+    settle(&conversations, draft.id).await;
+    let mut stream = conversations.subscribe(draft.id).unwrap();
+    conversations
+        .send_message(draft.id, "hello".into())
+        .unwrap();
+    let completed = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let next = stream.recv().await.unwrap();
+            if next.turns.len() == 1 && next.status == ConversationStatus::SessionReady {
+                break next;
+            }
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(completed.turns[0].response, "Hello world");
+    assert!(completed.notice.unwrap().contains("취소"));
+    conversations.shutdown().await;
+}
+
+#[tokio::test]
+#[ignore = "requires the user's prepared Codex adapter and login"]
+async fn real_codex_streams_and_continues_without_file_changes() {
+    let folder = tempfile::tempdir().unwrap();
+    let conversations = Conversations::default();
+    let draft = conversations.create(folder.path()).unwrap();
+    let result = tokio::time::timeout(Duration::from_secs(120), async {
+        let mut stream = conversations.subscribe(draft.id).unwrap();
+        conversations.connect(draft.id).unwrap();
+        loop {
+            let next = stream.recv().await.unwrap();
+            if next.status == ConversationStatus::Failed { return Err(format!("{next:?}")); }
+            if next.status == ConversationStatus::SessionReady { break; }
+        }
+        let session = conversations.get(draft.id).unwrap().remote_session_id;
+        for message in [
+            "Do not use tools or read or modify any files. Remember the token cobalt-73 for this conversation. Reply with exactly: Remembered cobalt-73.",
+            "Do not use tools or read or modify any files. What token did I ask you to remember? Reply with the token only.",
+        ] {
+            conversations.send_message(draft.id, message.into()).unwrap();
+            let mut streamed = 0;
+            loop {
+                let next = stream.recv().await.unwrap();
+                if next.status == ConversationStatus::Failed { return Err(format!("{next:?}")); }
+                if let Some(turn) = next.turns.last() {
+                    if next.status == ConversationStatus::Running && !turn.response.is_empty() { streamed += 1; }
+                    if next.status == ConversationStatus::SessionReady {
+                        assert_eq!(next.remote_session_id, session);
+                        assert_eq!(turn.stop_reason.as_deref(), Some("end_turn"));
+                        assert!(turn.response.contains("cobalt-73"), "{}", turn.response);
+                        assert!(streamed > 0);
+                        println!("turn {}: {streamed} streamed revisions; response: {}", next.turns.len(), turn.response);
+                        break;
+                    }
+                }
+            }
+        }
+        assert_eq!(std::fs::read_dir(folder.path()).unwrap().count(), 0);
+        Ok::<_, String>(())
+    }).await;
+    conversations.shutdown().await;
+    result.unwrap().unwrap();
+}

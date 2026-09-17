@@ -9,15 +9,17 @@ import {
 } from "solid-js";
 import {
   connectConversation,
-  getConversation,
   preparedAgents,
   selectWorkingFolder,
+  sendMessage,
+  subscribeConversation,
 } from "../api/conversations";
 import {
   type Conversation,
   failureMessages,
   statusLabels,
 } from "../model/types";
+import { Transcript } from "./Transcript";
 
 export function ConversationPage() {
   const [conversation, setConversation] = createSignal<Conversation>();
@@ -35,47 +37,59 @@ export function ConversationPage() {
   const [selectedAgent, setSelectedAgent] = createSignal("");
   const agentId = () => selectedAgent() || agents()?.[0]?.id || "";
   const [connecting, setConnecting] = createSignal(false);
-  let requestVersion = 0;
+  const [message, setMessage] = createSignal("");
+  const [sending, setSending] = createSignal(false);
+  const [streamError, setStreamError] = createSignal(false);
+  const [subscriptionAttempt, setSubscriptionAttempt] = createSignal(0);
+  const canSend = () =>
+    conversation()?.status === "sessionReady" && !sending() && !streamError();
 
-  // Only connection snapshots are polled here. Ticket 03 introduces the ordered stream.
+  function applySnapshot(snapshot: Conversation) {
+    const current = conversation();
+    if (current?.id === snapshot.id && snapshot.revision >= current.revision)
+      setConversation(snapshot);
+  }
+
   createEffect(
     on(
-      () => conversation()?.id,
-      (id) => {
+      () => [conversation()?.id, subscriptionAttempt()] as const,
+      ([id]) => {
         if (!id) return;
-        const currentId = id;
-        let disposed = false;
-        let timer: ReturnType<typeof setTimeout>;
-        async function refresh() {
-          const version = requestVersion;
-          try {
-            const snapshot = await getConversation(currentId);
-            if (!disposed && version === requestVersion && !connecting())
-              setConversation(snapshot);
-          } catch {
-            if (!disposed)
-              setError("연결 상태를 확인할 수 없습니다. 다시 시도해주세요.");
-          }
-          if (!disposed) timer = setTimeout(refresh, 500);
-        }
-        timer = setTimeout(refresh, 500);
-        onCleanup(() => {
-          disposed = true;
-          clearTimeout(timer);
-        });
+        setStreamError(false);
+        onCleanup(
+          subscribeConversation(id, applySnapshot, () => setStreamError(true)),
+        );
       },
     ),
   );
+
+  async function send() {
+    const current = conversation();
+    if (!current || !canSend() || !message().trim()) return;
+    setSending(true);
+    setError(undefined);
+    try {
+      const snapshot = await sendMessage(current.id, message());
+      if (conversation()?.id === current.id) {
+        applySnapshot(snapshot);
+        setMessage("");
+      }
+    } catch (cause) {
+      if (conversation()?.id === current.id)
+        setError(errorMessage(cause, "메시지를 전송할 수 없습니다."));
+    } finally {
+      setSending(false);
+    }
+  }
 
   async function connect() {
     const draft = conversation();
     if (!draft || connecting()) return;
     setConnecting(true);
     setError(undefined);
-    requestVersion += 1;
     try {
       const snapshot = await connectConversation(draft.id);
-      if (conversation()?.id === draft.id) setConversation(snapshot);
+      if (conversation()?.id === draft.id) applySnapshot(snapshot);
     } catch (cause) {
       setError(
         errorMessage(cause, "연결을 시작할 수 없습니다. 다시 시도해주세요."),
@@ -91,7 +105,10 @@ export function ConversationPage() {
     setError(undefined);
     try {
       const draft = await selectWorkingFolder(agentId());
-      if (draft) setConversation(draft);
+      if (draft) {
+        setConversation(draft);
+        setMessage("");
+      }
     } catch (cause) {
       setError(
         errorMessage(
@@ -167,12 +184,23 @@ export function ConversationPage() {
           </section>
         }
       >
-        <section class="flex flex-1 flex-col items-center justify-center gap-3 px-6 text-center">
-          <h2 class="text-lg font-medium">대화가 준비되었습니다</h2>
-          <Show when={conversation()?.status === "disconnected"}>
-            <p class="text-sm text-muted">
-              아직 에이전트에 연결되지 않았습니다.
-            </p>
+        <section class="mx-auto flex w-full max-w-3xl flex-1 flex-col gap-4 px-6 py-6">
+          <Show when={!conversation()?.turns?.length}>
+            <h2 class="text-lg font-medium">대화가 준비되었습니다</h2>
+            <Show when={conversation()?.status === "disconnected"}>
+              <p class="text-sm text-muted">
+                아직 에이전트에 연결되지 않았습니다.
+              </p>
+            </Show>
+          </Show>
+          <Show when={streamError()}>
+            <p role="alert">대화 상태를 구독할 수 없습니다.</p>
+            <button
+              type="button"
+              onClick={() => setSubscriptionAttempt((value) => value + 1)}
+            >
+              상태 다시 불러오기
+            </button>
           </Show>
           <Show when={conversation()?.failure}>
             {(failure) => (
@@ -181,12 +209,23 @@ export function ConversationPage() {
               </p>
             )}
           </Show>
-          <Show when={conversation()?.status === "sessionReady"}>
+          <Show
+            when={
+              conversation()?.authentication === "unknown" &&
+              conversation()?.status === "sessionReady" &&
+              !conversation()?.turns?.length
+            }
+          >
             <p class="text-sm text-muted">
               인증 상태는 아직 확인되지 않았습니다.
             </p>
           </Show>
-          <Show when={conversation()?.status !== "sessionReady"}>
+          <Show
+            when={
+              conversation()?.status !== "sessionReady" &&
+              conversation()?.status !== "running"
+            }
+          >
             <button
               type="button"
               class="rounded-lg bg-accent px-4 py-2 text-sm text-white disabled:opacity-50"
@@ -198,16 +237,32 @@ export function ConversationPage() {
                 : "에이전트 연결"}
             </button>
           </Show>
+          <Transcript turns={conversation()?.turns ?? []} />
+          <Show when={conversation()?.notice}>
+            {(notice) => (
+              <p role="status" class="text-sm text-muted">
+                {notice()}
+              </p>
+            )}
+          </Show>
         </section>
         <div class="mx-auto mb-6 w-full max-w-3xl px-6">
-          <div class="rounded-2xl border border-line bg-panel p-4">
+          <form
+            class="rounded-2xl border border-line bg-panel p-4"
+            onSubmit={(event) => {
+              event.preventDefault();
+              void send();
+            }}
+          >
             <textarea
               aria-label="메시지"
               aria-describedby="connection-note"
               class="w-full resize-none bg-transparent text-sm disabled:cursor-not-allowed"
-              disabled
+              disabled={!canSend()}
+              value={message()}
+              onInput={(event) => setMessage(event.currentTarget.value)}
               rows={2}
-              placeholder="메시지 전송 기능은 준비 중입니다"
+              placeholder="메시지를 입력하세요"
             />
             <div class="mt-3 flex items-center justify-between text-xs text-muted">
               <span>
@@ -215,16 +270,18 @@ export function ConversationPage() {
                   ?.name ?? conversation()?.agentId}
               </span>
               <button
-                type="button"
-                disabled
-                class="rounded-lg bg-accent px-4 py-2 text-white opacity-40"
+                type="submit"
+                disabled={!canSend() || !message().trim()}
+                class="rounded-lg bg-accent px-4 py-2 text-white disabled:opacity-40"
               >
                 전송
               </button>
             </div>
-          </div>
+          </form>
           <p id="connection-note" class="mt-2 text-center text-xs text-muted">
-            현재는 에이전트 연결만 지원합니다.
+            {conversation()?.status === "running"
+              ? "응답이 완료되면 다음 메시지를 보낼 수 있습니다."
+              : "연결된 대화에 메시지를 보내세요."}
           </p>
         </div>
       </Show>
