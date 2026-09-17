@@ -1,4 +1,4 @@
-import { ConversationPage } from "../pages/conversation";
+import { ConversationPage } from "pages/conversation";
 import "./styles.css";
 
 export default function App() {

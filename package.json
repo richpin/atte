@@ -13,10 +13,11 @@
     "format": "biome format --write .",
     "format:check": "biome format .",
     "check": "biome check --error-on-warnings .",
+    "check:fsd": "steiger ./src --fail-on-warnings",
     "check:fix": "biome check --write .",
     "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.node.json",
     "test": "vitest run",
-    "validate": "pnpm check && pnpm typecheck && pnpm test"
+    "validate": "pnpm check && pnpm check:fsd && pnpm typecheck && pnpm test"
   },
   "license": "MIT",
   "dependencies": {
@@ -27,6 +28,7 @@
   },
   "devDependencies": {
     "@biomejs/biome": "2.5.13",
+    "@feature-sliced/steiger-plugin": "^0.7.0",
     "@solidjs/testing-library": "^0.8.10",
     "@tailwindcss/vite": "^4.3.3",
     "@tauri-apps/cli": "^2",
@@ -34,6 +36,7 @@
     "@types/node": "^26.5.1",
     "husky": "^9.1.7",
     "jsdom": "^30.0.1",
+    "steiger": "^0.6.0",
     "tailwindcss": "^4.3.3",
     "typescript": "~6.0.3",
     "vite": "^8.0.16",

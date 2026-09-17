@@ -1,8 +1,6 @@
 import { createSignal, Show } from "solid-js";
-import {
-  type Conversation,
-  selectWorkingFolder,
-} from "../../../entities/conversation";
+import { selectWorkingFolder } from "../api/conversations";
+import type { Conversation } from "../model/types";
 
 export function ConversationPage() {
   const [conversation, setConversation] = createSignal<Conversation>();
