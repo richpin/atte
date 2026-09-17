@@ -38,6 +38,7 @@ export function ConversationPage() {
   const [selectedAgent, setSelectedAgent] = createSignal("");
   const agentId = () => selectedAgent() || agents()?.[0]?.id || "";
   const [connecting, setConnecting] = createSignal(false);
+  const [connectionRejected, setConnectionRejected] = createSignal(false);
   const [message, setMessage] = createSignal("");
   const [sending, setSending] = createSignal(false);
   const [streamError, setStreamError] = createSignal(false);
@@ -117,14 +118,18 @@ export function ConversationPage() {
     const draft = conversation();
     if (!draft || connecting()) return;
     setConnecting(true);
+    setConnectionRejected(false);
     setError(undefined);
     try {
       const snapshot = await connectConversation(draft.id);
       if (conversation()?.id === draft.id) applySnapshot(snapshot);
     } catch (cause) {
-      setError(
-        errorMessage(cause, "연결을 시작할 수 없습니다. 다시 시도해주세요."),
-      );
+      if (conversation()?.id === draft.id) {
+        setConnectionRejected(true);
+        setError(
+          errorMessage(cause, "연결을 시작할 수 없습니다. 다시 시도해주세요."),
+        );
+      }
     } finally {
       setConnecting(false);
     }
@@ -139,6 +144,8 @@ export function ConversationPage() {
       if (draft) {
         setConversation(draft);
         setMessage("");
+        setConnectionRejected(false);
+        if (draft.status === "disconnected") void connect();
       }
     } catch (cause) {
       setError(
@@ -253,8 +260,8 @@ export function ConversationPage() {
           </Show>
           <Show
             when={
-              conversation()?.status !== "sessionReady" &&
-              conversation()?.status !== "running"
+              !connecting() &&
+              (conversation()?.status === "failed" || connectionRejected())
             }
           >
             <button
@@ -263,9 +270,7 @@ export function ConversationPage() {
               disabled={connecting() || conversation()?.status === "connecting"}
               onClick={connect}
             >
-              {conversation()?.status === "failed"
-                ? "다시 연결"
-                : "에이전트 연결"}
+              다시 연결
             </button>
           </Show>
           <Transcript turns={conversation()?.turns ?? []} />

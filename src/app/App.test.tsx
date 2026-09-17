@@ -30,8 +30,8 @@ beforeEach(() => {
   });
 });
 
-it("opens the selected folder as a disconnected empty conversation", async () => {
-  requests.mockResolvedValueOnce({
+it("automatically connects a new conversation and disables sending while connecting", async () => {
+  const draft = {
     revision: 0,
     turns: [],
     authentication: "unknown",
@@ -39,12 +39,20 @@ it("opens the selected folder as a disconnected empty conversation", async () =>
     workingFolder: "/Users/test/작업",
     agentId: "codex",
     status: "disconnected",
-  });
+  };
+  requests
+    .mockResolvedValueOnce(draft)
+    .mockResolvedValueOnce({ ...draft, status: "connecting", revision: 1 });
   render(() => <App />);
   await userEvent.click(screen.getByRole("button", { name: "폴더 선택" }));
   expect(await screen.findByText("/Users/test/작업")).toBeTruthy();
   expect(screen.getByRole("heading", { name: "새 대화" })).toBeTruthy();
-  expect(screen.getByText("연결 전")).toBeTruthy();
+  expect(screen.getByText("연결 중…")).toBeTruthy();
+  expect(invoke).toHaveBeenCalledWith("connect_conversation", {
+    id: "draft-1",
+  });
+  expect(screen.queryByRole("button", { name: "에이전트 연결" })).toBeNull();
+  expect(screen.queryByRole("button", { name: "다시 연결" })).toBeNull();
   expect((screen.getByRole("textbox") as HTMLTextAreaElement).disabled).toBe(
     true,
   );
@@ -62,6 +70,10 @@ it("keeps the initial screen when folder selection is cancelled", async () => {
     screen.getByRole("heading", { name: "어디에서 작업할까요?" }),
   ).toBeTruthy();
   expect(screen.queryByRole("textbox")).toBeNull();
+  expect(invoke).not.toHaveBeenCalledWith(
+    "connect_conversation",
+    expect.anything(),
+  );
 });
 
 it("shows folder errors and lets the user retry", async () => {
@@ -84,9 +96,17 @@ it("keeps the current conversation when another folder selection is cancelled", 
   requests
     .mockResolvedValueOnce({
       id: "draft-1",
+      revision: 0,
       workingFolder: "/Users/test/project",
       agentId: "codex",
       status: "disconnected",
+    })
+    .mockResolvedValueOnce({
+      id: "draft-1",
+      revision: 1,
+      workingFolder: "/Users/test/project",
+      agentId: "codex",
+      status: "sessionReady",
     })
     .mockResolvedValueOnce(null);
   render(() => <App />);
@@ -153,7 +173,6 @@ it("connects the fixed agent and displays backend readiness separately from auth
   });
   render(() => <App />);
   await userEvent.click(screen.getByRole("button", { name: "폴더 선택" }));
-  await userEvent.click(screen.getByRole("button", { name: "에이전트 연결" }));
   expect(await screen.findByText("연결 중…")).toBeTruthy();
   receive({
     id: "draft-1",
@@ -165,6 +184,7 @@ it("connects the fixed agent and displays backend readiness separately from auth
     authentication: "unknown",
   });
   expect(await screen.findByText("세션 준비 완료")).toBeTruthy();
+  expect(screen.queryByRole("button", { name: "다시 연결" })).toBeNull();
   expect(
     screen.getByText("인증 상태는 아직 확인되지 않았습니다."),
   ).toBeTruthy();
@@ -202,7 +222,6 @@ it("shows authentication failures and retries only when requested", async () => 
   });
   render(() => <App />);
   await userEvent.click(screen.getByRole("button", { name: "폴더 선택" }));
-  await userEvent.click(screen.getByRole("button", { name: "에이전트 연결" }));
   expect((await screen.findByRole("alert")).textContent).toContain(
     "로그인이 필요합니다",
   );
@@ -240,7 +259,6 @@ it("shows process exit after readiness without reconnecting automatically", asyn
   });
   render(() => <App />);
   await userEvent.click(screen.getByRole("button", { name: "폴더 선택" }));
-  await userEvent.click(screen.getByRole("button", { name: "에이전트 연결" }));
   expect(await screen.findByText("세션 준비 완료")).toBeTruthy();
   receive({
     id: "draft-1",
@@ -287,7 +305,6 @@ it("keeps the existing conversation's agent fixed when selecting a target for th
     agentId: "fixture",
   });
   await userEvent.selectOptions(screen.getByRole("combobox"), "codex");
-  await userEvent.click(screen.getByRole("button", { name: "에이전트 연결" }));
   expect(invoke).toHaveBeenCalledWith("connect_conversation", {
     id: "draft-1",
   });
@@ -322,10 +339,15 @@ it("shows a removed working folder error from the connection command", async () 
   });
   render(() => <App />);
   await userEvent.click(screen.getByRole("button", { name: "폴더 선택" }));
-  await userEvent.click(screen.getByRole("button", { name: "에이전트 연결" }));
   expect((await screen.findByRole("alert")).textContent).toContain(
     "폴더를 다시 선택해주세요",
   );
+  expect(screen.getByRole("button", { name: "다시 연결" })).toBeTruthy();
+  expect(
+    requests.mock.calls.filter(
+      ([command]) => command === "connect_conversation",
+    ),
+  ).toHaveLength(1);
 });
 
 it("sends once, renders streaming text and completion, and admits the next message", async () => {
