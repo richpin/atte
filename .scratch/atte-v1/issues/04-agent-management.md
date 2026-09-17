@@ -99,3 +99,37 @@ Status: done
 초기 지적: Standards 0개, Spec 2개. 재검토에서 남은 지적 0개를 확인했다.
 
 최종 자동 검사: UI 19개, Rust 29개 통과. 기존 opt-in smoke 2개는 제외했다. 반복 성공 응답도 최신 인증 근거로 반영하는 회귀 테스트를 추가했다. 전체 검사에서 관찰된 EOF/프로세스 종료 경합은 짧은 종료 확인으로 구분해 기존 종료 상태 검사를 안정화했다.
+
+### 확장 범위 구현·검증 — 2026-09-17
+
+Registry 기반 공통 에이전트 관리 범위를 구현했다. 기존 세 에이전트 검증 기록과 구분한다.
+
+- 고정 TARGETS를 제거하고 Registry ID·이름·설명·배포를 사용한다. SQLite v2에 정상 목록과 갱신 시각을 보존하며 자동 갱신 시도는 한 시간으로 제한한다. 명시적 새로고침은 즉시 시도하고 실패해도 캐시와 기존 설치를 유지한다. 기존 짧은 ID는 v1→v2 트랜잭션에서만 변환한다.
+- 플랫폼 binary 우선, 해당 플랫폼 binary가 없을 때 npx를 선택한다. 미지원 압축·설치 형식과 uvx는 이유를 표시하고 설치를 차단한다. binary 실패 후 npx로 전환하지 않는다. ZIP/tar.gz/tgz/tar.bz2/tbz2/raw를 처리하고 경로 이탈·링크·중복 파일을 거부한다. 다운로드 1 GiB, 해제 2 GiB, 엔트리 100,000개 제한과 선택적 SHA-256 검증을 적용한다.
+- 설치마다 별도 산출물을 유지하며 실패·취소 시 임시 디렉터리를 정리한다. 이전 정상 설치와 실행 중인 대화는 보존한다. Registry 버전·선택 배포·명시 패키지 버전으로 재사용 여부를 판단하고 실제 해석 버전을 별도 저장한다. 환경 변수의 정렬 순서는 재사용 키에 영향을 주지 않는다.
+- Node는 에이전트 공통 관리형 런타임을 사용한다. 시스템 Node 재사용은 필수가 아닌 선택 사항이므로 이번 구현에는 넣지 않았다. 공식 Node v24.21.0 macOS arm64/x64 tar.gz와 고정 SHA-256을 사용하고 준비 작업을 직렬화한다. npm은 앱 내부에서 실행하며 사용자 전역 패키지나 셸 설정을 변경하지 않는다. npm lifecycle script는 실행하지 않는다.
+- 인증 이름·ID별 추측을 제거했다. ACP Agent/Terminal 방식과 공급자의 설명을 사용한다. SDK 1.7의 알 수 없는 auth type→Agent fallback을 발견하여 initialize 원본 discriminator를 보존·검사한다. 미지원 방식은 UI와 실행 양쪽에서 차단한다. Terminal 인수·환경은 사용 중인 stable v1 SDK의 append/override 계약을 따른다.
+- Solid resource는 캐시를 먼저 보여주고 ID 기준으로 reconcile하여 갱신 중에도 항목과 버튼의 정체성을 유지한다.
+
+자동 검증:
+
+- `CHOKIDAR_USEPOLLING=1 pnpm validate`: Biome/FSD/typecheck, UI 20개 통과.
+- `sh scripts/validate-rust.sh`: fmt/check/Clippy, Rust 40개 통과. 기존 수동 실행 경로 기반 Codex smoke 2개는 opt-in ignored 상태다.
+- 새 Registry ID만으로 목록→설치→선택, 캐시 재구성·오프라인·갱신 실패·기존 설치 제거 항목 보존, 설치 중복·중단·재시도, 모든 binary 형식과 손상·체크섬·탈출 거부를 검사했다.
+- 제어 가능한 다운로드 경계와 Rust Node/npm·ACP fixture로 시스템 Node 없이 관리형 런타임 실패→재시도→재사용→npm 설치→임의 인증 방식 실패/재시도→첫/후속 응답→저장 재구성을 검사했다. 기존 대화 고정 실행·구독·인증 만료 테스트를 유지했다.
+- `pnpm tauri build --bundles app`: production macOS 번들 통과. 기존 bundle identifier의 `.app` 접미사 경고는 남아 있으며 이번 범위와 무관하다.
+
+실제 macOS Apple Silicon 앱 검증:
+
+1. 기존 SQLite의 Codex·Antigravity 설치가 Registry ID로 변환되고 산출물이 유지됨을 앱에서 확인했다.
+2. 공식 Registry 41개 전체 항목, 설명·배포, fast-agent/Minion Code의 미지원 표시와 설치 버튼 비활성화를 확인했다.
+3. Claude Agent 0.78.0: 앱에서 관리형 Node 다운로드·준비→npm 설치 완료와 재시작 없이 에이전트 선택 목록에 추가됨을 확인했다. 실제 계정 인증/응답은 검증하지 않았다.
+4. goose 1.50.1: 공식 tar.bz2 다운로드·설치→ACP 초기화·Configure Provider 안내를 확인했다. 인증은 미확인으로 유지했고 실제 계정 응답은 검증하지 않았다.
+5. Codex 1.12.0: ACP 인증 안내에 공급자의 API Key/ChatGPT 설명만 표시됨을 확인했다. 기존 로그인 상태에서 `/private/tmp/atte-04-registry-acceptance` 선택→자동 연결→첫 응답 `REGISTRY-947`→표식을 다시 주지 않은 후속 질문에서 동일 응답·완료를 확인했다. 도구·파일 접근을 금지한 검증 메시지만 사용했다.
+
+6. 최종 production 번들을 종료·재실행해 네 에이전트 선택 목록과 저장된 설치를 복원했다. Codex로 같은 검증 폴더의 새 대화를 자동 연결하고 `RESTART-REGISTRY-OK` 응답·완료를 확인했다. 이 확장 범위의 구현과 검증을 완료했다.
+
+Standards: 초기 지적 2개(재사용 키 정렬, Node 상대 실행 경로)를 수정하고 회귀 테스트 추가. 재리뷰 남은 지적 0개.
+Spec: 초기 지적 1개(미지원 binary 형식 사전 차단)를 수정하고 회귀 테스트 추가. 재리뷰 남은 지적 0개. 이후 인증 discriminator 및 UI reconcile 변경도 양쪽 재리뷰에서 0개.
+
+검증 제한: Codex 외 실제 계정 응답과 Terminal 로그인 완료는 미검증이다. 전체 Registry 호환성을 설치/연결 성공만으로 보증하지 않는다. Codex API Key 방식은 공급자가 필요한 환경 변수를 stable Agent 인증 메타데이터로 광고하지 않아 공통 UI로 키를 준비할 수 없다. 이름별 우회 처리를 추가하지 않았으며 기존 로그인 기반 응답과 구분한다. 자동 업데이트·제거·대화 기록 복원·사용자 승인/취소는 후속 범위다.

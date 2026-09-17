@@ -199,11 +199,14 @@ async fn agent_catalog(
 async fn refresh_agent_catalog(
     conversations: State<'_, Conversations>,
     management: State<'_, agent_management::AgentManagement>,
+    force: Option<bool>,
 ) -> Result<Vec<agent_management::ManagedAgent>, String> {
-    management
-        .refresh()
-        .await
-        .map_err(|error| error.to_string())?;
+    if force.unwrap_or(true) {
+        management.refresh().await
+    } else {
+        management.refresh_if_stale().await
+    }
+    .map_err(|error| error.to_string())?;
     management
         .catalog(&conversations)
         .map_err(|error| error.to_string())
@@ -220,7 +223,7 @@ async fn install_agent(
         .install(
             &id,
             &conversations,
-            &agent_management::installer::SystemInstaller,
+            &agent_management::installer::SystemInstaller::default(),
             &|message| {
                 let _ = channel.send(message.to_owned());
             },

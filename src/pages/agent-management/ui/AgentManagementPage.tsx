@@ -1,5 +1,5 @@
 import { createResource, createSignal, For, Show } from "solid-js";
-import { createStore } from "solid-js/store";
+import { createStore, reconcile } from "solid-js/store";
 import { authenticate, catalog, install } from "../api/agents";
 
 export function AgentManagementPage(props: {
@@ -14,8 +14,10 @@ export function AgentManagementPage(props: {
   const [agents, { mutate }] = createResource(
     () => props.active,
     async () => {
+      const cached = await catalog();
+      mutate(cached);
       try {
-        return await catalog(true);
+        return await catalog(true, false);
       } catch (cause) {
         setError(message(cause));
         try {
@@ -24,6 +26,19 @@ export function AgentManagementPage(props: {
           return [];
         }
       }
+    },
+    {
+      storage: (initial) => {
+        const [state, setState] = createStore({ value: initial });
+        return [
+          () => state.value,
+          (next = undefined) => {
+            const value = typeof next === "function" ? next(state.value) : next;
+            setState("value", reconcile(value));
+            return value;
+          },
+        ];
+      },
     },
   );
 
@@ -109,6 +124,11 @@ export function AgentManagementPage(props: {
         <Show when={agents.loading && !agents.latest}>
           <p role="status">목록을 불러오는 중…</p>
         </Show>
+        <Show when={!agents.loading && agents.latest?.length === 0}>
+          <p role="status">
+            저장된 목록이 없습니다. 네트워크 연결 후 목록을 새로고침하세요.
+          </p>
+        </Show>
         <For each={agents.latest ?? []}>
           {(agent) => (
             <article class="space-y-4 rounded-2xl border border-line bg-panel p-5">
@@ -122,12 +142,14 @@ export function AgentManagementPage(props: {
                       : "설치되지 않음"}
                 </span>
               </div>
+              <p class="text-sm text-muted">{agent.description}</p>
               <p class="break-all text-xs text-muted">
                 {agent.distribution?.kind === "npm"
                   ? `npm · ${agent.distribution.package}`
                   : agent.distribution?.kind === "binary"
                     ? `macOS 바이너리 · ${agent.availableVersion}`
-                    : "현재 플랫폼 배포를 확인할 수 없습니다."}
+                    : (agent.unavailableReason ??
+                      "현재 플랫폼 배포를 확인할 수 없습니다.")}
               </p>
               <Show when={agent.artifact}>
                 <p class="break-all text-xs text-muted">
@@ -190,12 +212,16 @@ export function AgentManagementPage(props: {
                       <button
                         type="button"
                         title={method.description ?? undefined}
-                        disabled={work[agent.id]?.busy}
+                        disabled={!method.supported || work[agent.id]?.busy}
                         class="rounded-lg bg-accent px-4 py-2 text-white disabled:opacity-40"
                         onClick={() => run(agent.id, "login", method.id)}
                       >
                         {method.name}
-                        {method.terminal ? " · 터미널" : ""}
+                        {method.supported
+                          ? method.terminal
+                            ? " · 터미널"
+                            : ""
+                          : " · 미지원 인증"}
                       </button>
                     )}
                   </For>
@@ -216,11 +242,6 @@ export function AgentManagementPage(props: {
                   class="text-sm"
                 >
                   {work[agent.id]?.message}
-                </p>
-              </Show>
-              <Show when={agent.id !== "codex"}>
-                <p class="text-xs text-muted">
-                  실제 계정 로그인과 응답은 사용자 후속 검증이 필요합니다.
                 </p>
               </Show>
             </article>

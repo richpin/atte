@@ -757,6 +757,7 @@ async fn management_observes_expiry_and_login_without_restarting_the_failed_conv
     Store::open(&root.path().join("atte.sqlite"))
         .unwrap()
         .save_installation(&Installation {
+            source: None,
             definition: agent,
             version: "1.12.0".into(),
             artifact: root.path().into(),
@@ -770,7 +771,7 @@ async fn management_observes_expiry_and_login_without_restarting_the_failed_conv
         .await
         .unwrap();
     assert!(
-        management.catalog(&conversations).unwrap()[1]
+        management.catalog(&conversations).unwrap()[0]
             .authentication
             .authenticated
     );
@@ -782,14 +783,14 @@ async fn management_observes_expiry_and_login_without_restarting_the_failed_conv
         .send_message(draft.id, "expired".into())
         .unwrap();
     settle(&conversations, draft.id).await;
-    let state = &management.catalog(&conversations).unwrap()[1].authentication;
+    let state = &management.catalog(&conversations).unwrap()[0].authentication;
     assert!(state.required);
     assert!(!state.authenticated);
     management
         .authenticate("codex", Some("fixture-login"), &conversations)
         .await
         .unwrap();
-    let state = &management.catalog(&conversations).unwrap()[1].authentication;
+    let state = &management.catalog(&conversations).unwrap()[0].authentication;
     assert!(!state.required);
     assert!(state.authenticated);
     assert_eq!(
@@ -800,24 +801,19 @@ async fn management_observes_expiry_and_login_without_restarting_the_failed_conv
 }
 
 #[tokio::test]
-async fn codex_key_auth_explains_its_prerequisite_without_logging_a_secret() {
+async fn authentication_uses_advertised_metadata_without_provider_or_method_assumptions() {
     use atte_lib::agent_management::authentication::inspect;
     let root = tempfile::tempdir().unwrap();
     let mut agent = mock_agent();
-    agent.id = "codex".into();
+    agent.id = "unknown-provider".into();
     agent.env.insert("FIXTURE_MODE".into(), "key-auth".into());
-    agent.env.insert("CODEX_API_KEY".into(), String::new());
-    agent.env.insert("OPENAI_API_KEY".into(), String::new());
     let methods = inspect(&agent, root.path(), None).await.unwrap().methods;
-    assert!(methods[0]
-        .description
-        .as_ref()
-        .unwrap()
-        .contains("CODEX_API_KEY"));
-    let error = inspect(&agent, root.path(), Some("api-key"))
-        .await
-        .unwrap_err();
-    assert!(error.to_string().contains("ChatGPT"));
+    assert!(methods[0].description.is_none());
+    assert!(methods[0].supported);
+    assert!(matches!(
+        inspect(&agent, root.path(), Some("api-key")).await,
+        Err(atte_lib::agent_management::ManagementError::Authentication)
+    ));
 }
 
 #[tokio::test]
@@ -836,6 +832,7 @@ async fn every_successful_prompt_refreshes_shared_authentication_evidence() {
     Store::open(&root.path().join("atte.sqlite"))
         .unwrap()
         .save_installation(&Installation {
+            source: None,
             definition: agent,
             version: "1.12.0".into(),
             artifact: root.path().into(),
@@ -860,7 +857,7 @@ async fn every_successful_prompt_refreshes_shared_authentication_evidence() {
         .await
         .is_err());
     assert!(
-        !management.catalog(&conversations).unwrap()[1]
+        !management.catalog(&conversations).unwrap()[0]
             .authentication
             .authenticated
     );
@@ -869,9 +866,26 @@ async fn every_successful_prompt_refreshes_shared_authentication_evidence() {
         .unwrap();
     settle(&conversations, draft.id).await;
     assert!(
-        management.catalog(&conversations).unwrap()[1]
+        management.catalog(&conversations).unwrap()[0]
             .authentication
             .authenticated
     );
     conversations.shutdown().await;
+}
+
+#[tokio::test]
+async fn unknown_authentication_type_is_not_treated_as_agent_login() {
+    use atte_lib::agent_management::{authentication::inspect, ManagementError};
+    let root = tempfile::tempdir().unwrap();
+    let mut agent = mock_agent();
+    agent
+        .env
+        .insert("FIXTURE_MODE".into(), "future-auth".into());
+    let state = inspect(&agent, root.path(), None).await.unwrap();
+    assert_eq!(state.methods.len(), 1);
+    assert!(!state.methods[0].supported);
+    assert!(matches!(
+        inspect(&agent, root.path(), Some("future-method")).await,
+        Err(ManagementError::UnsupportedAuthentication)
+    ));
 }

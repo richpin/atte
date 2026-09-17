@@ -4,16 +4,39 @@ use agent_client_protocol::{
     schema::{
         v1::{
             AuthCapabilities, AuthMethod, AuthenticateRequest, ClientCapabilities,
-            InitializeRequest,
+            InitializeRequest, InitializeResponse,
         },
         ProtocolVersion,
     },
     Agent, ByteStreams, Client, ConnectionTo,
 };
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::{path::Path, process::Stdio, time::Duration};
 use tokio::process::Command;
 use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
+
+// SDK v1 treats unknown auth discriminators as Agent. Retain the wire discriminator
+// so a future authentication protocol cannot silently become an agent login.
+#[derive(Clone, Debug, Serialize, Deserialize, agent_client_protocol::JsonRpcRequest)]
+#[serde(transparent)]
+#[request(method = "initialize", response = serde_json::Value)]
+struct InspectInitialize(InitializeRequest);
+
+fn supported(method: &AuthMethod, raw: &serde_json::Value) -> bool {
+    let kind = raw["authMethods"]
+        .as_array()
+        .and_then(|methods| {
+            methods
+                .iter()
+                .find(|value| value["id"].as_str() == Some(method.id().0.as_ref()))
+        })
+        .map(|value| &value["type"]);
+    (matches!(method, AuthMethod::Agent(_))
+        && kind.is_some_and(|kind| kind.is_null() || kind.as_str() == Some("agent")))
+        || (cfg!(target_os = "macos")
+            && matches!(method, AuthMethod::Terminal(_))
+            && kind.and_then(serde_json::Value::as_str) == Some("terminal"))
+}
 
 #[derive(Clone, Debug, Default, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -30,6 +53,7 @@ pub struct LoginMethod {
     pub name: String,
     pub description: Option<String>,
     pub terminal: bool,
+    pub supported: bool,
 }
 
 /// Initializes a separate setup connection. It never reuses or replaces conversations.
@@ -59,14 +83,16 @@ pub async fn inspect(
             let result = async {
                 let capabilities = ClientCapabilities::new()
                     .auth(AuthCapabilities::new().terminal(cfg!(target_os = "macos")));
-                let initialized = connection
-                    .send_request(
+                let raw = connection
+                    .send_request(InspectInitialize(
                         InitializeRequest::new(ProtocolVersion::V1)
                             .client_capabilities(capabilities),
-                    )
+                    ))
                     .block_task()
                     .await
                     .map_err(|_| ManagementError::Connection)?;
+                let initialized: InitializeResponse =
+                    serde_json::from_value(raw.clone()).map_err(|_| ManagementError::Connection)?;
                 if initialized.protocol_version != ProtocolVersion::V1 {
                     return Err(ManagementError::Connection);
                 }
@@ -80,7 +106,8 @@ pub async fn inspect(
                         .map(|method| LoginMethod {
                             id: method.id().to_string(),
                             name: method.name().to_owned(),
-                            description: crate::agent::authentication_guidance(agent, method),
+                            description: method.description().map(str::to_owned),
+                            supported: supported(method, &raw),
                             terminal: matches!(method, AuthMethod::Terminal(_)),
                         })
                         .collect(),
@@ -91,7 +118,9 @@ pub async fn inspect(
                         .iter()
                         .find(|method| method.id().to_string() == id)
                         .ok_or(ManagementError::Authentication)?;
-                    crate::agent::check_authentication_prerequisite(agent, selected)?;
+                    if !supported(selected, &raw) {
+                        return Err(ManagementError::UnsupportedAuthentication);
+                    }
                     match selected {
                         AuthMethod::Agent(_) => {
                             connection
@@ -103,7 +132,7 @@ pub async fn inspect(
                         AuthMethod::Terminal(terminal) => {
                             terminal_login(agent, terminal, folder).await?
                         }
-                        _ => return Err(ManagementError::Authentication),
+                        _ => return Err(ManagementError::UnsupportedAuthentication),
                     }
                     state.authenticated = true;
                 }

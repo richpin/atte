@@ -34,6 +34,9 @@ reqwest = { version = "0.13.5", features = ["json", "stream"] }
 zip = { version = "4", default-features = false, features = ["deflate"] }
 sha2 = "0.10"
 tempfile = "3.27.0"
+tar = "0.4.46"
+flate2 = "1.1.10"
+bzip2 = "0.6.1"
 
 
 # Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration

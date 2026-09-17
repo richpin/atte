@@ -7,6 +7,7 @@ export interface Authentication {
     name: string;
     description: string | null;
     terminal: boolean;
+    supported: boolean;
   }[];
 }
 
@@ -14,6 +15,8 @@ export interface ManagedAgent {
   id: string;
   name: string;
   installed: boolean;
+  description: string;
+  unavailableReason: string | null;
   installedVersion: string | null;
   artifact: string | null;
   availableVersion: string | null;

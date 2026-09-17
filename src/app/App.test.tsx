@@ -621,20 +621,20 @@ it("retries a failed install and offers the installed agent without restarting",
   let installed = false;
   let attempts = 0;
   const agent = () => ({
-    id: "codex",
-    name: "Codex",
+    id: "new-provider",
+    name: "New Provider",
     installed,
     installedVersion: installed ? "1.12.0" : null,
     availableVersion: "1.12.0",
     distribution: {
       kind: "npm",
-      package: "@agentclientprotocol/codex-acp@1.12.0",
+      package: "@fixture/new-provider@1.12.0",
     },
     authentication: { connected: false, authenticated: false, methods: [] },
   });
   vi.mocked(invoke).mockImplementation(async (command, args) => {
     if (command === "prepared_agents")
-      return installed ? [{ id: "codex", name: "Codex" }] : [];
+      return installed ? [{ id: "new-provider", name: "New Provider" }] : [];
     if (command === "agent_catalog" || command === "refresh_agent_catalog")
       return [agent()];
     if (command === "install_agent") {
@@ -643,28 +643,91 @@ it("retries a failed install and offers the installed agent without restarting",
       installed = true;
     }
     if (command === "select_working_folder") {
-      expect(args).toEqual({ agentId: "codex" });
+      expect(args).toEqual({ agentId: "new-provider" });
       return null;
     }
   });
   render(() => <App />);
   await userEvent.click(
-    await screen.findByRole("button", { name: "Codex 설치" }),
+    await screen.findByRole("button", { name: "New Provider 설치" }),
   );
   expect(await screen.findByRole("alert")).toHaveProperty(
     "textContent",
     "설치 실패. 다시 시도해주세요.",
   );
-  await userEvent.click(screen.getByRole("button", { name: "Codex 설치" }));
+  await userEvent.click(
+    screen.getByRole("button", { name: "New Provider 설치" }),
+  );
   expect(await screen.findByText(/설치됨 · 1.12.0/)).toBeTruthy();
   await userEvent.click(
     screen.getByRole("button", { name: "대화로 돌아가기" }),
   );
   expect((screen.getByRole("combobox") as HTMLSelectElement).value).toBe(
-    "codex",
+    "new-provider",
   );
   await userEvent.click(screen.getByRole("button", { name: "폴더 선택" }));
   expect(invoke).toHaveBeenCalledWith("select_working_folder", {
-    agentId: "codex",
+    agentId: "new-provider",
   });
+});
+
+it("shows new registry agents and unsupported reasons while keeping cached installations on refresh failure", async () => {
+  let fail = false;
+  const agents = [
+    {
+      id: "new-provider",
+      name: "New Provider",
+      description: "From registry",
+      installed: false,
+      availableVersion: "1.0.0",
+      distribution: { kind: "npm", package: "new-provider@1.0.0" },
+      authentication: { methods: [] },
+    },
+    {
+      id: "uv-provider",
+      name: "UV Provider",
+      installed: false,
+      distribution: null,
+      unavailableReason: "지원하지 않는 배포 형식입니다.",
+      authentication: { methods: [] },
+    },
+    {
+      id: "removed-provider",
+      name: "Removed Provider",
+      installed: true,
+      installedVersion: "2.0.0",
+      distribution: null,
+      unavailableReason: "Registry에서 제공하지 않는 기존 설치입니다.",
+      authentication: {
+        methods: [
+          { id: "arbitrary-auth", name: "External auth", supported: false },
+        ],
+      },
+    },
+  ];
+  vi.mocked(invoke).mockImplementation(async (command) => {
+    if (command === "prepared_agents") return [];
+    if (command === "refresh_agent_catalog" && fail) throw "Registry 갱신 실패";
+    if (command === "agent_catalog" || command === "refresh_agent_catalog")
+      return agents;
+  });
+  render(() => <App />);
+  expect(
+    await screen.findByRole("button", { name: "New Provider 설치" }),
+  ).toHaveProperty("disabled", false);
+  expect(screen.getByText("From registry")).toBeTruthy();
+  expect(
+    screen.getByRole("button", { name: "UV Provider 설치" }),
+  ).toHaveProperty("disabled", true);
+  expect(screen.getByText("지원하지 않는 배포 형식입니다.")).toBeTruthy();
+  expect(
+    screen.getByRole("button", { name: "External auth · 미지원 인증" }),
+  ).toHaveProperty("disabled", true);
+  fail = true;
+  await userEvent.click(screen.getByRole("button", { name: "목록 새로고침" }));
+  expect(await screen.findByRole("alert")).toHaveProperty(
+    "textContent",
+    "Registry 갱신 실패",
+  );
+  expect(screen.getByText("설치됨 · 2.0.0")).toBeTruthy();
 });

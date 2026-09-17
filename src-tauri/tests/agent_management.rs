@@ -9,15 +9,16 @@ fn installation_survives_reopening_the_store() {
     let path = root.path().join("atte.sqlite");
     let store = Store::open(&path).unwrap();
     let installation = Installation {
+        source: None,
         definition: AgentDefinition {
-            id: "codex".into(),
+            id: "codex-acp".into(),
             name: "Codex".into(),
             command: "/installed/node".into(),
             args: vec!["/installed/adapter.js".into()],
             env: Default::default(),
         },
         version: "1.12.0".into(),
-        artifact: root.path().join("codex"),
+        artifact: root.path().join("codex-acp"),
     };
     store.save_installation(&installation).unwrap();
     drop(store);
@@ -84,6 +85,7 @@ impl Installer for ControlledInstaller {
             }
             std::fs::create_dir_all(root).unwrap();
             Ok(Installation {
+                source: None,
                 definition: AgentDefinition {
                     id: id.into(),
                     name: entry.name.clone(),
@@ -110,7 +112,7 @@ async fn failed_installation_can_retry_and_only_success_survives_restart() {
     let conversations = Conversations::new(vec![]);
     assert!(management
         .install(
-            "codex",
+            "codex-acp",
             &conversations,
             &ControlledInstaller { fail: true },
             &|_| {}
@@ -122,28 +124,31 @@ async fn failed_installation_can_retry_and_only_success_survives_restart() {
             .catalog(&conversations)
             .unwrap()
             .iter()
-            .find(|agent| agent.id == "codex")
+            .find(|agent| agent.id == "codex-acp")
             .unwrap()
             .installed
     );
     assert!(conversations.prepared_agents().is_empty());
     management
         .install(
-            "codex",
+            "codex-acp",
             &conversations,
             &ControlledInstaller { fail: false },
             &|_| {},
         )
         .await
         .unwrap();
-    assert_eq!(conversations.prepared_agents()[0].id, "codex");
+    assert_eq!(conversations.prepared_agents()[0].id, "codex-acp");
     drop(management);
     let restored = AgentManagement::open(root.path()).unwrap();
     let conversations = Conversations::new(vec![]);
     restored.restore(&conversations).unwrap();
-    assert_eq!(conversations.prepared_agents()[0].id, "codex");
+    assert_eq!(conversations.prepared_agents()[0].id, "codex-acp");
     let catalog = restored.catalog(&conversations).unwrap();
-    let codex = catalog.iter().find(|agent| agent.id == "codex").unwrap();
+    let codex = catalog
+        .iter()
+        .find(|agent| agent.id == "codex-acp")
+        .unwrap();
     assert!(codex.installed);
     assert!(!codex.authentication.authenticated);
 }
@@ -153,20 +158,20 @@ fn registry_selects_platform_binary_or_npm_and_excludes_other_agents() {
     let registry = registry();
     assert!(matches!(
         registry
-            .target("codex")
+            .target("codex-acp")
             .unwrap()
             .distribution("darwin-aarch64"),
         Some(Distribution::Npm(_))
     ));
     assert!(matches!(
         registry
-            .target("antigravity")
+            .target("antigravity-acp")
             .unwrap()
             .distribution("darwin-aarch64"),
         Some(Distribution::Binary(_))
     ));
     assert!(registry
-        .target("antigravity")
+        .target("antigravity-acp")
         .unwrap()
         .distribution("darwin-x86_64")
         .is_none());
@@ -182,6 +187,212 @@ fn opens_the_oldest_committed_schema_fixture() {
         .execute_batch(include_str!("fixtures/schema-v1.sql"))
         .unwrap();
     let installations = Store::open(&path).unwrap().installations().unwrap();
-    assert_eq!(installations[0].definition.id, "codex");
+    assert_eq!(installations[0].definition.id, "codex-acp");
     assert_eq!(installations[0].version, "1.12.0");
+}
+
+#[tokio::test]
+async fn unknown_registry_agent_survives_offline_restart_and_registry_removal() {
+    let root = tempfile::tempdir().unwrap();
+    let management = AgentManagement::open(root.path()).unwrap();
+    let conversations = Conversations::new(vec![]);
+    let mut registry = registry();
+    let mut added = registry.agents[0].clone();
+    added.id = "new-provider".into();
+    added.name = "New provider".into();
+    registry.agents.push(added);
+    management.set_registry(registry).unwrap();
+    assert_eq!(management.catalog(&conversations).unwrap().len(), 4);
+    management
+        .install(
+            "new-provider",
+            &conversations,
+            &ControlledInstaller { fail: false },
+            &|_| {},
+        )
+        .await
+        .unwrap();
+    drop(management);
+    let management = AgentManagement::open(root.path()).unwrap();
+    assert_eq!(management.catalog(&conversations).unwrap().len(), 4);
+    management
+        .set_registry(Registry::parse(r#"{"version":"1.0.0","agents":[]}"#).unwrap())
+        .unwrap();
+    let catalog = management.catalog(&conversations).unwrap();
+    assert_eq!(catalog.len(), 1);
+    assert_eq!(catalog[0].id, "new-provider");
+    assert!(catalog[0].installed);
+    assert!(catalog[0].distribution.is_none());
+}
+
+#[tokio::test]
+async fn cached_catalog_survives_failed_refresh_and_reuses_a_good_installation() {
+    let root = tempfile::tempdir().unwrap();
+    let manager = AgentManagement::open(root.path()).unwrap();
+    let conversations = Conversations::new(vec![]);
+    manager.set_registry(registry()).unwrap();
+    manager
+        .install(
+            "codex-acp",
+            &conversations,
+            &ControlledInstaller { fail: false },
+            &|_| {},
+        )
+        .await
+        .unwrap();
+    assert!(manager
+        .refresh_from("http://127.0.0.1:1", true)
+        .await
+        .is_err());
+    assert_eq!(manager.catalog(&conversations).unwrap().len(), 3);
+    manager
+        .install(
+            "codex-acp",
+            &conversations,
+            &ControlledInstaller { fail: true },
+            &|_| {},
+        )
+        .await
+        .unwrap();
+    manager
+        .refresh_from("http://127.0.0.1:1", false)
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn reordered_registry_environment_reuses_installation_after_restart() {
+    let root = tempfile::tempdir().unwrap();
+    let manager = AgentManagement::open(root.path()).unwrap();
+    let mut registry = registry();
+    let npm = registry.agents[1].distribution.npx.as_mut().unwrap();
+    for index in 0..20 {
+        npm.env.insert(format!("KEY_{index}"), index.to_string());
+    }
+    manager.set_registry(registry).unwrap();
+    manager
+        .install(
+            "codex-acp",
+            &Conversations::new(vec![]),
+            &ControlledInstaller { fail: false },
+            &|_| {},
+        )
+        .await
+        .unwrap();
+    drop(manager);
+    for _ in 0..3 {
+        let manager = AgentManagement::open(root.path()).unwrap();
+        manager
+            .install(
+                "codex-acp",
+                &Conversations::new(vec![]),
+                &ControlledInstaller { fail: true },
+                &|_| {},
+            )
+            .await
+            .unwrap();
+    }
+}
+
+#[tokio::test]
+async fn unsupported_binary_is_disabled_before_download_without_npm_fallback() {
+    let root = tempfile::tempdir().unwrap();
+    let manager = AgentManagement::open(root.path()).unwrap();
+    let registry = Registry::parse(&serde_json::json!({"version":"1.0.0", "agents":[{"id":"new-agent", "name":"New", "version":"1", "distribution":{"binary":{atte_lib::agent_management::registry::platform():{"archive":"https://fixture/agent.dmg","cmd":"agent"}}, "npx":{"package":"fallback@1"}}}]}).to_string()).unwrap();
+    manager.set_registry(registry).unwrap();
+    let conversations = Conversations::new(vec![]);
+    let catalog = manager.catalog(&conversations).unwrap();
+    assert!(catalog[0].distribution.is_none());
+    assert!(catalog[0].unavailable_reason.is_some());
+    assert!(matches!(
+        manager
+            .install(
+                "new-agent",
+                &conversations,
+                &ControlledInstaller { fail: false },
+                &|_| {}
+            )
+            .await,
+        Err(ManagementError::Unsupported)
+    ));
+}
+
+struct InterruptedInstaller {
+    started: tokio::sync::Notify,
+}
+impl Installer for InterruptedInstaller {
+    fn install<'a>(
+        &'a self,
+        _: &'a str,
+        _: &'a RegistryAgent,
+        _: &'a Distribution,
+        _: &'a Path,
+        _: &'a (dyn Fn(&str) + Send + Sync),
+    ) -> InstallFuture<'a> {
+        Box::pin(async move {
+            self.started.notify_one();
+            std::future::pending().await
+        })
+    }
+}
+
+#[tokio::test]
+async fn duplicate_install_is_busy_and_aborted_request_can_retry() {
+    let root = tempfile::tempdir().unwrap();
+    let manager = std::sync::Arc::new(AgentManagement::open(root.path()).unwrap());
+    manager.set_registry(registry()).unwrap();
+    let installer = std::sync::Arc::new(InterruptedInstaller {
+        started: tokio::sync::Notify::new(),
+    });
+    let task_manager = manager.clone();
+    let task_installer = installer.clone();
+    let pending = tokio::spawn(async move {
+        task_manager
+            .install(
+                "codex-acp",
+                &Conversations::new(vec![]),
+                task_installer.as_ref(),
+                &|_| {},
+            )
+            .await
+    });
+    installer.started.notified().await;
+    let conversations = Conversations::new(vec![]);
+    assert!(matches!(
+        manager
+            .install(
+                "codex-acp",
+                &conversations,
+                &ControlledInstaller { fail: false },
+                &|_| {}
+            )
+            .await,
+        Err(ManagementError::Busy)
+    ));
+    pending.abort();
+    let _ = pending.await;
+    assert!(!manager.catalog(&conversations).unwrap()[1].installed);
+    manager
+        .install(
+            "codex-acp",
+            &conversations,
+            &ControlledInstaller { fail: false },
+            &|_| {},
+        )
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn initially_offline_catalog_is_empty_and_can_be_recovered() {
+    let root = tempfile::tempdir().unwrap();
+    let manager = AgentManagement::open(root.path()).unwrap();
+    let conversations = Conversations::new(vec![]);
+    assert!(manager
+        .refresh_from("http://127.0.0.1:1", true)
+        .await
+        .is_err());
+    assert!(manager.catalog(&conversations).unwrap().is_empty());
+    manager.set_registry(registry()).unwrap();
+    assert_eq!(manager.catalog(&conversations).unwrap().len(), 3);
 }
