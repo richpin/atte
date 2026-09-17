@@ -1,6 +1,9 @@
-//! Rust-owned SQLite repository. Each schema change is a transactional migration.
-use crate::agent::AgentDefinition;
-use rusqlite::{params, Connection};
+//! Rust-owned agent records. Schema changes and catalog replacement are transactional.
+use crate::{
+    agent::AgentDefinition,
+    agent_management::registry::{Registry, RegistryAgent},
+};
+use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use std::{
     path::{Path, PathBuf},
@@ -14,6 +17,12 @@ pub struct Installation {
     pub artifact: PathBuf,
 }
 
+pub struct StoredAgent {
+    pub id: String,
+    pub registry: Option<RegistryAgent>,
+    pub installation: Option<Installation>,
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum StorageError {
     #[error("설치 정보를 저장하거나 불러올 수 없습니다. 앱 저장 폴더의 권한과 여유 공간을 확인해주세요.")]
@@ -22,7 +31,7 @@ pub enum StorageError {
     Data(#[from] serde_json::Error),
     #[error("더 새로운 앱의 저장소입니다. 앱을 업데이트해주세요.")]
     NewerSchema,
-    #[error("저장소를 사용할 수 없습니다. 앱을 다시 실행해주세요.")]
+    #[error("저장소를 사용할 수 없습니다.")]
     Unavailable,
 }
 
@@ -32,45 +41,110 @@ impl Store {
     pub fn open(path: &Path) -> Result<Self, StorageError> {
         let mut connection = Connection::open(path)?;
         connection.busy_timeout(std::time::Duration::from_secs(5))?;
-        connection.pragma_update(None, "foreign_keys", "ON")?;
         let transaction = connection.transaction()?;
         let version: u32 =
             transaction.pragma_query_value(None, "user_version", |row| row.get(0))?;
-        match version {
-            0 => transaction.execute_batch(include_str!("../migrations/001_installations.sql"))?,
-            1 => {}
-            _ => return Err(StorageError::NewerSchema),
+        if version > 1 {
+            return Err(StorageError::NewerSchema);
+        }
+        if version == 0 {
+            transaction.execute_batch(include_str!("../migrations/001_agents.sql"))?;
         }
         transaction.commit()?;
         Ok(Self(Mutex::new(connection)))
     }
 
-    pub fn installations(&self) -> Result<Vec<Installation>, StorageError> {
+    pub fn agents(&self) -> Result<Vec<StoredAgent>, StorageError> {
         let connection = self.0.lock().map_err(|_| StorageError::Unavailable)?;
-        let mut statement = connection
-            .prepare("SELECT version, artifact, definition FROM installations ORDER BY agent_id")?;
+        let mut statement = connection.prepare("SELECT id, registry_metadata, installed_version, artifact_path, launch_definition FROM agents ORDER BY id")?;
         let rows = statement.query_map([], |row| {
             Ok((
                 row.get::<_, String>(0)?,
-                row.get::<_, String>(1)?,
-                row.get::<_, String>(2)?,
+                row.get::<_, Option<String>>(1)?,
+                row.get::<_, Option<String>>(2)?,
+                row.get::<_, Option<String>>(3)?,
+                row.get::<_, Option<String>>(4)?,
             ))
         })?;
         rows.map(|row| {
-            let (version, artifact, definition) = row?;
-            Ok(Installation {
-                version,
-                artifact: artifact.into(),
-                definition: serde_json::from_str(&definition)?,
+            let (id, metadata, version, artifact, definition) = row?;
+            let installation = match (version, artifact, definition) {
+                (Some(version), Some(artifact), Some(definition)) => Some(Installation {
+                    version,
+                    artifact: artifact.into(),
+                    definition: serde_json::from_str(&definition)?,
+                }),
+                _ => None,
+            };
+            // Registry metadata is replaceable; bad cached metadata must not prevent
+            // restoring a separately persisted, valid installation.
+            let registry = metadata.and_then(|json| serde_json::from_str(&json).ok());
+            Ok(StoredAgent {
+                id,
+                registry,
+                installation,
             })
         })
         .collect()
     }
 
+    pub fn installations(&self) -> Result<Vec<Installation>, StorageError> {
+        Ok(self
+            .agents()?
+            .into_iter()
+            .filter_map(|agent| agent.installation)
+            .collect())
+    }
+
     pub fn save_installation(&self, installation: &Installation) -> Result<(), StorageError> {
-        let connection = self.0.lock().map_err(|_| StorageError::Unavailable)?;
-        connection.execute("INSERT INTO installations (agent_id, version, artifact, definition) VALUES (?1, ?2, ?3, ?4) ON CONFLICT(agent_id) DO UPDATE SET version=excluded.version, artifact=excluded.artifact, definition=excluded.definition",
+        self.0.lock().map_err(|_| StorageError::Unavailable)?.execute(
+            "INSERT INTO agents (id, installed_version, artifact_path, launch_definition) VALUES (?1, ?2, ?3, ?4) ON CONFLICT(id) DO UPDATE SET installed_version=excluded.installed_version, artifact_path=excluded.artifact_path, launch_definition=excluded.launch_definition",
             params![installation.definition.id, installation.version, installation.artifact.to_string_lossy(), serde_json::to_string(&installation.definition)?])?;
+        Ok(())
+    }
+
+    /// Called only after installation files have been removed successfully.
+    pub fn remove_installation(&self, id: &str) -> Result<(), StorageError> {
+        let mut connection = self.0.lock().map_err(|_| StorageError::Unavailable)?;
+        let transaction = connection.transaction()?;
+        transaction.execute("UPDATE agents SET installed_version=NULL, artifact_path=NULL, launch_definition=NULL WHERE id=?1", [id])?;
+        transaction.execute(
+            "DELETE FROM agents WHERE id=?1 AND registry_metadata IS NULL",
+            [id],
+        )?;
+        transaction.commit()?;
+        Ok(())
+    }
+
+    pub fn registry_fetched_at(&self) -> Result<i64, StorageError> {
+        let value: Option<String> = self
+            .0
+            .lock()
+            .map_err(|_| StorageError::Unavailable)?
+            .query_row(
+                "SELECT value FROM app_metadata WHERE key='registry_fetched_at'",
+                [],
+                |row| row.get(0),
+            )
+            .optional()?;
+        Ok(value
+            .and_then(|value| value.parse().ok())
+            .unwrap_or_default())
+    }
+
+    pub fn save_registry(&self, registry: &Registry, fetched_at: i64) -> Result<(), StorageError> {
+        let mut connection = self.0.lock().map_err(|_| StorageError::Unavailable)?;
+        let transaction = connection.transaction()?;
+        transaction.execute("UPDATE agents SET registry_metadata=NULL", [])?;
+        for agent in &registry.agents {
+            transaction.execute("INSERT INTO agents (id, registry_metadata) VALUES (?1, ?2) ON CONFLICT(id) DO UPDATE SET registry_metadata=excluded.registry_metadata", params![agent.id, serde_json::to_string(agent)?])?;
+        }
+        transaction.execute(
+            "DELETE FROM agents WHERE registry_metadata IS NULL AND installed_version IS NULL",
+            [],
+        )?;
+        transaction.execute("INSERT INTO app_metadata (key, value) VALUES ('registry_fetched_at', ?1) ON CONFLICT(key) DO UPDATE SET value=excluded.value", [fetched_at.to_string()])?;
+        transaction.commit()?;
         Ok(())
     }
 }

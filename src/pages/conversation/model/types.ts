@@ -7,6 +7,7 @@ export type ConnectionFailure =
   | "processExited"
   | "connectionClosed"
   | "timedOut"
+  | "agentRemoved"
   | "promptFailed";
 
 export interface Conversation {
@@ -55,6 +56,8 @@ export const failureMessages: Record<ConnectionFailure, string> = {
   connectionClosed: "에이전트와의 연결이 끊어졌습니다.",
   promptFailed: "메시지 실행에 실패했습니다. 다시 연결해주세요.",
   timedOut: "에이전트 연결 시간이 초과되었습니다.",
+  agentRemoved:
+    "에이전트 삭제로 연결이 종료되었습니다. 설치 상태를 확인하고 새 대화를 시작해주세요.",
 };
 
 export type ConversationUpdate =

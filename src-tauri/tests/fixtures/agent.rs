@@ -25,6 +25,25 @@ impl Drop for Descendant {
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let args: Vec<_> = env::args().collect();
+    if args.iter().any(|arg| arg == "--version") {
+        println!("v24.21.0");
+        return Ok(());
+    }
+    if args.iter().any(|arg| arg == "install") {
+        let prefix = args
+            .iter()
+            .position(|arg| arg == "--prefix")
+            .ok_or("missing prefix")?;
+        let package = std::path::Path::new(&args[prefix + 1]).join("node_modules/@fixture/agent");
+        fs::create_dir_all(&package)?;
+        fs::write(
+            package.join("package.json"),
+            r#"{"name":"@fixture/agent","version":"3.2.1","bin":{"agent":"agent.js"}}"#,
+        )?;
+        fs::write(package.join("agent.js"), "fixture script")?;
+        return Ok(());
+    }
     if env::args().nth(1).as_deref() == Some("--descendant") {
         thread::sleep(Duration::from_secs(60));
         return Ok(());
@@ -67,7 +86,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 if mode == "init-error" {
                     error = Some(json!({"code": -32603, "message": "initialize rejected"}));
                 }
-                json!({"protocolVersion": if mode == "wrong-version" { 99 } else { 1 }, "agentCapabilities": {}, "authMethods": if mode == "key-auth" { json!([{"id": "api-key", "name": "API Key"}]) } else if env::var_os("AUTH_FILE").is_some() { json!([{ "id": "fixture-login", "name": "Fixture login" }, { "id": "fixture-denied", "name": "Denied login" }]) } else { json!([]) }})
+                json!({"protocolVersion": if mode == "wrong-version" { 99 } else { 1 }, "agentCapabilities": {}, "authMethods": if mode == "future-auth" { json!([{"id":"future-method","name":"Future auth","type":"future_protocol"}]) } else if mode == "key-auth" { json!([{"id": "api-key", "name": "API Key"}]) } else if env::var_os("AUTH_FILE").is_some() { json!([{ "id": "fixture-login", "name": "Fixture login" }, { "id": "fixture-denied", "name": "Denied login" }]) } else { json!([]) }})
             }
             "authenticate" => {
                 if request["params"]["methodId"] == "fixture-denied" {

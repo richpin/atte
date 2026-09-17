@@ -3,6 +3,7 @@ pub mod agent;
 pub mod agent_management;
 mod agent_runtime;
 pub mod conversation;
+mod installation_files;
 pub mod storage;
 
 use conversation::{Conversation, ConversationError, ConversationUpdate, Conversations};
@@ -162,6 +163,7 @@ pub fn run() {
             agent_catalog,
             refresh_agent_catalog,
             install_agent,
+            uninstall_agent,
             authenticate_agent,
             select_working_folder,
             get_conversation,
@@ -199,11 +201,14 @@ async fn agent_catalog(
 async fn refresh_agent_catalog(
     conversations: State<'_, Conversations>,
     management: State<'_, agent_management::AgentManagement>,
+    force: Option<bool>,
 ) -> Result<Vec<agent_management::ManagedAgent>, String> {
-    management
-        .refresh()
-        .await
-        .map_err(|error| error.to_string())?;
+    if force.unwrap_or(true) {
+        management.refresh().await
+    } else {
+        management.refresh_if_stale().await
+    }
+    .map_err(|error| error.to_string())?;
     management
         .catalog(&conversations)
         .map_err(|error| error.to_string())
@@ -220,11 +225,23 @@ async fn install_agent(
         .install(
             &id,
             &conversations,
-            &agent_management::installer::SystemInstaller,
+            &agent_management::installer::SystemInstaller::default(),
             &|message| {
                 let _ = channel.send(message.to_owned());
             },
         )
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+async fn uninstall_agent(
+    id: String,
+    management: State<'_, agent_management::AgentManagement>,
+    conversations: State<'_, Conversations>,
+) -> Result<(), String> {
+    management
+        .uninstall(&id, &conversations)
         .await
         .map_err(|error| error.to_string())
 }

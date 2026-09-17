@@ -1,4 +1,10 @@
-import { cleanup, render, screen } from "@solidjs/testing-library";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@solidjs/testing-library";
 import { invoke } from "@tauri-apps/api/core";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
@@ -14,6 +20,56 @@ let receiveUpdate: (update: Record<string, unknown>) => void;
 const receive = (snapshot: Record<string, unknown>) =>
   receiveUpdate({ kind: "snapshot", snapshot });
 afterEach(cleanup);
+
+it("shows registry icons and falls back for missing or failed images", async () => {
+  const images: HTMLImageElement[] = [];
+  const imageConstructor = vi
+    .spyOn(window, "Image")
+    .mockImplementation(function ImageFixture() {
+      const image = document.createElement("img");
+      images.push(image);
+      return image;
+    });
+  vi.mocked(invoke).mockImplementation(async (command) => {
+    if (command === "prepared_agents") return [];
+    if (command === "agent_catalog" || command === "refresh_agent_catalog")
+      return [
+        {
+          id: "available",
+          name: "Available",
+          icon: "https://cdn.agentclientprotocol.com/available.svg",
+        },
+        {
+          id: "broken",
+          name: "Broken",
+          icon: "https://cdn.agentclientprotocol.com/broken.svg",
+        },
+        { id: "missing", name: "Missing", icon: null },
+      ].map((agent) => ({ ...agent, authentication: { methods: [] } }));
+  });
+  try {
+    render(() => <App />);
+    await screen.findByRole("heading", { name: "Available" });
+    await waitFor(() => expect(images).toHaveLength(2));
+    fireEvent.load(images[0]);
+    fireEvent.error(images[1]);
+    await waitFor(() => {
+      expect(
+        screen
+          .getByRole("heading", { name: "Available" })
+          .parentElement?.querySelector("img")?.src,
+      ).toBe("https://cdn.agentclientprotocol.com/available.svg");
+      for (const name of ["Broken", "Missing"]) {
+        const row = screen.getByRole("heading", { name }).parentElement;
+        expect(row?.querySelector("img")).toBeNull();
+        expect(row?.querySelector("svg")).not.toBeNull();
+      }
+    });
+  } finally {
+    cleanup();
+    imageConstructor.mockRestore();
+  }
+});
 const requests = vi.fn();
 beforeEach(() => {
   vi.resetAllMocks();
@@ -621,20 +677,20 @@ it("retries a failed install and offers the installed agent without restarting",
   let installed = false;
   let attempts = 0;
   const agent = () => ({
-    id: "codex",
-    name: "Codex",
+    id: "new-provider",
+    name: "New Provider",
     installed,
     installedVersion: installed ? "1.12.0" : null,
     availableVersion: "1.12.0",
     distribution: {
       kind: "npm",
-      package: "@agentclientprotocol/codex-acp@1.12.0",
+      package: "@fixture/new-provider@1.12.0",
     },
     authentication: { connected: false, authenticated: false, methods: [] },
   });
   vi.mocked(invoke).mockImplementation(async (command, args) => {
     if (command === "prepared_agents")
-      return installed ? [{ id: "codex", name: "Codex" }] : [];
+      return installed ? [{ id: "new-provider", name: "New Provider" }] : [];
     if (command === "agent_catalog" || command === "refresh_agent_catalog")
       return [agent()];
     if (command === "install_agent") {
@@ -643,28 +699,185 @@ it("retries a failed install and offers the installed agent without restarting",
       installed = true;
     }
     if (command === "select_working_folder") {
-      expect(args).toEqual({ agentId: "codex" });
+      expect(args).toEqual({ agentId: "new-provider" });
       return null;
     }
   });
   render(() => <App />);
   await userEvent.click(
-    await screen.findByRole("button", { name: "Codex 설치" }),
+    await screen.findByRole("button", { name: "New Provider 설치" }),
   );
   expect(await screen.findByRole("alert")).toHaveProperty(
     "textContent",
     "설치 실패. 다시 시도해주세요.",
   );
-  await userEvent.click(screen.getByRole("button", { name: "Codex 설치" }));
+  await userEvent.click(
+    screen.getByRole("button", { name: "New Provider 설치" }),
+  );
   expect(await screen.findByText(/설치됨 · 1.12.0/)).toBeTruthy();
   await userEvent.click(
     screen.getByRole("button", { name: "대화로 돌아가기" }),
   );
   expect((screen.getByRole("combobox") as HTMLSelectElement).value).toBe(
-    "codex",
+    "new-provider",
   );
   await userEvent.click(screen.getByRole("button", { name: "폴더 선택" }));
   expect(invoke).toHaveBeenCalledWith("select_working_folder", {
-    agentId: "codex",
+    agentId: "new-provider",
   });
+});
+
+it("shows new registry agents and unsupported reasons while keeping cached installations on refresh failure", async () => {
+  let fail = false;
+  const agents = [
+    {
+      id: "new-provider",
+      name: "New Provider",
+      description: "From registry",
+      installed: false,
+      availableVersion: "1.0.0",
+      distribution: { kind: "npm", package: "new-provider@1.0.0" },
+      authentication: { methods: [] },
+    },
+    {
+      id: "uv-provider",
+      name: "UV Provider",
+      installed: false,
+      distribution: null,
+      unavailableReason: "지원하지 않는 배포 형식입니다.",
+      authentication: { methods: [] },
+    },
+    {
+      id: "removed-provider",
+      name: "Removed Provider",
+      installed: true,
+      installedVersion: "2.0.0",
+      distribution: null,
+      unavailableReason: "Registry에서 제공하지 않는 기존 설치입니다.",
+      authentication: {
+        methods: [
+          { id: "arbitrary-auth", name: "External auth", supported: false },
+        ],
+      },
+    },
+  ];
+  vi.mocked(invoke).mockImplementation(async (command) => {
+    if (command === "prepared_agents") return [];
+    if (command === "refresh_agent_catalog" && fail) throw "Registry 갱신 실패";
+    if (command === "agent_catalog" || command === "refresh_agent_catalog")
+      return agents;
+  });
+  render(() => <App />);
+  expect(
+    await screen.findByRole("button", { name: "New Provider 설치" }),
+  ).toHaveProperty("disabled", false);
+  expect(screen.getByText("From registry")).toBeTruthy();
+  expect(
+    screen.getByRole("button", { name: "UV Provider 설치" }),
+  ).toHaveProperty("disabled", true);
+  expect(screen.getByText("지원하지 않는 배포 형식입니다.")).toBeTruthy();
+  expect(
+    screen.getByRole("button", { name: "External auth · 미지원 인증" }),
+  ).toHaveProperty("disabled", true);
+  fail = true;
+  await userEvent.click(screen.getByRole("button", { name: "목록 새로고침" }));
+  expect(await screen.findByRole("alert")).toHaveProperty(
+    "textContent",
+    "Registry 갱신 실패",
+  );
+  expect(screen.getByText("설치됨 · 2.0.0")).toBeTruthy();
+});
+
+it("confirms uninstall, supports cancel and retry, and removes the agent from new conversation choices", async () => {
+  let installed = true;
+  let attempts = 0;
+  vi.mocked(invoke).mockImplementation(async (command, args) => {
+    if (command === "prepared_agents")
+      return installed ? [{ id: "new-provider", name: "New Provider" }] : [];
+    if (command === "agent_catalog" || command === "refresh_agent_catalog")
+      return [
+        {
+          id: "new-provider",
+          name: "New Provider",
+          installed,
+          installedVersion: installed ? "1.0.0" : null,
+          distribution: { kind: "npm", package: "new-provider@1" },
+          authentication: { methods: [] },
+        },
+      ];
+    if (command === "uninstall_agent") {
+      expect(args).toEqual({ id: "new-provider" });
+      if (++attempts === 1) throw "삭제 실패. 다시 시도해주세요.";
+      installed = false;
+      return;
+    }
+  });
+  render(() => <App />);
+  await userEvent.click(screen.getByRole("button", { name: "에이전트 관리" }));
+  await userEvent.click(
+    await screen.findByRole("button", { name: "New Provider 삭제" }),
+  );
+  expect(screen.getByRole("alertdialog")).toBeTruthy();
+  await userEvent.click(screen.getByRole("button", { name: "취소" }));
+  expect(attempts).toBe(0);
+  await userEvent.click(
+    screen.getByRole("button", { name: "New Provider 삭제" }),
+  );
+  await userEvent.click(screen.getByRole("button", { name: "삭제 확인" }));
+  expect(await screen.findByRole("alert")).toHaveProperty(
+    "textContent",
+    "삭제 실패. 다시 시도해주세요.",
+  );
+  await userEvent.click(
+    screen.getByRole("button", { name: "New Provider 삭제" }),
+  );
+  await userEvent.click(screen.getByRole("button", { name: "삭제 확인" }));
+  expect(await screen.findByText(/삭제 완료/)).toBeTruthy();
+  expect(
+    screen.queryByRole("button", { name: "New Provider 삭제" }),
+  ).toBeNull();
+  expect(
+    await screen.findByRole("button", { name: "New Provider 설치" }),
+  ).toBeTruthy();
+  await userEvent.click(
+    screen.getByRole("button", { name: "대화로 돌아가기" }),
+  );
+  expect(screen.queryByRole("option", { name: "New Provider" })).toBeNull();
+});
+
+it("keeps conversation content after agent removal and prevents reconnecting its retired installation", async () => {
+  const draft = {
+    id: "removed-chat",
+    workingFolder: "/Users/test/project",
+    agentId: "codex",
+    status: "disconnected",
+    revision: 0,
+  };
+  requests
+    .mockResolvedValueOnce(draft)
+    .mockResolvedValueOnce({ ...draft, status: "connecting", revision: 1 });
+  render(() => <App />);
+  await userEvent.click(screen.getByRole("button", { name: "폴더 선택" }));
+  await screen.findByText("연결 중…");
+  receive({
+    ...draft,
+    status: "failed",
+    failure: "agentRemoved",
+    revision: 2,
+    authentication: "unknown",
+    turns: [
+      {
+        id: "turn",
+        message: "기존 질문",
+        response: "삭제 전 응답",
+        stopReason: "cancelled",
+      },
+    ],
+  });
+  expect(await screen.findByText("삭제 전 응답")).toBeTruthy();
+  expect(
+    screen.getByText(/에이전트 삭제로 연결이 종료되었습니다/),
+  ).toBeTruthy();
+  expect(screen.queryByRole("button", { name: "다시 연결" })).toBeNull();
+  expect(screen.getByRole("textbox")).toHaveProperty("disabled", true);
 });

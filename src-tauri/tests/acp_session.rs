@@ -770,7 +770,7 @@ async fn management_observes_expiry_and_login_without_restarting_the_failed_conv
         .await
         .unwrap();
     assert!(
-        management.catalog(&conversations).unwrap()[1]
+        management.catalog(&conversations).unwrap()[0]
             .authentication
             .authenticated
     );
@@ -782,14 +782,14 @@ async fn management_observes_expiry_and_login_without_restarting_the_failed_conv
         .send_message(draft.id, "expired".into())
         .unwrap();
     settle(&conversations, draft.id).await;
-    let state = &management.catalog(&conversations).unwrap()[1].authentication;
+    let state = &management.catalog(&conversations).unwrap()[0].authentication;
     assert!(state.required);
     assert!(!state.authenticated);
     management
         .authenticate("codex", Some("fixture-login"), &conversations)
         .await
         .unwrap();
-    let state = &management.catalog(&conversations).unwrap()[1].authentication;
+    let state = &management.catalog(&conversations).unwrap()[0].authentication;
     assert!(!state.required);
     assert!(state.authenticated);
     assert_eq!(
@@ -800,24 +800,19 @@ async fn management_observes_expiry_and_login_without_restarting_the_failed_conv
 }
 
 #[tokio::test]
-async fn codex_key_auth_explains_its_prerequisite_without_logging_a_secret() {
+async fn authentication_uses_advertised_metadata_without_provider_or_method_assumptions() {
     use atte_lib::agent_management::authentication::inspect;
     let root = tempfile::tempdir().unwrap();
     let mut agent = mock_agent();
-    agent.id = "codex".into();
+    agent.id = "unknown-provider".into();
     agent.env.insert("FIXTURE_MODE".into(), "key-auth".into());
-    agent.env.insert("CODEX_API_KEY".into(), String::new());
-    agent.env.insert("OPENAI_API_KEY".into(), String::new());
     let methods = inspect(&agent, root.path(), None).await.unwrap().methods;
-    assert!(methods[0]
-        .description
-        .as_ref()
-        .unwrap()
-        .contains("CODEX_API_KEY"));
-    let error = inspect(&agent, root.path(), Some("api-key"))
-        .await
-        .unwrap_err();
-    assert!(error.to_string().contains("ChatGPT"));
+    assert!(methods[0].description.is_none());
+    assert!(methods[0].supported);
+    assert!(matches!(
+        inspect(&agent, root.path(), Some("api-key")).await,
+        Err(atte_lib::agent_management::ManagementError::Authentication)
+    ));
 }
 
 #[tokio::test]
@@ -860,7 +855,7 @@ async fn every_successful_prompt_refreshes_shared_authentication_evidence() {
         .await
         .is_err());
     assert!(
-        !management.catalog(&conversations).unwrap()[1]
+        !management.catalog(&conversations).unwrap()[0]
             .authentication
             .authenticated
     );
@@ -869,9 +864,120 @@ async fn every_successful_prompt_refreshes_shared_authentication_evidence() {
         .unwrap();
     settle(&conversations, draft.id).await;
     assert!(
-        management.catalog(&conversations).unwrap()[1]
+        management.catalog(&conversations).unwrap()[0]
             .authentication
             .authenticated
     );
     conversations.shutdown().await;
+}
+
+#[tokio::test]
+async fn unknown_authentication_type_is_not_treated_as_agent_login() {
+    use atte_lib::agent_management::{authentication::inspect, ManagementError};
+    let root = tempfile::tempdir().unwrap();
+    let mut agent = mock_agent();
+    agent
+        .env
+        .insert("FIXTURE_MODE".into(), "future-auth".into());
+    let state = inspect(&agent, root.path(), None).await.unwrap();
+    assert_eq!(state.methods.len(), 1);
+    assert!(!state.methods[0].supported);
+    assert!(matches!(
+        inspect(&agent, root.path(), Some("future-method")).await,
+        Err(ManagementError::UnsupportedAuthentication)
+    ));
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn removing_one_agent_stops_its_running_turn_and_preserves_other_agents() {
+    use atte_lib::conversation::ConnectionFailure;
+    use nix::{sys::signal::kill, unistd::Pid};
+    let folder = tempfile::tempdir().unwrap();
+    let mut agent = mock_agent();
+    let pid_file = folder.path().join("removed-pid");
+    let gate = folder.path().join("gate");
+    agent
+        .env
+        .insert("PID_FILE".into(), pid_file.to_string_lossy().into());
+    agent
+        .env
+        .insert("PROMPT_GATE".into(), gate.to_string_lossy().into());
+    let mut other = mock_agent();
+    other.id = "other".into();
+    let conversations = Conversations::new(vec![agent, other]);
+    let draft = conversations
+        .create_for_agent(folder.path(), "fixture")
+        .unwrap();
+    let other = conversations
+        .create_for_agent(folder.path(), "other")
+        .unwrap();
+    conversations.connect(draft.id).unwrap();
+    conversations.connect(other.id).unwrap();
+    assert_eq!(
+        settle(&conversations, draft.id).await.status,
+        ConversationStatus::SessionReady
+    );
+    assert_eq!(
+        settle(&conversations, other.id).await.status,
+        ConversationStatus::SessionReady
+    );
+    conversations
+        .send_message(draft.id, "blocked response".into())
+        .unwrap();
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while conversations.get(draft.id).unwrap().turns[0].response != "Hello" {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .unwrap();
+    let pid = Pid::from_raw(std::fs::read_to_string(pid_file).unwrap().parse().unwrap());
+    conversations.unregister_agent("fixture").await.unwrap();
+    assert!(kill(pid, None).is_err());
+    let removed = conversations.get(draft.id).unwrap();
+    assert_eq!(removed.failure, Some(ConnectionFailure::AgentRemoved));
+    assert_eq!(removed.turns[0].response, "Hello");
+    assert_eq!(removed.turns[0].stop_reason.as_deref(), Some("cancelled"));
+    assert!(conversations.connect(draft.id).is_err());
+    assert_eq!(conversations.prepared_agents()[0].id, "other");
+    conversations
+        .send_message(other.id, "still connected".into())
+        .unwrap();
+    assert_eq!(
+        settle(&conversations, other.id).await.turns[0].response,
+        "Hello world"
+    );
+    assert_eq!(conversations.get(draft.id).unwrap(), removed);
+    conversations.shutdown().await;
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn shutdown_waits_for_processes_being_removed() {
+    use nix::{sys::signal::kill, unistd::Pid};
+    let folder = tempfile::tempdir().unwrap();
+    let mut agent = mock_agent();
+    let pid_file = folder.path().join("pid");
+    agent
+        .env
+        .insert("PID_FILE".into(), pid_file.to_string_lossy().into());
+    let conversations = Conversations::new(vec![agent]);
+    let draft = conversations
+        .create_for_agent(folder.path(), "fixture")
+        .unwrap();
+    conversations.connect(draft.id).unwrap();
+    assert_eq!(
+        settle(&conversations, draft.id).await.status,
+        ConversationStatus::SessionReady
+    );
+    let pid = Pid::from_raw(std::fs::read_to_string(pid_file).unwrap().parse().unwrap());
+    let (removed, ()) = tokio::join!(conversations.unregister_agent("fixture"), async {
+        conversations.shutdown().await;
+        assert!(
+            kill(pid, None).is_err(),
+            "shutdown must await the uninstall-owned process"
+        );
+    });
+    removed.unwrap();
 }

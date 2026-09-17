@@ -1,9 +1,10 @@
 import { Channel, invoke } from "@tauri-apps/api/core";
 import type { Authentication, ManagedAgent } from "../model/types";
 
-export function catalog(refresh = false) {
+export function catalog(refresh = false, force = true) {
   return invoke<ManagedAgent[]>(
     refresh ? "refresh_agent_catalog" : "agent_catalog",
+    refresh ? { force } : undefined,
   );
 }
 
@@ -18,4 +19,8 @@ export function authenticate(id: string, method?: string) {
     id,
     method: method ?? null,
   });
+}
+
+export function uninstall(id: string) {
+  return invoke<void>("uninstall_agent", { id });
 }
