@@ -1,0 +1,24 @@
+@import "tailwindcss";
+
+@theme {
+  --color-canvas: #ffffff;
+  --color-panel: #f5f6f4;
+  --color-line: #e7e9e5;
+  --color-ink: #252b27;
+  --color-muted: #667064;
+  --color-accent: #334c3b;
+}
+
+:root {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-synthesis: none;
+  -webkit-font-smoothing: antialiased;
+}
+
+button:enabled {
+  cursor: pointer;
+}
+:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 4px;
+}

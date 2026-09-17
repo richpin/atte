@@ -1,24 +1,56 @@
-// Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
+//! Atte desktop application.
+pub mod conversation;
+
+use conversation::{Conversation, ConversationError, Conversations};
+use tauri::{Manager, State};
+use tauri_plugin_dialog::DialogExt;
+use uuid::Uuid;
+
 #[tauri::command]
-fn greet(name: &str) -> String {
-    format!("Hello, {}! You've been greeted from Rust!", name)
+async fn select_working_folder(
+    app: tauri::AppHandle,
+) -> Result<Option<Conversation>, ConversationError> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let selection = app
+            .dialog()
+            .file()
+            .set_title("작업 폴더 선택")
+            .blocking_pick_folder();
+        let Some(selection) = selection else {
+            return Ok(None);
+        };
+        let path = selection.into_path().map_err(|_| {
+            ConversationError::InvalidWorkingFolder("로컬 작업 폴더를 선택해주세요.".into())
+        })?;
+        app.state::<Conversations>().create(&path).map(Some)
+    })
+    .await
+    .map_err(|_| {
+        ConversationError::Unavailable("폴더 선택을 완료할 수 없습니다. 다시 시도해주세요.".into())
+    })?
 }
 
+#[tauri::command]
+fn get_conversation(
+    id: Uuid,
+    conversations: State<'_, Conversations>,
+) -> Result<Conversation, ConversationError> {
+    conversations.get(id)
+}
+
+/// Runs the desktop application and its managed conversation state.
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
-        .plugin(tauri_plugin_opener::init())
-        .invoke_handler(tauri::generate_handler![greet])
+    if let Err(error) = tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
+        .manage(Conversations::default())
+        .invoke_handler(tauri::generate_handler![
+            select_working_folder,
+            get_conversation
+        ])
         .run(tauri::generate_context!())
-        .expect("error while running tauri application");
-}
-
-#[cfg(test)]
-mod tests {
-    use super::greet;
-
-    #[test]
-    fn greet_should_preserve_unicode_names() {
-        assert_eq!(greet("아떼"), "Hello, 아떼! You've been greeted from Rust!");
+    {
+        eprintln!("error while running Atte: {error}");
+        std::process::exit(1);
     }
 }

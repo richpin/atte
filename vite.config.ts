@@ -1,4 +1,5 @@
 import process from "node:process";
+import tailwindcss from "@tailwindcss/vite";
 import solid from "vite-plugin-solid";
 import { defineConfig } from "vitest/config";
 
@@ -6,7 +7,7 @@ const host = process.env.TAURI_DEV_HOST;
 
 // https://vite.dev/config/
 export default defineConfig(() => ({
-  plugins: [solid()],
+  plugins: [tailwindcss(), solid()],
   test: {
     environment: "jsdom",
     include: ["src/**/*.{test,spec}.{ts,tsx}"],
