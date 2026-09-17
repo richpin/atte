@@ -2,21 +2,24 @@
 use crate::{
     agent::AgentDefinition,
     conversation::{
-        AuthenticationStatus, ConnectionFailure, ConversationStatus, Prompt, RuntimeUpdates,
+        AuthenticationStatus, ConnectionFailure, ConversationStatus, PermissionOption,
+        PermissionRequest, Prompt, RuntimeUpdates,
     },
 };
 use agent_client_protocol::{
     schema::{
         v1::{
-            ContentBlock, InitializeRequest, NewSessionRequest, PromptRequest,
+            CancelNotification, ContentBlock, InitializeRequest, NewSessionRequest, PromptRequest,
             RequestPermissionOutcome, RequestPermissionRequest, RequestPermissionResponse,
-            SessionNotification, SessionUpdate,
+            SelectedPermissionOutcome, SessionNotification, SessionUpdate, ToolCallContent,
+            ToolCallUpdate, ToolCallUpdateFields,
         },
         ProtocolVersion,
     },
     Agent, ByteStreams, Client, ConnectionTo, ErrorCode,
 };
 use std::{
+    collections::HashMap,
     path::PathBuf,
     process::Stdio,
     sync::{Arc, Mutex},
@@ -34,6 +37,7 @@ pub(crate) async fn run(
     updates: RuntimeUpdates,
     mut stop: oneshot::Receiver<()>,
     mut prompts: mpsc::UnboundedReceiver<Prompt>,
+    mut cancellations: mpsc::UnboundedReceiver<uuid::Uuid>,
 ) {
     let mut command = Command::new(&agent.command);
     command
@@ -68,7 +72,7 @@ pub(crate) async fn run(
     let Some(stdout) = child.stdout.take() else {
         return;
     };
-    let active = Arc::new(Mutex::new(None::<(String, uuid::Uuid)>));
+    let active = Arc::new(Mutex::new(None::<ActiveTurn>));
     let notification_active = active.clone();
     let notification_updates = updates.clone();
     let permission_updates = updates.clone();
@@ -76,26 +80,54 @@ pub(crate) async fn run(
     let protocol = Client
         .builder()
         .on_receive_request(
-            async move |request: RequestPermissionRequest, responder, _cx| {
-                if let Ok(active) = permission_active.lock() {
-                    if let Some((_, turn)) = active.as_ref().filter(|(session, _)| *session == request.session_id.to_string()) {
-                        permission_updates.modify(Some(*turn), |snapshot| snapshot.notice = Some("승인 UI가 아직 지원되지 않아 도구 실행 요청을 취소했습니다.".into()));
-                    }
-                }
-                responder.respond(RequestPermissionResponse::new(
-                    RequestPermissionOutcome::Cancelled,
-                ))
+            async move |request: RequestPermissionRequest, responder, cx| {
+                let decision = permission_active.lock().ok().and_then(|mut active| {
+                    let active = active.as_mut().filter(|active| active.session == request.session_id.to_string())?;
+                    let turn = active.turn;
+                    let tool_id = request.tool_call.tool_call_id.to_string();
+                    let fields = active.update_tool(request.tool_call);
+                    let details = [
+                        fields.raw_input.as_ref().and_then(|value| serde_json::to_string_pretty(value).ok()),
+                        fields.content.as_ref().and_then(|content| {
+                            let visible: Vec<_> = content.iter().filter(|item| !matches!(item, ToolCallContent::Terminal(_))).collect();
+                            (!visible.is_empty()).then(|| serde_json::to_string_pretty(&visible).ok()).flatten()
+                        }),
+                        fields.locations.as_ref().filter(|locations| !locations.is_empty()).and_then(|value| serde_json::to_string_pretty(value).ok()),
+                    ].into_iter().flatten().collect::<Vec<_>>().join("\n");
+                    permission_updates.request_permission(turn, PermissionRequest {
+                        id: uuid::Uuid::new_v4(),
+                        title: fields.title.clone().unwrap_or(tool_id),
+                        details,
+                        options: request.options.into_iter().map(|option| PermissionOption { id: option.option_id.to_string(), name: option.name }).collect(),
+                    })
+                });
+                // Never hold the ordered dispatch loop while waiting for the user.
+                cx.spawn(async move {
+                    let outcome = match decision {
+                        Some(decision) => match decision.await {
+                            Ok(option) => RequestPermissionOutcome::Selected(SelectedPermissionOutcome::new(option)),
+                            Err(_) => RequestPermissionOutcome::Cancelled,
+                        },
+                        None => RequestPermissionOutcome::Cancelled,
+                    };
+                    responder.respond(RequestPermissionResponse::new(outcome))
+                })
             },
             agent_client_protocol::on_receive_request!(),
         )
         .on_receive_notification(
             async move |notification: SessionNotification, _cx| {
-                if let SessionUpdate::AgentMessageChunk(chunk) = notification.update {
-                    if let ContentBlock::Text(text) = chunk.content {
-                        if let Ok(active) = notification_active.lock() {
-                            if let Some((_, turn)) = active.as_ref().filter(|(session, _)| *session == notification.session_id.to_string()) {
-                                notification_updates.append_text(*turn, text.text);
+                if let Ok(mut active) = notification_active.lock() {
+                    if let Some(active) = active.as_mut().filter(|active| active.session == notification.session_id.to_string()) {
+                        match notification.update {
+                            SessionUpdate::AgentMessageChunk(chunk) => {
+                                if let ContentBlock::Text(text) = chunk.content {
+                                    notification_updates.append_text(active.turn, text.text);
+                                }
                             }
+                            SessionUpdate::ToolCall(tool) => { active.update_tool(tool.into()); }
+                            SessionUpdate::ToolCallUpdate(tool) => { active.update_tool(tool); }
+                            _ => {}
                         }
                     }
                 }
@@ -137,8 +169,8 @@ pub(crate) async fn run(
                         _ = connection.incoming_closed() => return Ok(ConnectionFailure::ConnectionClosed),
                         prompt = prompts.recv() => match prompt { Some(prompt) => prompt, None => return Ok(ConnectionFailure::ConnectionClosed) },
                     };
-                    if let Ok(mut active) = active.lock() { *active = Some((session.session_id.to_string(), prompt.turn)); }
-                    let (finished, completion) = oneshot::channel();
+                    if let Ok(mut active) = active.lock() { *active = Some(ActiveTurn { session: session.session_id.to_string(), turn: prompt.turn, tools: HashMap::new() }); }
+                    let (finished, mut completion) = oneshot::channel();
                     let turn_updates = updates.clone();
                     let turn_active = active.clone();
                     connection.send_request(PromptRequest::new(session.session_id.clone(), vec![prompt.text.into()]))
@@ -161,7 +193,20 @@ pub(crate) async fn run(
                             let _ = finished.send(failure);
                             Ok(())
                         })?;
-                    match completion.await {
+                    // ACP v1 updates have no turn ID. Keep the old turn active until
+                    // its prompt response forms the protocol boundary for the next.
+                    let result = loop {
+                        tokio::select! {
+                            biased;
+                            result = &mut completion => break result,
+                            Some(turn) = cancellations.recv() => {
+                                if turn == prompt.turn {
+                                    connection.send_notification(CancelNotification::new(session.session_id.clone()))?;
+                                }
+                            }
+                        }
+                    };
+                    match result {
                         Ok(None) => {},
                         Ok(Some(failure)) => return Ok(failure),
                         Err(_) => return Ok(ConnectionFailure::ConnectionClosed),
@@ -203,6 +248,36 @@ pub(crate) async fn run(
                 snapshot.remote_session_id = None;
             });
         }
+    }
+}
+
+// Tool permission requests are partial updates; context may arrive beforehand.
+struct ActiveTurn {
+    session: String,
+    turn: uuid::Uuid,
+    tools: HashMap<String, ToolCallUpdateFields>,
+}
+
+impl ActiveTurn {
+    fn update_tool(&mut self, update: ToolCallUpdate) -> &ToolCallUpdateFields {
+        let fields = self
+            .tools
+            .entry(update.tool_call_id.to_string())
+            .or_default();
+        let incoming = update.fields;
+        if incoming.title.is_some() {
+            fields.title = incoming.title;
+        }
+        if incoming.raw_input.is_some() {
+            fields.raw_input = incoming.raw_input;
+        }
+        if incoming.content.is_some() {
+            fields.content = incoming.content;
+        }
+        if incoming.locations.is_some() {
+            fields.locations = incoming.locations;
+        }
+        fields
     }
 }
 

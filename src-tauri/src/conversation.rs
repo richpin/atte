@@ -29,6 +29,23 @@ pub struct Conversation {
     pub revision: u64,
     pub turns: Vec<Turn>,
     pub notice: Option<String>,
+    pub permissions: Vec<PermissionRequest>,
+}
+
+/// A pending decision with agent-supplied labels and opaque choice identifiers.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PermissionRequest {
+    pub id: Uuid,
+    pub title: String,
+    pub details: String,
+    pub options: Vec<PermissionOption>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct PermissionOption {
+    pub id: String,
+    pub name: String,
 }
 
 /// Current agent connection state.
@@ -40,6 +57,8 @@ pub enum ConversationStatus {
     Connecting,
     SessionReady,
     Running,
+    WaitingForApproval,
+    Cancelling,
     Failed,
 }
 
@@ -107,6 +126,7 @@ struct Entry {
 
 struct Runtime {
     prompts: mpsc::UnboundedSender<Prompt>,
+    cancellations: mpsc::UnboundedSender<Uuid>,
     stop: Option<oneshot::Sender<()>>,
     task: Option<tokio::task::JoinHandle<()>>,
 }
@@ -217,6 +237,7 @@ impl Conversations {
             revision: 0,
             turns: Vec::new(),
             notice: None,
+            permissions: Vec::new(),
         };
         let mut state = self.lock()?;
         if state.closed {
@@ -230,6 +251,7 @@ impl Conversations {
                     snapshot: draft.clone(),
                     generation: 0,
                     subscribers: Vec::new(),
+                    permissions: HashMap::new(),
                 })),
                 runtime: None,
             },
@@ -268,6 +290,8 @@ impl Conversations {
             ConversationStatus::Connecting
                 | ConversationStatus::SessionReady
                 | ConversationStatus::Running
+                | ConversationStatus::WaitingForApproval
+                | ConversationStatus::Cancelling
         ) {
             return Ok(snapshot);
         }
@@ -293,12 +317,14 @@ impl Conversations {
             generation: current.generation,
         };
         let (prompts, requests) = mpsc::unbounded_channel();
+        let (cancellations, cancelled) = mpsc::unbounded_channel();
         let folder = snapshot.working_folder.clone();
         entry.runtime = Some(Runtime {
             prompts,
+            cancellations,
             stop: Some(stop),
             task: Some(handle.spawn(crate::agent_runtime::run(
-                agent, folder, updates, receiver, requests,
+                agent, folder, updates, receiver, requests, cancelled,
             ))),
         });
         Ok(snapshot)
@@ -364,6 +390,76 @@ impl Conversations {
         Ok(())
     }
 
+    /// Cancels the named active turn without replacing its session or history.
+    pub fn cancel_turn(&self, id: Uuid, turn: Uuid) -> Result<(), ConversationError> {
+        let state = self.lock()?;
+        let entry = state.entries.get(&id).ok_or_else(not_found)?;
+        let mut current = entry.state.lock().map_err(|_| unavailable())?;
+        if current.snapshot.turns.last().map(|item| item.id) != Some(turn) {
+            return Err(ConversationError::NotReady(
+                "이미 종료된 작업입니다.".into(),
+            ));
+        }
+        if current.snapshot.status == ConversationStatus::Cancelling {
+            return Ok(());
+        }
+        if !matches!(
+            current.snapshot.status,
+            ConversationStatus::Running | ConversationStatus::WaitingForApproval
+        ) {
+            return Err(ConversationError::NotReady(
+                "진행 중인 작업이 없습니다.".into(),
+            ));
+        }
+        entry
+            .runtime
+            .as_ref()
+            .ok_or_else(unavailable)?
+            .cancellations
+            .send(turn)
+            .map_err(|_| unavailable())?;
+        current.snapshot.status = ConversationStatus::Cancelling;
+        current.clear_permissions();
+        current.publish();
+        Ok(())
+    }
+
+    /// Consumes one pending request; stale or unadvertised choices are rejected.
+    pub fn answer_permission(
+        &self,
+        id: Uuid,
+        request: Uuid,
+        option: String,
+    ) -> Result<(), ConversationError> {
+        let state = self.lock()?;
+        let entry = state.entries.get(&id).ok_or_else(not_found)?;
+        let mut current = entry.state.lock().map_err(|_| unavailable())?;
+        if current.snapshot.status != ConversationStatus::WaitingForApproval
+            || !current.snapshot.permissions.iter().any(|permission| {
+                permission.id == request
+                    && permission.options.iter().any(|choice| choice.id == option)
+            })
+        {
+            return Err(ConversationError::NotReady(
+                "이미 해소되었거나 유효하지 않은 승인 선택입니다.".into(),
+            ));
+        }
+        let response = current
+            .permissions
+            .remove(&request)
+            .ok_or_else(unavailable)?;
+        let result = response.send(option).map_err(|_| unavailable());
+        current
+            .snapshot
+            .permissions
+            .retain(|permission| permission.id != request);
+        if current.snapshot.permissions.is_empty() {
+            current.snapshot.status = ConversationStatus::Running;
+        }
+        current.publish();
+        result
+    }
+
     /// Stops and reaps all owned processes before application exit.
     pub async fn shutdown(&self) {
         let runtimes = {
@@ -424,9 +520,16 @@ struct ConversationState {
     snapshot: Conversation,
     generation: u64,
     subscribers: Vec<mpsc::UnboundedSender<ConversationUpdate>>,
+    permissions: HashMap<Uuid, oneshot::Sender<String>>,
 }
 
 impl ConversationState {
+    fn clear_permissions(&mut self) {
+        // Dropped senders resolve every pending ACP request as cancelled.
+        self.permissions.clear();
+        self.snapshot.permissions.clear();
+    }
+
     fn publish(&mut self) {
         self.snapshot.revision += 1;
         self.subscribers.retain(|sender| {
@@ -465,6 +568,29 @@ pub(crate) struct RuntimeUpdates {
 }
 
 impl RuntimeUpdates {
+    pub fn request_permission(
+        &self,
+        turn: Uuid,
+        request: PermissionRequest,
+    ) -> Option<oneshot::Receiver<String>> {
+        let mut state = self.state.lock().ok()?;
+        if state.generation != self.generation
+            || !matches!(
+                state.snapshot.status,
+                ConversationStatus::Running | ConversationStatus::WaitingForApproval
+            )
+            || state.snapshot.turns.last().map(|item| item.id) != Some(turn)
+        {
+            return None;
+        }
+        let (sender, receiver) = oneshot::channel();
+        state.permissions.insert(request.id, sender);
+        state.snapshot.permissions.push(request);
+        state.snapshot.status = ConversationStatus::WaitingForApproval;
+        state.publish();
+        Some(receiver)
+    }
+
     pub fn record_authentication(&self, status: AuthenticationStatus) {
         let Ok(state) = self.state.lock() else {
             return;
@@ -482,7 +608,10 @@ impl RuntimeUpdates {
             return;
         };
         if state.generation != self.generation
-            || state.snapshot.status != ConversationStatus::Running
+            || !matches!(
+                state.snapshot.status,
+                ConversationStatus::Running | ConversationStatus::WaitingForApproval
+            )
             || state.snapshot.turns.last().map(|item| item.id) != Some(turn)
         {
             return;
@@ -510,13 +639,23 @@ impl RuntimeUpdates {
             return;
         }
         if let Some(turn) = turn {
-            if state.snapshot.status != ConversationStatus::Running
-                || state.snapshot.turns.last().map(|item| item.id) != Some(turn)
+            if !matches!(
+                state.snapshot.status,
+                ConversationStatus::Running
+                    | ConversationStatus::WaitingForApproval
+                    | ConversationStatus::Cancelling
+            ) || state.snapshot.turns.last().map(|item| item.id) != Some(turn)
             {
                 return;
             }
         }
         update(&mut state.snapshot);
+        if !matches!(
+            state.snapshot.status,
+            ConversationStatus::Running | ConversationStatus::WaitingForApproval
+        ) {
+            state.clear_permissions();
+        }
         state.publish();
     }
 }

@@ -69,6 +69,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut input = io::stdin().lock().lines();
     let mut output = io::stdout().lock();
     let mut sessions = 0;
+    let mut prompts = 0;
     while let Some(line) = input.next() {
         let request: Value = serde_json::from_str(&line?)?;
         let method = request["method"].as_str().unwrap_or_default();
@@ -129,23 +130,92 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 json!({"sessionId": format!("remote-{sessions}")})
             }
             "session/prompt" => {
+                prompts += 1;
                 assert_eq!(request["params"]["sessionId"], "remote-1");
+                if mode == "cancel" && prompts == 1 {
+                    send(
+                        &mut output,
+                        json!({"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"remote-1","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"Started"}}}}),
+                    )?;
+                    let cancel: Value =
+                        serde_json::from_str(&input.next().ok_or("missing cancel")??)?;
+                    assert_eq!(cancel["method"], "session/cancel");
+                    assert_eq!(cancel["params"]["sessionId"], "remote-1");
+                    send(
+                        &mut output,
+                        json!({"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"remote-1","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"late cancelled output"}}}}),
+                    )?;
+                    send(
+                        &mut output,
+                        json!({"jsonrpc":"2.0","id":request["id"],"result":{"stopReason":"cancelled"}}),
+                    )?;
+                    continue;
+                }
                 send(
                     &mut output,
                     json!({"jsonrpc": "2.0", "method": "session/update", "params": {
                         "sessionId": "foreign", "update": {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "wrong session"}}
                     }}),
                 )?;
-                if mode == "prompt-permission" {
+                if matches!(mode.as_str(), "prompt-permission" | "partial-permission")
+                    || (mode == "permission-cancel" && prompts == 1)
+                {
+                    if mode == "partial-permission" {
+                        send(
+                            &mut output,
+                            json!({"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"remote-1","update":{"sessionUpdate":"tool_call","toolCallId":"tool-1","title":"Initial title", "rawInput":{"path":"old.txt"}}}}),
+                        )?;
+                        send(
+                            &mut output,
+                            json!({"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"remote-1","update":{"sessionUpdate":"tool_call_update","toolCallId":"tool-1","title":"Write fixture.txt", "rawInput":{"path":"fixture.txt"}}}}),
+                        )?;
+                    }
                     send(
                         &mut output,
                         json!({"jsonrpc": "2.0", "id": "permission", "method": "session/request_permission", "params": {
-                            "sessionId": "remote-1", "toolCall": {"toolCallId": "tool-1"}, "options": [{"optionId": "arbitrary-allow", "name": "Allow", "kind": "allow_once"}]
+                            "sessionId": "remote-1", "toolCall": if mode == "partial-permission" { json!({"toolCallId":"tool-1"}) } else { json!({"toolCallId": "tool-1", "title": "Write fixture.txt", "rawInput": {"path": "fixture.txt"}}) }, "options": [{"optionId": "deny-927", "name": "Do not write", "kind": "reject_once"}, {"optionId": "arbitrary-allow", "name": "Write once", "kind": "allow_once"}]
                         }}),
                     )?;
+                    if mode == "permission-cancel" {
+                        let mut cancelled = false;
+                        let mut resolved = false;
+                        while !cancelled || !resolved {
+                            let response: Value = serde_json::from_str(
+                                &input.next().ok_or("missing cancellation")??,
+                            )?;
+                            if response["method"] == "session/cancel" {
+                                assert_eq!(response["params"]["sessionId"], "remote-1");
+                                cancelled = true;
+                            } else {
+                                assert_eq!(response["result"]["outcome"]["outcome"], "cancelled");
+                                resolved = true;
+                            }
+                        }
+                        // A request already in flight at cancellation must never execute.
+                        send(
+                            &mut output,
+                            json!({"jsonrpc":"2.0","id":"late-permission","method":"session/request_permission","params":{"sessionId":"remote-1","toolCall":{"toolCallId":"late-tool"},"options":[{"optionId":"late-allow","name":"Late allow","kind":"allow_once"}]}}),
+                        )?;
+                        let response: Value = serde_json::from_str(
+                            &input.next().ok_or("missing late cancellation")??,
+                        )?;
+                        assert_eq!(response["result"]["outcome"]["outcome"], "cancelled");
+                        send(
+                            &mut output,
+                            json!({"jsonrpc":"2.0","id":request["id"],"result":{"stopReason":"cancelled"}}),
+                        )?;
+                        continue;
+                    }
                     let response: Value =
                         serde_json::from_str(&input.next().ok_or("missing permission response")??)?;
-                    assert_eq!(response["result"]["outcome"]["outcome"], "cancelled");
+                    assert_eq!(response["result"]["outcome"]["outcome"], "selected");
+                    let selected = response["result"]["outcome"]["optionId"]
+                        .as_str()
+                        .ok_or("missing option")?;
+                    send(
+                        &mut output,
+                        json!({"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"remote-1","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":format!("selected:{selected}")}}}}),
+                    )?;
                 }
                 for text in ["Hello", " world"] {
                     send(

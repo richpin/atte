@@ -25,6 +25,14 @@ export function sendMessage(id: string, text: string) {
   return invoke<Conversation>("send_message", { id, text });
 }
 
+export function cancelTurn(id: string, turn: string) {
+  return invoke<Conversation>("cancel_turn", { id, turn });
+}
+
+export function answerPermission(id: string, request: string, option: string) {
+  return invoke<Conversation>("answer_permission", { id, request, option });
+}
+
 export function subscribeConversation(
   id: string,
   receive: (update: ConversationUpdate) => void,

@@ -731,3 +731,126 @@ it("shows new registry agents and unsupported reasons while keeping cached insta
   );
   expect(screen.getByText("설치됨 · 2.0.0")).toBeTruthy();
 });
+
+it("replaces the composer with agent choices and restores the draft after one decision", async () => {
+  const ready = {
+    id: "draft-1",
+    workingFolder: "/project",
+    agentId: "codex",
+    status: "sessionReady",
+    revision: 2,
+    turns: [],
+    permissions: [],
+  };
+  requests.mockResolvedValue(ready);
+  render(() => <App />);
+  await userEvent.click(screen.getByRole("button", { name: "폴더 선택" }));
+  await userEvent.type(screen.getByRole("textbox"), "keep this draft");
+  const turn = {
+    id: "turn-1",
+    message: "start",
+    response: "",
+    stopReason: null,
+  };
+  const permission = {
+    id: "permission-1",
+    title: "Write fixture.txt",
+    details: "Only fixture.txt",
+    options: [
+      { id: "deny-927", name: "Do not write" },
+      { id: "allow-482", name: "Write once" },
+    ],
+  };
+  receive({
+    ...ready,
+    status: "waitingForApproval",
+    revision: 4,
+    turns: [turn],
+    permissions: [permission],
+  });
+  const approval = await screen.findByRole("region", { name: "승인 요청" });
+  expect(screen.queryByRole("textbox")).toBeNull();
+  expect(approval.textContent).toContain("Write fixture.txt");
+  expect(approval.textContent).toContain("/project");
+  const choices = Array.from(approval.querySelectorAll("button")).map(
+    (button) => button.textContent,
+  );
+  expect(choices).toEqual(["Do not write", "Write once"]);
+  let resolve!: (value: unknown) => void;
+  requests.mockImplementation(
+    () =>
+      new Promise((done) => {
+        resolve = done;
+      }),
+  );
+  await userEvent.dblClick(screen.getByRole("button", { name: "Write once" }));
+  expect(invoke).toHaveBeenCalledWith("answer_permission", {
+    id: "draft-1",
+    request: "permission-1",
+    option: "allow-482",
+  });
+  expect(
+    requests.mock.calls.filter(([command]) => command === "answer_permission"),
+  ).toHaveLength(1);
+  resolve({ ...ready, status: "running", revision: 5, turns: [turn] });
+  expect(await screen.findByRole("textbox")).toHaveProperty(
+    "value",
+    "keep this draft",
+  );
+  expect(screen.queryByRole("region", { name: "승인 요청" })).toBeNull();
+});
+
+it("can stop a turn while approval is pending and ignores a late approval snapshot", async () => {
+  const turn = {
+    id: "turn-1",
+    message: "start",
+    response: "",
+    stopReason: null,
+  };
+  const waiting = {
+    id: "draft-1",
+    workingFolder: "/project",
+    agentId: "codex",
+    status: "waitingForApproval",
+    revision: 4,
+    turns: [turn],
+    permissions: [
+      {
+        id: "p1",
+        title: "Run command",
+        details: "echo test",
+        options: [{ id: "yes-42", name: "Run once" }],
+      },
+    ],
+  };
+  requests.mockResolvedValue(waiting);
+  render(() => <App />);
+  await userEvent.click(screen.getByRole("button", { name: "폴더 선택" }));
+  requests.mockResolvedValue({
+    ...waiting,
+    status: "cancelling",
+    revision: 5,
+    permissions: [],
+  });
+  await userEvent.click(screen.getByRole("button", { name: "현재 작업 중단" }));
+  expect(invoke).toHaveBeenCalledWith("cancel_turn", {
+    id: "draft-1",
+    turn: "turn-1",
+  });
+  expect(await screen.findByText("중단 중…")).toBeTruthy();
+  receive(waiting);
+  expect(screen.queryByRole("button", { name: "Run once" })).toBeNull();
+  receive({
+    ...waiting,
+    status: "sessionReady",
+    revision: 6,
+    permissions: [],
+    turns: [{ ...turn, stopReason: "cancelled" }],
+  });
+  expect(await screen.findByText("취소됨")).toBeTruthy();
+  await userEvent.type(screen.getByRole("textbox"), "continue");
+  expect(screen.getByRole("button", { name: "전송" })).toHaveProperty(
+    "disabled",
+    false,
+  );
+});

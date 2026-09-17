@@ -82,6 +82,27 @@ fn send_message(
 }
 
 #[tauri::command]
+fn cancel_turn(
+    id: Uuid,
+    turn: Uuid,
+    conversations: State<'_, Conversations>,
+) -> Result<Conversation, ConversationError> {
+    conversations.cancel_turn(id, turn)?;
+    conversations.get(id)
+}
+
+#[tauri::command]
+fn answer_permission(
+    id: Uuid,
+    request: Uuid,
+    option: String,
+    conversations: State<'_, Conversations>,
+) -> Result<Conversation, ConversationError> {
+    conversations.answer_permission(id, request, option)?;
+    conversations.get(id)
+}
+
+#[tauri::command]
 async fn subscribe_conversation(
     id: Uuid,
     channel: tauri::ipc::Channel<ConversationUpdate>,
@@ -168,6 +189,8 @@ pub fn run() {
             prepared_agents,
             connect_conversation,
             send_message,
+            cancel_turn,
+            answer_permission,
             subscribe_conversation,
             unsubscribe_conversation
         ])

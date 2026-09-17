@@ -13,13 +13,28 @@ export interface Conversation {
   id: string;
   workingFolder: string;
   agentId: string;
-  status: "disconnected" | "connecting" | "sessionReady" | "running" | "failed";
+  status:
+    | "disconnected"
+    | "connecting"
+    | "sessionReady"
+    | "running"
+    | "waitingForApproval"
+    | "cancelling"
+    | "failed";
   remoteSessionId: string | null;
   authentication: "unknown" | "required" | "authenticated";
   failure: ConnectionFailure | null;
   revision: number;
   turns: Turn[];
   notice: string | null;
+  permissions: PermissionRequest[];
+}
+
+export interface PermissionRequest {
+  id: string;
+  title: string;
+  details: string;
+  options: { id: string; name: string }[];
 }
 
 export interface Turn {
@@ -40,6 +55,8 @@ export const statusLabels: Record<Conversation["status"], string> = {
   sessionReady: "세션 준비 완료",
   failed: "실패",
   running: "응답 중…",
+  waitingForApproval: "승인 대기",
+  cancelling: "중단 중…",
 };
 
 export const failureMessages: Record<ConnectionFailure, string> = {

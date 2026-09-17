@@ -9,6 +9,8 @@ import {
   Show,
 } from "solid-js";
 import {
+  answerPermission,
+  cancelTurn,
   connectConversation,
   preparedAgents,
   selectWorkingFolder,
@@ -21,6 +23,7 @@ import {
   failureMessages,
   statusLabels,
 } from "../model/types";
+import { PermissionPanel } from "./PermissionPanel";
 import { Transcript } from "./Transcript";
 
 export function ConversationPage(props: {
@@ -56,6 +59,11 @@ export function ConversationPage(props: {
   const [connectionRejected, setConnectionRejected] = createSignal(false);
   const [message, setMessage] = createSignal("");
   const [sending, setSending] = createSignal(false);
+  const [answering, setAnswering] = createSignal<string>();
+  const [cancelling, setCancelling] = createSignal<string>();
+  const activeTurn = () => conversation()?.turns?.at(-1)?.id;
+  const canCancel = () =>
+    ["running", "waitingForApproval"].includes(conversation()?.status ?? "");
   const [streamError, setStreamError] = createSignal(false);
   const [subscriptionAttempt, setSubscriptionAttempt] = createSignal(0);
   const canSend = () =>
@@ -127,6 +135,37 @@ export function ConversationPage(props: {
         setError(errorMessage(cause, "메시지를 전송할 수 없습니다."));
     } finally {
       setSending(false);
+    }
+  }
+
+  async function answer(request: string, option: string) {
+    const current = conversation();
+    if (!current || answering() || cancelling()) return;
+    setAnswering(request);
+    setError(undefined);
+    try {
+      applySnapshot(await answerPermission(current.id, request, option));
+    } catch (cause) {
+      if (conversation()?.id === current.id)
+        setError(errorMessage(cause, "승인 응답을 전달할 수 없습니다."));
+    } finally {
+      setAnswering(undefined);
+    }
+  }
+
+  async function cancel() {
+    const current = conversation();
+    const turn = activeTurn();
+    if (!current || !turn || !canCancel() || cancelling()) return;
+    setCancelling(turn);
+    setError(undefined);
+    try {
+      applySnapshot(await cancelTurn(current.id, turn));
+    } catch (cause) {
+      if (conversation()?.id === current.id)
+        setError(errorMessage(cause, "작업을 중단할 수 없습니다."));
+    } finally {
+      setCancelling(undefined);
     }
   }
 
@@ -317,37 +356,73 @@ export function ConversationPage(props: {
           </Show>
         </section>
         <div class="mx-auto mb-6 w-full max-w-3xl px-6">
-          <form
-            class="rounded-2xl border border-line bg-panel p-4"
-            onSubmit={(event) => {
-              event.preventDefault();
-              void send();
-            }}
-          >
-            <textarea
-              aria-label="메시지"
-              aria-describedby="connection-note"
-              class="w-full resize-none bg-transparent text-sm disabled:cursor-not-allowed"
-              disabled={!canSend()}
-              value={message()}
-              onInput={(event) => setMessage(event.currentTarget.value)}
-              rows={2}
-              placeholder="메시지를 입력하세요"
-            />
-            <div class="mt-3 flex items-center justify-between text-xs text-muted">
-              <span>
-                {agents()?.find((agent) => agent.id === conversation()?.agentId)
-                  ?.name ?? conversation()?.agentId}
-              </span>
-              <button
-                type="submit"
-                disabled={!canSend() || !message().trim()}
-                class="rounded-lg bg-accent px-4 py-2 text-white disabled:opacity-40"
+          <Show
+            when={conversation()?.permissions?.[0]}
+            fallback={
+              <form
+                class="rounded-2xl border border-line bg-panel p-4"
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  void send();
+                }}
               >
-                전송
+                <textarea
+                  aria-label="메시지"
+                  aria-describedby="connection-note"
+                  class="w-full resize-none bg-transparent text-sm disabled:cursor-not-allowed"
+                  disabled={
+                    sending() ||
+                    !["sessionReady", "running", "cancelling"].includes(
+                      conversation()?.status ?? "",
+                    )
+                  }
+                  value={message()}
+                  onInput={(event) => setMessage(event.currentTarget.value)}
+                  rows={2}
+                  placeholder="메시지를 입력하세요"
+                />
+                <div class="mt-3 flex items-center justify-between text-xs text-muted">
+                  <span>
+                    {agents()?.find(
+                      (agent) => agent.id === conversation()?.agentId,
+                    )?.name ?? conversation()?.agentId}
+                  </span>
+                  <button
+                    type="submit"
+                    disabled={!canSend() || !message().trim()}
+                    class="rounded-lg bg-accent px-4 py-2 text-white disabled:opacity-40"
+                  >
+                    전송
+                  </button>
+                </div>
+              </form>
+            }
+          >
+            {(request) => (
+              <PermissionPanel
+                request={request()}
+                workingFolder={conversation()?.workingFolder ?? ""}
+                disabled={Boolean(answering()) || Boolean(cancelling())}
+                onAnswer={answer}
+              />
+            )}
+          </Show>
+          <Show when={canCancel() || conversation()?.status === "cancelling"}>
+            <div class="mt-2 flex justify-end">
+              <button
+                type="button"
+                aria-label="현재 작업 중단"
+                class="rounded-lg border border-line px-3 py-1.5 text-xs disabled:opacity-40"
+                disabled={
+                  Boolean(cancelling()) ||
+                  conversation()?.status === "cancelling"
+                }
+                onClick={cancel}
+              >
+                작업 중단
               </button>
             </div>
-          </form>
+          </Show>
           <p id="connection-note" class="mt-2 text-center text-xs text-muted">
             {conversation()?.status === "running"
               ? "응답이 완료되면 다음 메시지를 보낼 수 있습니다."

@@ -49,6 +49,51 @@ fn mock_agent() -> AgentDefinition {
 }
 
 #[tokio::test]
+async fn cancels_only_the_active_turn_and_continues_the_same_session() {
+    let folder = tempfile::tempdir().unwrap();
+    let mut agent = mock_agent();
+    agent.env.insert("FIXTURE_MODE".into(), "cancel".into());
+    let conversations = Conversations::new(vec![agent]);
+    let draft = conversations.create(folder.path()).unwrap();
+    conversations.connect(draft.id).unwrap();
+    settle(&conversations, draft.id).await;
+    let mut stream = subscribe(&conversations, draft.id);
+    conversations
+        .send_message(draft.id, "start".into())
+        .unwrap();
+    let active = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let snapshot = stream.recv().await.unwrap();
+            if snapshot
+                .turns
+                .last()
+                .is_some_and(|turn| turn.response == "Started")
+            {
+                break snapshot;
+            }
+        }
+    })
+    .await
+    .unwrap();
+    let turn = active.turns[0].id;
+    conversations.cancel_turn(draft.id, turn).unwrap();
+    conversations.cancel_turn(draft.id, turn).unwrap();
+    let cancelled = settle(&conversations, draft.id).await;
+    assert_eq!(cancelled.status, ConversationStatus::SessionReady);
+    assert_eq!(cancelled.turns[0].stop_reason.as_deref(), Some("cancelled"));
+    assert_eq!(cancelled.turns[0].response, "Started");
+    conversations
+        .send_message(draft.id, "continue".into())
+        .unwrap();
+    assert!(conversations.cancel_turn(draft.id, turn).is_err());
+    let completed = settle(&conversations, draft.id).await;
+    assert_eq!(completed.remote_session_id, active.remote_session_id);
+    assert_eq!(completed.turns.len(), 2);
+    assert_eq!(completed.turns[1].response, "Hello world");
+    conversations.shutdown().await;
+}
+
+#[tokio::test]
 async fn connects_a_draft_without_replacing_its_identity_or_duplicating_sessions() {
     let folder = tempfile::tempdir().unwrap();
     let conversations = Conversations::new(vec![mock_agent()]);
@@ -77,7 +122,10 @@ async fn settle(
             let snapshot = conversations.get(id).unwrap();
             if !matches!(
                 snapshot.status,
-                ConversationStatus::Connecting | ConversationStatus::Running
+                ConversationStatus::Connecting
+                    | ConversationStatus::Running
+                    | ConversationStatus::WaitingForApproval
+                    | ConversationStatus::Cancelling
             ) {
                 return snapshot;
             }
@@ -459,32 +507,112 @@ async fn prompt_failures_preserve_partial_output_and_reject_stale_updates() {
 }
 
 #[tokio::test]
-async fn permission_is_cancelled_with_a_visible_reason_and_foreign_output_is_ignored() {
+async fn permission_preserves_agent_choices_and_answers_exactly_once() {
+    for (mode, option) in [
+        ("prompt-permission", "arbitrary-allow"),
+        ("prompt-permission", "deny-927"),
+        ("partial-permission", "arbitrary-allow"),
+    ] {
+        let folder = tempfile::tempdir().unwrap();
+        let mut agent = mock_agent();
+        agent.env.insert("FIXTURE_MODE".into(), mode.into());
+        let conversations = Conversations::new(vec![agent]);
+        let draft = conversations.create(folder.path()).unwrap();
+        conversations.connect(draft.id).unwrap();
+        settle(&conversations, draft.id).await;
+        let mut stream = subscribe(&conversations, draft.id);
+        conversations
+            .send_message(draft.id, "hello".into())
+            .unwrap();
+        let waiting = tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                let next = stream.recv().await.unwrap();
+                if next.status == ConversationStatus::WaitingForApproval {
+                    break next;
+                }
+            }
+        })
+        .await
+        .unwrap();
+        let permission = &waiting.permissions[0];
+        assert_eq!(permission.title, "Write fixture.txt");
+        assert!(permission.details.contains("fixture.txt"));
+        assert_eq!(
+            permission
+                .options
+                .iter()
+                .map(|option| (option.id.as_str(), option.name.as_str()))
+                .collect::<Vec<_>>(),
+            vec![
+                ("deny-927", "Do not write"),
+                ("arbitrary-allow", "Write once")
+            ]
+        );
+        assert!(conversations
+            .answer_permission(draft.id, permission.id, "unknown".into())
+            .is_err());
+        conversations
+            .answer_permission(draft.id, permission.id, option.into())
+            .unwrap();
+        assert!(conversations
+            .answer_permission(draft.id, permission.id, option.into())
+            .is_err());
+        let completed = settle(&conversations, draft.id).await;
+        assert!(completed.permissions.is_empty());
+        assert_eq!(
+            completed.turns[0].response,
+            format!("selected:{option}Hello world")
+        );
+        conversations.shutdown().await;
+    }
+}
+
+#[tokio::test]
+async fn cancelling_permission_resolves_pending_and_late_requests_without_execution() {
     let folder = tempfile::tempdir().unwrap();
     let mut agent = mock_agent();
     agent
         .env
-        .insert("FIXTURE_MODE".into(), "prompt-permission".into());
+        .insert("FIXTURE_MODE".into(), "permission-cancel".into());
     let conversations = Conversations::new(vec![agent]);
     let draft = conversations.create(folder.path()).unwrap();
     conversations.connect(draft.id).unwrap();
     settle(&conversations, draft.id).await;
     let mut stream = subscribe(&conversations, draft.id);
     conversations
-        .send_message(draft.id, "hello".into())
+        .send_message(draft.id, "ask permission".into())
         .unwrap();
-    let completed = tokio::time::timeout(Duration::from_secs(5), async {
+    let waiting = tokio::time::timeout(Duration::from_secs(5), async {
         loop {
             let next = stream.recv().await.unwrap();
-            if next.turns.len() == 1 && next.status == ConversationStatus::SessionReady {
+            if next.status == ConversationStatus::WaitingForApproval {
                 break next;
             }
         }
     })
     .await
     .unwrap();
-    assert_eq!(completed.turns[0].response, "Hello world");
-    assert!(completed.notice.unwrap().contains("취소"));
+    conversations
+        .cancel_turn(draft.id, waiting.turns[0].id)
+        .unwrap();
+    assert!(conversations
+        .answer_permission(
+            draft.id,
+            waiting.permissions[0].id,
+            "arbitrary-allow".into()
+        )
+        .is_err());
+    let cancelled = settle(&conversations, draft.id).await;
+    assert_eq!(cancelled.status, ConversationStatus::SessionReady);
+    assert!(cancelled.permissions.is_empty());
+    assert_eq!(cancelled.turns[0].stop_reason.as_deref(), Some("cancelled"));
+    assert_eq!(cancelled.turns[0].response, "");
+    conversations
+        .send_message(draft.id, "follow up".into())
+        .unwrap();
+    let completed = settle(&conversations, draft.id).await;
+    assert_eq!(completed.turns[1].response, "Hello world");
+    assert_eq!(completed.remote_session_id, waiting.remote_session_id);
     conversations.shutdown().await;
 }
 
