@@ -36,6 +36,12 @@ export interface Conversation {
   turns: Turn[];
   notice: string | null;
   permissions: PermissionRequest[];
+  queuedMessages: QueuedMessage[];
+}
+
+export interface QueuedMessage {
+  id: string;
+  text: string;
 }
 
 export type ConversationSummary = Pick<

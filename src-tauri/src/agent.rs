@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, path::PathBuf};
 
 /// Trusted backend configuration, never accepted as a frontend command argument.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AgentDefinition {
     pub id: String,
     pub name: String,

@@ -4,16 +4,14 @@ use agent_client_protocol::schema::v1::{ContentBlock, SessionUpdate};
 use uuid::Uuid;
 
 pub(super) struct Replay {
-    pub session: String,
     pub turns: Vec<Turn>,
     user_chunk: bool,
     user_message_id: Option<String>,
 }
 
 impl Replay {
-    pub fn new(session: String) -> Self {
+    pub fn new() -> Self {
         Self {
-            session,
             turns: Vec::new(),
             user_chunk: false,
             user_message_id: None,

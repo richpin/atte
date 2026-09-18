@@ -2,7 +2,7 @@
 use crate::{
     agent::AgentDefinition,
     agent_management::registry::{Registry, RegistryAgent},
-    conversation::ConversationSummary,
+    conversation::{ConversationSummary, QueuedMessage},
 };
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
@@ -47,7 +47,7 @@ impl Store {
         let transaction = connection.transaction()?;
         let version: u32 =
             transaction.pragma_query_value(None, "user_version", |row| row.get(0))?;
-        if version > 2 {
+        if version > 4 {
             return Err(StorageError::NewerSchema);
         }
         if version == 0 {
@@ -55,6 +55,14 @@ impl Store {
         }
         if version < 2 {
             transaction.execute_batch(include_str!("../migrations/002_conversations.sql"))?;
+        }
+        if version < 3 {
+            transaction.execute_batch(include_str!("../migrations/003_queued_messages.sql"))?;
+        }
+        if version < 4 {
+            transaction.execute_batch(include_str!(
+                "../migrations/004_conversation_queue_column.sql"
+            ))?;
         }
         transaction.commit()?;
         Ok(Self(Mutex::new(connection)))
@@ -65,6 +73,33 @@ impl Store {
         let mut statement = connection.prepare("SELECT metadata FROM conversations")?;
         let rows = statement.query_map([], |row| row.get::<_, String>(0))?;
         rows.map(|row| Ok(serde_json::from_str(&row?)?)).collect()
+    }
+
+    pub(crate) fn queued_messages(
+        &self,
+        id: uuid::Uuid,
+    ) -> Result<Vec<QueuedMessage>, StorageError> {
+        let connection = self.0.lock().map_err(|_| StorageError::Unavailable)?;
+        let json: Option<String> = connection
+            .query_row(
+                "SELECT queued_messages FROM conversations WHERE id=?1",
+                [id.to_string()],
+                |row| row.get(0),
+            )
+            .optional()?;
+        json.map(|json| serde_json::from_str(&json).map_err(StorageError::from))
+            .transpose()
+            .map(Option::unwrap_or_default)
+    }
+
+    pub(crate) fn save_queue(
+        &self,
+        summary: &ConversationSummary,
+        messages: &[QueuedMessage],
+    ) -> Result<(), StorageError> {
+        let connection = self.0.lock().map_err(|_| StorageError::Unavailable)?;
+        connection.execute("INSERT INTO conversations (id, metadata, queued_messages) VALUES (?1, ?2, ?3) ON CONFLICT(id) DO UPDATE SET queued_messages=excluded.queued_messages", params![summary.id.to_string(), serde_json::to_string(summary)?, serde_json::to_string(messages)?])?;
+        Ok(())
     }
 
     pub(crate) fn save_conversation(

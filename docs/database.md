@@ -1,6 +1,6 @@
 # 로컬 DB 구조
 
-현재 스키마: SQLite v2. Rust의 `Store`가 DB 접근과 트랜잭션을 소유하며 설치 관리와 대화 module이 같은 저장소를 공유한다. 파일 위치는 Tauri 앱 데이터 폴더의 `atte.sqlite`이며, macOS 기본 위치는 `~/Library/Application Support/com.atte.app/atte.sqlite`다. 별도 DB 서버는 없다.
+현재 스키마: SQLite v4. Rust의 `Store`가 DB 접근과 트랜잭션을 소유하며 설치 관리와 대화 module이 같은 저장소를 공유한다. 파일 위치는 Tauri 앱 데이터 폴더의 `atte.sqlite`이며, macOS 기본 위치는 `~/Library/Application Support/com.atte.app/atte.sqlite`다. 별도 DB 서버는 없다.
 
 ## agents
 
@@ -48,18 +48,25 @@ Registry 갱신은 `registry_metadata`만 트랜잭션으로 교체한다. 목�
 | --- | --- | --- |
 | `id` | TEXT PRIMARY KEY NOT NULL | Atte가 발급한 대화 UUID |
 | `metadata` | TEXT NOT NULL | `ConversationSummary` JSON: 제목, 작업 폴더, 고정 에이전트 ID, 원격 세션 ID, 생성·수정 Unix 초, 마지막 상태·오류, 중단 여부와 대화 ID |
+| `queued_messages` | TEXT NOT NULL DEFAULT '[]' | 제출 순서의 `{id, text}` JSON 배열 |
 
-저장 interface는 본문을 포함하지 않는 `ConversationSummary`만 받는다. 메시지 본문·도구 출력·승인 이력·실행 핸들·인증 정보는 이 테이블에 저장하지 않는다. 제목은 첫 메시지의 앞 60자를 사용한다. 대화 생성과 상태 변경 시 메타데이터를 저장하고, 응답 텍스트 delta는 메모리에만 반영한다. 저장 오류는 대화 snapshot의 `storageError`로 표시한다.
+메타데이터 저장 interface는 본문을 포함하지 않는 `ConversationSummary`만 받고 `metadata`만 갱신한다. 큐 저장은 `queued_messages`만 갱신하며, 대화 행이 아직 없으면 메타데이터와 함께 생성한다. 전송된 메시지 본문·도구 출력·승인 이력·실행 핸들·인증 정보는 이 테이블에 저장하지 않는다. 제목은 첫 메시지의 앞 60자를 사용한다. 대화 생성과 상태 변경 시 메타데이터를 저장하고, 응답 텍스트 delta는 메모리에만 반영한다. 저장 오류는 대화 snapshot의 `storageError`로 표시한다.
 
-재실행 시 메타데이터로 목록을 만들고 연결 상태는 `disconnected`로 복원한다. 이전 실행 중·승인 대기·중단 처리 상태는 중단 여부로 남기며 승인 조작이나 prompt를 되살리지 않는다. 사용자가 대화를 선택하면 `session/load`를 우선 사용하고 전체 replay 성공 후 메모리의 본문을 교체한다. 실패한 부분 replay는 표시하지 않는다. `resume`만 지원하면 본문 없이 기존 맥락을 이어간다는 안내를 표시한다. 에이전트 부재 시 전체 본문을 읽을 수 있는 디스크 사본은 없다. 07의 미전송 대기 메시지 저장은 아직 이 스키마에 포함되지 않는다.
+재실행 시 메타데이터로 목록을 만들고 연결 상태는 `disconnected`로 복원한다. 이전 실행 중·승인 대기·중단 처리 상태는 중단 여부로 남기며 승인 조작이나 prompt를 되살리지 않는다. 사용자가 대화를 선택하면 `session/load`를 우선 사용하고 전체 replay 성공 후 메모리의 본문을 교체한다. 실패한 부분 replay는 표시하지 않는다. `resume`만 지원하면 본문 없이 기존 맥락을 이어간다는 안내를 표시한다. 에이전트 부재 시 전체 본문을 읽을 수 있는 디스크 사본은 없다.
+
+### 대화 행의 대기열
+
+각 대화 행의 `queued_messages` 컬럼에 미전송 입력을 보관한다. Rust 대화 상태의 잠금 안에서 추가·삭제·전송을 위한 제거를 직렬화하고, 저장 성공 후 메모리와 UI에 반영한다. 배열 순서가 FIFO이며 별도 순서 번호나 전송 상태 테이블은 없다. 빈 대기열은 `[]`로 저장하고 대화 행은 유지한다.
+
+현재 turn의 `end_turn` 응답에서만 다음 항목을 제거 저장한 뒤 전송한다. 취소 의도가 있거나 비정상 종료한 turn은 다음 항목을 보내지 않는다. 전송 시도 기록·결과 불명 상태·자동 재삽입·자동 재전송은 없다. 제거 저장과 실제 전송 사이의 비정상 종료에서는 해당 항목이 유실될 수 있다. 남은 대기열은 재실행·load/resume 이후에도 유지하며 복원 자체로 전송하지 않는다. 이 데이터는 Atte 소유 입력이며 에이전트 대화 본문의 사본이 아니다.
 
 ## 초기 스키마와 버전
 
-agents 중심 구조가 첫 제품 스키마 v1이다. 새 DB는 `001_agents.sql` 다음 `002_conversations.sql`을 적용해 v2로 초기화한다. 기존 v1은 두 번째 마이그레이션만 적용하며 설치 산출물·버전·Registry 메타데이터를 보존한다. 초기화와 마이그레이션은 하나의 트랜잭션이고 `PRAGMA user_version = 2`를 기록한다. 지원 버전보다 새 DB는 열지 않는다.
+agents 중심 구조가 첫 제품 스키마 v1이다. 새 DB는 `001_agents.sql`, `002_conversations.sql`, `003_queued_messages.sql`, `004_conversation_queue_column.sql`을 순서대로 적용해 v4로 초기화한다. v4는 기존 `conversation_queues`의 메시지 배열을 해당 대화 행으로 옮긴 후 큐 테이블을 제거한다. 기존 DB는 현재 버전 이후의 마이그레이션만 적용하며 설치 산출물·버전·Registry 메타데이터·대화 메타데이터를 보존한다. 초기화와 마이그레이션은 하나의 트랜잭션이고 `PRAGMA user_version = 4`을 기록한다. 지원 버전보다 새 DB는 열지 않는다.
 
-개발 중 사용한 이전 v1–v4 변환 경로는 제품 코드에서 제거했다. 같은 구조를 가진 개발용 v4 DB는 백업 및 스키마 확인 후 버전 번호만 일회성으로 v1에 맞춘다. 이는 앱의 자동 다운그레이드 기능이 아니다. 옛 installations 기반 개발 DB는 현재 v1과 호환되지 않는다.
+제품 스키마 도입 전 개발용 v1–v4 변환 경로는 제거했다. 당시 agents-only 개발용 v4를 백업·구조 확인 후 v1로 맞추던 일회성 절차는 현재 제품 v4에 적용하지 않는다. 현재 v4에는 대화와 대기열 컬럼이 있으며 버전 번호를 낮추지 않는다. 옛 installations 기반 개발 DB는 제품 스키마와 호환되지 않는다.
 
-정의: [v1 SQL](../src-tauri/migrations/001_agents.sql), [v2 SQL](../src-tauri/migrations/002_conversations.sql), [저장소](../src-tauri/src/storage.rs), [대화 interface](../src-tauri/src/conversation.rs), [삭제 처리](../src-tauri/src/agent_management/removal.rs).
+정의: [v1 SQL](../src-tauri/migrations/001_agents.sql), [v2 SQL](../src-tauri/migrations/002_conversations.sql), [v3 SQL](../src-tauri/migrations/003_queued_messages.sql), [v4 SQL](../src-tauri/migrations/004_conversation_queue_column.sql), [저장소](../src-tauri/src/storage.rs), [대화 interface](../src-tauri/src/conversation.rs), [삭제 처리](../src-tauri/src/agent_management/removal.rs).
 
 ## 새로고침과 설치의 갱신 범위
 

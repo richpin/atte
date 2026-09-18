@@ -191,7 +191,7 @@ fn opens_the_oldest_committed_schema_fixture() {
     let version: u32 = connection
         .pragma_query_value(None, "user_version", |row| row.get(0))
         .unwrap();
-    assert_eq!(version, 2);
+    assert_eq!(version, 4);
     let tables: Vec<String> = connection
         .prepare("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")
         .unwrap()

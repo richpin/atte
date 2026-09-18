@@ -10,6 +10,7 @@ export default function App() {
     <>
       <div hidden={management()}>
         <ConversationPage
+          active={!management()}
           agentsRevision={agentsRevision()}
           onManage={() => setManagement(true)}
         />

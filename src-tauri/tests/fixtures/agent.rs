@@ -1,4 +1,5 @@
 //! Deterministic ACP peer. Stdout contains only newline-delimited JSON-RPC.
+mod concurrent;
 use serde_json::{json, Value};
 use std::{
     env, fs,
@@ -49,6 +50,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         return Ok(());
     }
     let mode = env::var("FIXTURE_MODE").unwrap_or_else(|_| "ready".into());
+    if mode == "concurrent" {
+        return concurrent::run();
+    }
     if let Some(path) = env::var_os("PID_FILE") {
         fs::write(path, process::id().to_string())?;
     }
@@ -188,7 +192,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     fs::write(path, serde_json::to_vec(&history)?)?;
                 }
                 assert_eq!(request["params"]["sessionId"], "remote-1");
-                if mode == "cancel" && prompts == 1 {
+                if matches!(mode.as_str(), "cancel" | "cancel-race") && prompts == 1 {
                     send(
                         &mut output,
                         json!({"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"remote-1","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"Started"}}}}),
@@ -203,7 +207,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     )?;
                     send(
                         &mut output,
-                        json!({"jsonrpc":"2.0","id":request["id"],"result":{"stopReason":"cancelled"}}),
+                        json!({"jsonrpc":"2.0","id":request["id"],"result":{"stopReason": if mode == "cancel-race" { "end_turn" } else { "cancelled" }}}),
                     )?;
                     continue;
                 }
@@ -301,7 +305,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 if mode == "prompt-error" {
                     error = Some(json!({"code": -32603, "message": "Prompt failed"}));
                 }
-                json!({"stopReason": "end_turn"})
+                json!({"stopReason": if matches!(mode.as_str(), "refusal" | "max_tokens" | "max_turn_requests") { mode.as_str() } else { "end_turn" }})
             }
             _ => continue,
         };

@@ -1,4 +1,5 @@
 //! Durable conversation identity and in-memory content, independent of desktop transport.
+mod list;
 use crate::agent::{prepared_codex, AgentDefinition, PreparedAgent};
 use crate::storage::{StorageError, Store};
 use serde::{Deserialize, Serialize};
@@ -36,6 +37,14 @@ pub struct Conversation {
     pub turns: Vec<Turn>,
     pub notice: Option<String>,
     pub permissions: Vec<PermissionRequest>,
+    pub queued_messages: Vec<QueuedMessage>,
+}
+
+/// Atte-owned input waiting for the active turn to finish, in submission order.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct QueuedMessage {
+    pub id: Uuid,
+    pub text: String,
 }
 
 /// The entire durable record and list interface. Content never crosses this seam.
@@ -149,6 +158,7 @@ pub enum ConversationError {
 
 /// Owns conversation state and agent runtime lifetimes.
 pub struct Conversations {
+    list: Arc<Mutex<list::ConversationList>>,
     store: Option<Arc<Store>>,
     agents: Mutex<Vec<AgentDefinition>>,
     lifecycle: tokio::sync::Mutex<()>,
@@ -159,17 +169,24 @@ pub struct Conversations {
 #[derive(Default)]
 struct State {
     entries: HashMap<Uuid, Entry>,
+    runtimes: Vec<Runtime>,
     closed: bool,
 }
 
 struct Entry {
     state: Arc<Mutex<ConversationState>>,
-    runtime: Option<Runtime>,
+    runtime: Option<SessionCommands>,
+}
+
+struct SessionCommands {
+    prompts: mpsc::UnboundedSender<Prompt>,
+    cancellations: mpsc::UnboundedSender<Uuid>,
 }
 
 struct Runtime {
-    prompts: mpsc::UnboundedSender<Prompt>,
-    cancellations: mpsc::UnboundedSender<Uuid>,
+    agent: AgentDefinition,
+    folder: PathBuf,
+    sessions: mpsc::UnboundedSender<crate::agent_runtime::Session>,
     stop: Option<oneshot::Sender<()>>,
     task: Option<tokio::task::JoinHandle<()>>,
 }
@@ -192,6 +209,7 @@ impl Conversations {
     /// Uses trusted launch definitions supplied by the outer application adapter.
     pub fn new(agents: Vec<AgentDefinition>) -> Self {
         Self {
+            list: Arc::default(),
             store: None,
             agents: Mutex::new(agents),
             lifecycle: tokio::sync::Mutex::new(()),
@@ -206,6 +224,7 @@ impl Conversations {
         store: Arc<Store>,
     ) -> Result<Self, StorageError> {
         let mut entries = HashMap::new();
+        let list = Arc::new(Mutex::new(list::ConversationList::default()));
         for saved in store.conversations()? {
             let interrupted = saved.interrupted
                 || matches!(
@@ -231,11 +250,13 @@ impl Conversations {
                 turns: Vec::new(),
                 notice: None,
                 permissions: Vec::new(),
+                queued_messages: store.queued_messages(saved.id)?,
             };
             entries.insert(
                 snapshot.id,
                 Entry {
                     state: Arc::new(Mutex::new(ConversationState {
+                        list: list.clone(),
                         snapshot,
                         generation: 0,
                         subscribers: Vec::new(),
@@ -245,37 +266,40 @@ impl Conversations {
                     runtime: None,
                 },
             );
+            list.lock()
+                .map_err(|_| StorageError::Unavailable)?
+                .entries
+                .insert(
+                    saved.id,
+                    entries[&saved.id]
+                        .state
+                        .lock()
+                        .map_err(|_| StorageError::Unavailable)?
+                        .snapshot
+                        .summary(),
+                );
         }
         Ok(Self {
+            list,
             store: Some(store),
             state: Mutex::new(State {
                 entries,
                 closed: false,
+                runtimes: Vec::new(),
             }),
             ..Self::new(agents)
         })
     }
 
     pub fn list(&self) -> Result<Vec<ConversationSummary>, ConversationError> {
-        let mut summaries = self
-            .lock()?
-            .entries
-            .values()
-            .map(|entry| {
-                Ok(entry
-                    .state
-                    .lock()
-                    .map_err(|_| unavailable())?
-                    .snapshot
-                    .summary())
-            })
-            .collect::<Result<Vec<_>, ConversationError>>()?;
-        summaries.sort_by(|a, b| {
-            b.updated_at
-                .cmp(&a.updated_at)
-                .then_with(|| a.id.cmp(&b.id))
-        });
-        Ok(summaries)
+        Ok(self.list.lock().map_err(|_| unavailable())?.snapshot())
+    }
+
+    /// Subscribes to list metadata even for conversations that are not open in a view.
+    pub fn subscribe_list(
+        &self,
+    ) -> Result<mpsc::UnboundedReceiver<Vec<ConversationSummary>>, ConversationError> {
+        Ok(self.list.lock().map_err(|_| unavailable())?.subscribe())
     }
 
     pub fn prepared_agents(&self) -> Vec<PreparedAgent> {
@@ -319,7 +343,6 @@ impl Conversations {
             let mut agents = self.agents.lock().map_err(|_| unavailable())?;
             let mut state = self.lock()?;
             agents.retain(|agent| agent.id != id);
-            let mut runtimes = Vec::new();
             for entry in state.entries.values_mut() {
                 let mut current = entry.state.lock().map_err(|_| unavailable())?;
                 if current.snapshot.agent_id != id {
@@ -345,8 +368,15 @@ impl Conversations {
                     turn.stop_reason = Some("cancelled".into());
                 }
                 current.publish();
-                if let Some(runtime) = entry.runtime.take() {
-                    runtimes.push(runtime);
+                entry.runtime = None;
+            }
+            let mut runtimes = Vec::new();
+            let mut index = 0;
+            while index < state.runtimes.len() {
+                if state.runtimes[index].agent.id == id {
+                    runtimes.push(state.runtimes.remove(index));
+                } else {
+                    index += 1;
                 }
             }
             runtimes
@@ -408,6 +438,7 @@ impl Conversations {
             turns: Vec::new(),
             notice: None,
             permissions: Vec::new(),
+            queued_messages: Vec::new(),
         };
         let mut state = self.lock()?;
         if state.closed {
@@ -422,6 +453,7 @@ impl Conversations {
             draft.id,
             Entry {
                 state: Arc::new(Mutex::new(ConversationState {
+                    list: self.list.clone(),
                     snapshot: draft.clone(),
                     generation: 0,
                     subscribers: Vec::new(),
@@ -431,6 +463,10 @@ impl Conversations {
                 runtime: None,
             },
         );
+        self.list
+            .lock()
+            .map_err(|_| unavailable())?
+            .publish(draft.summary());
         Ok(draft)
     }
 
@@ -500,7 +536,6 @@ impl Conversations {
         current.snapshot = snapshot;
         current.publish();
         let snapshot = current.snapshot.clone();
-        let (stop, receiver) = oneshot::channel();
         let updates = RuntimeUpdates {
             authentication: self.authentication.clone(),
             state: entry.state.clone(),
@@ -509,20 +544,53 @@ impl Conversations {
         let (prompts, requests) = mpsc::unbounded_channel();
         let (cancellations, cancelled) = mpsc::unbounded_channel();
         let folder = snapshot.working_folder.clone();
-        entry.runtime = Some(Runtime {
+        entry.runtime = Some(SessionCommands {
             prompts,
             cancellations,
-            stop: Some(stop),
-            task: Some(handle.spawn(crate::agent_runtime::run(
+        });
+        drop(current);
+        let session = crate::agent_runtime::Session {
+            id,
+            remote_session: snapshot.remote_session_id.clone(),
+            updates,
+            prompts: requests,
+            cancellations: cancelled,
+        };
+        let runtime = if let Some(index) = state.runtimes.iter().position(|runtime| {
+            runtime.agent == agent
+                && runtime.folder == folder
+                && !runtime.sessions.is_closed()
+                && runtime
+                    .task
+                    .as_ref()
+                    .is_some_and(|task| !task.is_finished())
+        }) {
+            &mut state.runtimes[index]
+        } else {
+            let (sessions, receiver) = mpsc::unbounded_channel();
+            let (stop, stopped) = oneshot::channel();
+            let task = handle.spawn(crate::agent_runtime::run(
+                agent.clone(),
+                folder.clone(),
+                receiver,
+                stopped,
+            ));
+            state.runtimes.push(Runtime {
                 agent,
                 folder,
-                snapshot.remote_session_id.clone(),
-                updates,
-                receiver,
-                requests,
-                cancelled,
-            ))),
-        });
+                sessions,
+                stop: Some(stop),
+                task: Some(task),
+            });
+            state.runtimes.last_mut().ok_or_else(unavailable)?
+        };
+        if let Err(error) = runtime.sessions.send(session) {
+            error.0.updates.modify(None, |snapshot| {
+                snapshot.status = ConversationStatus::Failed;
+                snapshot.failure = Some(ConnectionFailure::ConnectionClosed);
+            });
+            return Err(unavailable());
+        }
         Ok(snapshot)
     }
 
@@ -546,7 +614,7 @@ impl Conversations {
         Ok(receiver)
     }
 
-    /// Admits exactly one prompt while ready, before publishing it to the runtime.
+    /// Sends while ready, or queues input behind an active turn.
     pub fn send_message(&self, id: Uuid, text: String) -> Result<(), ConversationError> {
         if text.trim().is_empty() {
             return Err(ConversationError::InvalidMessage(
@@ -559,6 +627,21 @@ impl Conversations {
         }
         let entry = state.entries.get(&id).ok_or_else(not_found)?;
         let mut current = entry.state.lock().map_err(|_| unavailable())?;
+        if matches!(
+            current.snapshot.status,
+            ConversationStatus::Running
+                | ConversationStatus::WaitingForApproval
+                | ConversationStatus::Cancelling
+        ) {
+            let mut queue = current.snapshot.queued_messages.clone();
+            queue.push(QueuedMessage {
+                id: Uuid::new_v4(),
+                text,
+            });
+            current.save_queue(queue)?;
+            current.publish();
+            return Ok(());
+        }
         if current.snapshot.status != ConversationStatus::SessionReady {
             return Err(ConversationError::NotReady(
                 "응답이 완료된 연결된 대화에서 전송해주세요.".into(),
@@ -585,6 +668,24 @@ impl Conversations {
             response: String::new(),
             stop_reason: None,
         });
+        current.publish();
+        Ok(())
+    }
+
+    /// Deletes only input that has not yet been removed for dispatch.
+    pub fn delete_queued_message(&self, id: Uuid, message: Uuid) -> Result<(), ConversationError> {
+        let state = self.lock()?;
+        let entry = state.entries.get(&id).ok_or_else(not_found)?;
+        let mut current = entry.state.lock().map_err(|_| unavailable())?;
+        let mut queue = current.snapshot.queued_messages.clone();
+        let index = queue
+            .iter()
+            .position(|item| item.id == message)
+            .ok_or_else(|| {
+                ConversationError::NotReady("이미 전송되었거나 삭제된 메시지입니다.".into())
+            })?;
+        queue.remove(index);
+        current.save_queue(queue)?;
         current.publish();
         Ok(())
     }
@@ -667,11 +768,22 @@ impl Conversations {
                 return;
             };
             state.closed = true;
-            state
-                .entries
-                .values_mut()
-                .filter_map(|entry| entry.runtime.take())
-                .collect::<Vec<_>>()
+            for entry in state.entries.values_mut() {
+                if let Ok(mut current) = entry.state.lock() {
+                    current.snapshot.interrupted |= matches!(
+                        current.snapshot.status,
+                        ConversationStatus::Running
+                            | ConversationStatus::WaitingForApproval
+                            | ConversationStatus::Cancelling
+                    );
+                    current.snapshot.status = ConversationStatus::Disconnected;
+                    current.clear_permissions();
+                    current.publish();
+                    current.generation += 1;
+                }
+                entry.runtime = None;
+            }
+            std::mem::take(&mut state.runtimes)
         };
         stop_runtimes(runtimes).await;
     }
@@ -720,6 +832,7 @@ pub(crate) struct Prompt {
 }
 
 struct ConversationState {
+    list: Arc<Mutex<list::ConversationList>>,
     store: Option<Arc<Store>>,
     snapshot: Conversation,
     generation: u64,
@@ -728,6 +841,16 @@ struct ConversationState {
 }
 
 impl ConversationState {
+    fn save_queue(&mut self, queue: Vec<QueuedMessage>) -> Result<(), ConversationError> {
+        if let Some(store) = &self.store {
+            store
+                .save_queue(&self.snapshot.summary(), &queue)
+                .map_err(|error| ConversationError::Unavailable(error.to_string()))?;
+        }
+        self.snapshot.queued_messages = queue;
+        Ok(())
+    }
+
     fn clear_permissions(&mut self) {
         // Dropped senders resolve every pending ACP request as cancelled.
         self.permissions.clear();
@@ -743,6 +866,9 @@ impl ConversationState {
                 .map(|error| error.to_string());
         }
         self.snapshot.revision += 1;
+        if let Ok(mut list) = self.list.lock() {
+            list.publish(self.snapshot.summary());
+        }
         self.subscribers.retain(|sender| {
             sender
                 .send(ConversationUpdate::Snapshot {
@@ -786,6 +912,64 @@ pub(crate) struct RuntimeUpdates {
 }
 
 impl RuntimeUpdates {
+    pub fn complete_turn(
+        &self,
+        turn: Uuid,
+        reason: agent_client_protocol::schema::v1::StopReason,
+    ) -> Option<Prompt> {
+        let mut state = self.state.lock().ok()?;
+        if state.generation != self.generation
+            || !matches!(
+                state.snapshot.status,
+                ConversationStatus::Running
+                    | ConversationStatus::WaitingForApproval
+                    | ConversationStatus::Cancelling
+            )
+            || state.snapshot.turns.last().map(|item| item.id) != Some(turn)
+        {
+            return None;
+        }
+        let cancelled = state.snapshot.status == ConversationStatus::Cancelling;
+        state.snapshot.interrupted =
+            cancelled || reason == agent_client_protocol::schema::v1::StopReason::Cancelled;
+        if let Some(turn) = state.snapshot.turns.last_mut() {
+            turn.stop_reason = serde_json::to_value(reason)
+                .ok()
+                .and_then(|value| value.as_str().map(str::to_owned));
+        }
+        state.snapshot.status = ConversationStatus::SessionReady;
+        state.snapshot.authentication = AuthenticationStatus::Authenticated;
+        state.clear_permissions();
+        let next = if !cancelled
+            && reason == agent_client_protocol::schema::v1::StopReason::EndTurn
+            && !state.snapshot.queued_messages.is_empty()
+        {
+            let mut queue = state.snapshot.queued_messages.clone();
+            let queued = queue.remove(0);
+            if let Err(error) = state.save_queue(queue) {
+                state.snapshot.notice = Some(error.to_string());
+                state.publish();
+                return None;
+            }
+            let turn = Uuid::new_v4();
+            state.snapshot.status = ConversationStatus::Running;
+            state.snapshot.turns.push(Turn {
+                id: turn,
+                message: queued.text.clone(),
+                response: String::new(),
+                stop_reason: None,
+            });
+            Some(Prompt {
+                turn,
+                text: queued.text,
+            })
+        } else {
+            None
+        };
+        state.publish();
+        next
+    }
+
     pub fn request_permission(
         &self,
         turn: Uuid,

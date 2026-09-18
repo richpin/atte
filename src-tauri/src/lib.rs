@@ -54,6 +54,15 @@ async fn select_working_folder(
 }
 
 #[tauri::command]
+async fn create_conversation(
+    folder: String,
+    agent_id: String,
+    conversations: State<'_, Conversations>,
+) -> Result<Conversation, ConversationError> {
+    conversations.create_for_agent(std::path::Path::new(&folder), &agent_id)
+}
+
+#[tauri::command]
 fn list_conversations(
     conversations: State<'_, Conversations>,
 ) -> Result<Vec<ConversationSummary>, ConversationError> {
@@ -92,6 +101,16 @@ async fn send_message(
 }
 
 #[tauri::command]
+async fn delete_queued_message(
+    id: Uuid,
+    message: Uuid,
+    conversations: State<'_, Conversations>,
+) -> Result<Conversation, ConversationError> {
+    conversations.delete_queued_message(id, message)?;
+    conversations.get(id)
+}
+
+#[tauri::command]
 async fn cancel_turn(
     id: Uuid,
     turn: Uuid,
@@ -120,10 +139,37 @@ async fn subscribe_conversation(
     conversations: State<'_, Conversations>,
     subscriptions: State<'_, Subscriptions>,
 ) -> Result<Uuid, ConversationError> {
-    let mut receiver = conversations.subscribe(id)?;
+    forward_subscription(
+        conversations.subscribe(id)?,
+        channel,
+        window,
+        subscriptions.inner().clone(),
+    )
+}
+
+#[tauri::command]
+async fn subscribe_conversation_list(
+    channel: tauri::ipc::Channel<Vec<ConversationSummary>>,
+    window: tauri::WebviewWindow,
+    conversations: State<'_, Conversations>,
+    subscriptions: State<'_, Subscriptions>,
+) -> Result<Uuid, ConversationError> {
+    forward_subscription(
+        conversations.subscribe_list()?,
+        channel,
+        window,
+        subscriptions.inner().clone(),
+    )
+}
+
+fn forward_subscription<T: serde::Serialize + Send + 'static>(
+    mut receiver: tokio::sync::mpsc::UnboundedReceiver<T>,
+    channel: tauri::ipc::Channel<T>,
+    window: tauri::WebviewWindow,
+    subscriptions: Subscriptions,
+) -> Result<Uuid, ConversationError> {
     let subscription = Uuid::new_v4();
     let (stop, mut stopped) = oneshot::channel();
-    let subscriptions = subscriptions.inner().clone();
     subscriptions
         .0
         .lock()
@@ -197,6 +243,9 @@ pub fn run() {
             select_working_folder,
             get_conversation,
             list_conversations,
+            create_conversation,
+            delete_queued_message,
+            subscribe_conversation_list,
             prepared_agents,
             connect_conversation,
             send_message,

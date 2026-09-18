@@ -87,6 +87,8 @@ beforeEach(() => {
   );
   vi.resetAllMocks();
   vi.mocked(invoke).mockImplementation((command, args) => {
+    if (command === "subscribe_conversation_list")
+      return Promise.resolve("list-subscription");
     if (command === "list_conversations") return Promise.resolve([]);
     if (command === "prepared_agents")
       return Promise.resolve([{ id: "codex", name: "Codex" }]);
@@ -98,6 +100,68 @@ beforeEach(() => {
     if (command === "unsubscribe_conversation") return Promise.resolve();
     return requests(command, args);
   });
+});
+
+it("groups conversations by folder, collapses projects and creates within the selected folder", async () => {
+  const saved = {
+    id: "one",
+    title: "First project task",
+    workingFolder: "/work/project",
+    agentId: "codex",
+    status: "sessionReady",
+    revision: 0,
+    turns: [],
+    permissions: [],
+    queuedMessages: [],
+  };
+  const original = vi.mocked(invoke).getMockImplementation();
+  let receiveList!: (entries: unknown[]) => void;
+  vi.mocked(invoke).mockImplementation(async (command, args) => {
+    if (command === "list_conversations")
+      return [saved, { ...saved, id: "two", title: "Second project task" }];
+    if (command === "subscribe_conversation_list") {
+      receiveList = (args as { channel: { onmessage: typeof receiveList } })
+        .channel.onmessage;
+      return "list";
+    }
+    if (command === "create_conversation")
+      return { ...saved, id: "new", title: "새 대화", status: "disconnected" };
+    if (command === "connect_conversation")
+      return { ...saved, id: "new", title: "새 대화", revision: 1 };
+    return original?.(command, args);
+  });
+  render(() => <App />);
+  const project = await screen.findByRole("button", {
+    name: "프로젝트 project",
+  });
+  expect(
+    screen.getAllByRole("button", { name: "project에 새 대화" }),
+  ).toHaveLength(1);
+  await userEvent.click(project);
+  expect(
+    screen.queryByRole("button", { name: /First project task/ }),
+  ).toBeNull();
+  await userEvent.click(project);
+  receiveList([
+    { ...saved, status: "waitingForApproval" },
+    { ...saved, id: "two", title: "Second project task" },
+  ]);
+  expect(
+    await screen.findByRole("button", {
+      name: /First project task.*승인 대기/,
+    }),
+  ).toBeTruthy();
+  await userEvent.click(screen.getByRole("button", { name: "사이드바 닫기" }));
+  expect(screen.queryByRole("navigation", { name: "대화 목록" })).toBeNull();
+  await userEvent.click(screen.getByRole("button", { name: "사이드바 열기" }));
+  await userEvent.click(
+    screen.getByRole("button", { name: "project에 새 대화" }),
+  );
+  expect(invoke).toHaveBeenCalledWith("create_conversation", {
+    folder: "/work/project",
+    agentId: "codex",
+  });
+  expect(invoke).toHaveBeenCalledWith("connect_conversation", { id: "new" });
 });
 
 it("keeps the saved list accessible without agents and restores on selection only", async () => {
@@ -710,6 +774,84 @@ it("sends once, renders streaming text and completion, and admits the next messa
   expect((button as HTMLButtonElement).disabled).toBe(false);
 });
 
+it("queues input above the composer and preserves it after stopping until deleted", async () => {
+  const active = {
+    id: "queue",
+    title: "Queue",
+    workingFolder: "/project",
+    agentId: "codex",
+    status: "running",
+    revision: 1,
+    turns: [
+      { id: "turn", message: "first", response: "Working", stopReason: null },
+    ],
+    permissions: [],
+    queuedMessages: [],
+  };
+  requests.mockResolvedValue(active);
+  render(() => <App />);
+  await userEvent.click(screen.getByRole("button", { name: "폴더 선택" }));
+  const queued = {
+    ...active,
+    revision: 2,
+    queuedMessages: [
+      { id: "q1", text: "next instruction with details" },
+      { id: "q2", text: "last instruction" },
+    ],
+  };
+  requests.mockResolvedValue(queued);
+  await userEvent.type(
+    screen.getByRole("textbox"),
+    "next instruction with details{Enter}",
+  );
+  expect(invoke).toHaveBeenCalledWith("send_message", {
+    id: "queue",
+    text: "next instruction with details",
+  });
+  const queue = await screen.findByRole("list", { name: "대기 메시지" });
+  expect(
+    queue.compareDocumentPosition(screen.getByRole("textbox")) &
+      Node.DOCUMENT_POSITION_FOLLOWING,
+  ).toBeTruthy();
+  const expand = screen.getByRole("button", {
+    name: "next instruction with details",
+  });
+  expect(expand.getAttribute("aria-expanded")).toBe("false");
+  await userEvent.click(expand);
+  expect(expand.getAttribute("aria-expanded")).toBe("true");
+  receive(structuredClone(queued));
+  expect(
+    screen
+      .getByRole("button", { name: "next instruction with details" })
+      .getAttribute("aria-expanded"),
+  ).toBe("true");
+  requests.mockResolvedValue({
+    ...queued,
+    revision: 3,
+    status: "sessionReady",
+  });
+  await userEvent.click(screen.getByRole("button", { name: "현재 작업 중단" }));
+  expect(
+    screen.getAllByRole("button", { name: /대기 메시지 삭제/ }),
+  ).toHaveLength(2);
+  requests.mockResolvedValue({
+    ...queued,
+    revision: 4,
+    status: "sessionReady",
+    queuedMessages: [queued.queuedMessages[1]],
+  });
+  await userEvent.click(
+    screen.getAllByRole("button", { name: /대기 메시지 삭제/ })[0],
+  );
+  expect(invoke).toHaveBeenCalledWith("delete_queued_message", {
+    id: "queue",
+    message: "q1",
+  });
+  expect(
+    screen.queryByRole("button", { name: "next instruction with details" }),
+  ).toBeNull();
+});
+
 it("keeps the message on send failure and displays permission cancellation", async () => {
   const ready = {
     id: "draft-1",
@@ -753,6 +895,9 @@ it("ignores updates after unmount and unsubscribes even when registration finish
   };
   let register!: (token: string) => void;
   vi.mocked(invoke).mockImplementation((command, args) => {
+    if (command === "list_conversations") return Promise.resolve([]);
+    if (command === "subscribe_conversation_list")
+      return Promise.resolve("list");
     if (command === "prepared_agents")
       return Promise.resolve([{ id: "codex", name: "Codex" }]);
     if (command === "subscribe_conversation") {
@@ -870,6 +1015,83 @@ it("opens agent management when creating a conversation without an installed age
     await screen.findByRole("heading", { name: "에이전트 관리" }),
   ).toBeTruthy();
   expect(screen.getByRole("button", { name: "Codex 설치" })).toBeTruthy();
+});
+
+it("returns from project setup to create in the original folder", async () => {
+  let installed = false;
+  const saved = {
+    id: "saved",
+    title: "Saved task",
+    workingFolder: "/work/original",
+    agentId: "missing",
+    status: "disconnected",
+    revision: 0,
+    turns: [],
+    permissions: [],
+    queuedMessages: [],
+  };
+  const original = vi.mocked(invoke).getMockImplementation();
+  vi.mocked(invoke).mockImplementation(async (command, args) => {
+    if (command === "prepared_agents")
+      return installed ? [{ id: "new-provider", name: "New Provider" }] : [];
+    if (command === "list_conversations") return [saved];
+    if (command === "agent_catalog" || command === "refresh_agent_catalog")
+      return [
+        {
+          id: "new-provider",
+          name: "New Provider",
+          installed,
+          installedVersion: installed ? "1.0.0" : null,
+          availableVersion: "1.0.0",
+          distribution: { kind: "npm", package: "@fixture/agent@1.0.0" },
+          authentication: {
+            connected: false,
+            authenticated: false,
+            methods: [],
+          },
+        },
+      ];
+    if (command === "install_agent") {
+      installed = true;
+      return;
+    }
+    if (command === "create_conversation")
+      return { ...saved, id: "new", title: "새 대화", agentId: "new-provider" };
+    if (command === "connect_conversation")
+      return {
+        ...saved,
+        id: "new",
+        title: "새 대화",
+        agentId: "new-provider",
+        status: "sessionReady",
+        revision: 1,
+      };
+    return original?.(command, args);
+  });
+  render(() => <App />);
+  await userEvent.click(
+    await screen.findByRole("button", { name: "original에 새 대화" }),
+  );
+  await userEvent.click(
+    await screen.findByRole("button", { name: "New Provider 설치" }),
+  );
+  await screen.findByText(/설치됨 · 1.0.0/);
+  expect(invoke).not.toHaveBeenCalledWith(
+    "create_conversation",
+    expect.anything(),
+  );
+  await userEvent.click(
+    screen.getByRole("button", { name: "대화로 돌아가기" }),
+  );
+  await screen.findByRole("heading", { name: "새 대화" });
+  expect(invoke).toHaveBeenCalledWith("create_conversation", {
+    folder: "/work/original",
+    agentId: "new-provider",
+  });
+  expect(invoke).not.toHaveBeenCalledWith(
+    "select_working_folder",
+    expect.anything(),
+  );
 });
 
 it("keeps streaming and the fixed conversation while management is open", async () => {

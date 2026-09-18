@@ -6,30 +6,38 @@ import {
   For,
   on,
   onCleanup,
+  onMount,
   Show,
 } from "solid-js";
 import {
   answerPermission,
   cancelTurn,
   connectConversation,
+  createConversation,
+  deleteQueuedMessage,
   getConversation,
   listConversations,
   preparedAgents,
   selectWorkingFolder,
   sendMessage,
   subscribeConversation,
+  subscribeConversationList,
 } from "../api/conversations";
 import {
   type Conversation,
+  type ConversationSummary,
   type ConversationUpdate,
   failureMessages,
   statusLabels,
 } from "../model/types";
 import { ConversationHistory } from "./ConversationHistory";
+import { ConversationSidebar } from "./ConversationSidebar";
 import { PermissionPanel } from "./PermissionPanel";
+import { QueuedMessages } from "./QueuedMessages";
 import { Transcript } from "./Transcript";
 
 export function ConversationPage(props: {
+  active: boolean;
   agentsRevision: number;
   onManage: () => void;
 }) {
@@ -38,17 +46,34 @@ export function ConversationPage(props: {
   const [agentsFailed, setAgentsFailed] = createSignal(false);
   const [selecting, setSelecting] = createSignal(false);
   const [listError, setListError] = createSignal(false);
+  const [sidebarOpen, setSidebarOpen] = createSignal(true);
+  const [pendingFolder, setPendingFolder] = createSignal<string>();
+  let listVersion = 0;
   const [history, { refetch: reloadList, mutate: updateList }] = createResource(
-    async () => {
+    async (): Promise<ConversationSummary[]> => {
       try {
+        const version = listVersion;
         setListError(false);
-        return await listConversations();
+        const entries = await listConversations();
+        return version === listVersion ? entries : (history() ?? entries);
       } catch {
         setListError(true);
         return [];
       }
     },
   );
+  onMount(() => {
+    onCleanup(
+      subscribeConversationList(
+        (entries) => {
+          listVersion++;
+          updateList(entries);
+          setListError(false);
+        },
+        () => setListError(true),
+      ),
+    );
+  });
 
   const [agents] = createResource(
     () => props.agentsRevision,
@@ -86,7 +111,11 @@ export function ConversationPage(props: {
   const [streamError, setStreamError] = createSignal(false);
   const [subscriptionAttempt, setSubscriptionAttempt] = createSignal(0);
   const canSend = () =>
-    conversation()?.status === "sessionReady" && !sending() && !streamError();
+    ["sessionReady", "running", "cancelling"].includes(
+      conversation()?.status ?? "",
+    ) &&
+    !sending() &&
+    !streamError();
 
   function applySnapshot(snapshot: Conversation) {
     const current = conversation();
@@ -97,6 +126,7 @@ export function ConversationPage(props: {
   }
 
   function remember(snapshot: Conversation) {
+    listVersion++;
     const {
       id,
       title,
@@ -208,6 +238,18 @@ export function ConversationPage(props: {
     }
   }
 
+  async function deleteQueued(id: string) {
+    const current = conversation();
+    if (!current) return;
+    try {
+      const snapshot = await deleteQueuedMessage(current.id, id);
+      applySnapshot(snapshot);
+    } catch (cause) {
+      if (conversation()?.id === current.id)
+        setError(errorMessage(cause, "대기 메시지를 삭제할 수 없습니다."));
+    }
+  }
+
   async function answer(request: string, option: string) {
     const current = conversation();
     if (!current || answering() || cancelling()) return;
@@ -290,9 +332,55 @@ export function ConversationPage(props: {
     }
   }
 
+  async function createInFolder(folder: string) {
+    if (selecting()) return;
+    if (!agentId()) {
+      setPendingFolder(folder);
+      props.onManage();
+      return;
+    }
+    setPendingFolder(undefined);
+    setSelecting(true);
+    setError(undefined);
+    const attempt = ++selection;
+    try {
+      const draft = await createConversation(folder, agentId());
+      remember(draft);
+      if (attempt !== selection) return;
+      setConversation(draft);
+      setMessage("");
+      setConnectionRejected(false);
+      if (draft.status === "disconnected") void connect();
+    } catch (cause) {
+      if (attempt === selection)
+        setError(errorMessage(cause, "새 대화를 만들 수 없습니다."));
+    } finally {
+      setSelecting(false);
+    }
+  }
+
+  createEffect(
+    on(
+      () => [props.active, agents.loading, agentId(), pendingFolder()] as const,
+      ([active, loading, agent, folder]) => {
+        if (active && !loading && agent && folder) void createInFolder(folder);
+      },
+    ),
+  );
+
   return (
     <main class="flex h-dvh flex-col overflow-hidden bg-canvas text-ink">
       <header class="flex h-14 shrink-0 items-center gap-4 border-b border-line px-6">
+        <Show when={!sidebarOpen()}>
+          <button
+            type="button"
+            aria-label="사이드바 열기"
+            class="rounded p-1 text-muted"
+            onClick={() => setSidebarOpen(true)}
+          >
+            ◧
+          </button>
+        </Show>
         <span class="font-semibold tracking-tight">atte</span>
         <Show when={conversation()}>
           {(draft) => (
@@ -344,40 +432,19 @@ export function ConversationPage(props: {
         </button>
       </header>
       <div class="flex min-h-0 flex-1">
-        <nav
-          aria-label="대화 목록"
-          class="w-56 shrink-0 overflow-y-auto border-r border-line bg-panel p-3"
-        >
-          <h2 class="mb-3 text-xs font-medium text-muted">대화</h2>
-          <Show when={listError()}>
-            <p role="alert" class="text-sm">
-              대화 목록을 불러올 수 없습니다.
-            </p>
-            <button type="button" onClick={() => void reloadList()}>
-              목록 다시 불러오기
-            </button>
-          </Show>
-          <Show when={!history.loading && !history()?.length && !listError()}>
-            <p class="text-sm text-muted">저장된 대화가 없습니다.</p>
-          </Show>
-          <For each={history()}>
-            {(entry) => (
-              <button
-                type="button"
-                aria-current={
-                  conversation()?.id === entry.id ? "page" : undefined
-                }
-                class="mb-1 w-full rounded-lg px-3 py-2 text-left text-sm hover:bg-canvas aria-[current=page]:bg-canvas"
-                onClick={() => void openConversation(entry.id)}
-              >
-                <span class="block truncate">{entry.title || "새 대화"}</span>
-                <span class="block truncate text-xs text-muted">
-                  {entry.workingFolder}
-                </span>
-              </button>
-            )}
-          </For>
-        </nav>
+        <Show when={sidebarOpen()}>
+          <ConversationSidebar
+            conversations={history() ?? []}
+            selected={conversation()?.id}
+            loading={history.loading}
+            failed={listError()}
+            creating={selecting() || agents.loading || agentsFailed()}
+            onRetry={() => void reloadList()}
+            onSelect={(id) => void openConversation(id)}
+            onCreate={(folder) => void createInFolder(folder)}
+            onClose={() => setSidebarOpen(false)}
+          />
+        </Show>
         <div class="flex min-w-0 flex-1 flex-col overflow-hidden">
           <Show when={error()}>
             {(message) => (
@@ -507,11 +574,15 @@ export function ConversationPage(props: {
               </Show>
             </ConversationHistory>
             <div class="mx-auto mb-6 w-full max-w-3xl shrink-0 px-6">
+              <QueuedMessages
+                messages={conversation()?.queuedMessages ?? []}
+                onDelete={deleteQueued}
+              />
               <form
                 class="max-h-[60dvh] overflow-y-auto rounded-2xl border border-line bg-panel p-4"
                 onSubmit={(event) => {
                   event.preventDefault();
-                  if (!showStop()) void send();
+                  void send();
                 }}
               >
                 <Show
@@ -580,7 +651,7 @@ export function ConversationPage(props: {
                 class="mt-2 text-center text-xs text-muted"
               >
                 {conversation()?.status === "running"
-                  ? "응답이 완료되면 다음 메시지를 보낼 수 있습니다."
+                  ? "작업 중에도 다음 메시지를 입력할 수 있습니다."
                   : "연결된 대화에 메시지를 보내세요."}
               </p>
             </div>
