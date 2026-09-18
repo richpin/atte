@@ -215,14 +215,14 @@ pub(crate) async fn run(
     for updates in all.into_values() {
         match &failure {
             Some(failure) => failed(&updates, failure.clone()),
-            None => updates.modify(None, |snapshot| {
-                snapshot.interrupted |= matches!(
-                    snapshot.status,
+            None => updates.modify(None, |conversation| {
+                conversation.interrupted |= matches!(
+                    conversation.status,
                     ConversationStatus::Running
                         | ConversationStatus::WaitingForApproval
                         | ConversationStatus::Cancelling
                 );
-                snapshot.status = ConversationStatus::Disconnected;
+                conversation.status = ConversationStatus::Disconnected;
             }),
         }
     }
@@ -262,9 +262,9 @@ async fn run_session(
                     .ok()
                     .and_then(|mut routes| routes.get_mut(id)?.replay.take());
                 if let Some(history) = history {
-                    updates.modify(None, |snapshot| {
-                        snapshot.turns = history.turns;
-                        snapshot.notice = None;
+                    updates.modify(None, |conversation| {
+                        conversation.turns = history.turns;
+                        conversation.notice = None;
                     });
                 }
             } else if capabilities.session_capabilities.resume.is_some() {
@@ -280,9 +280,9 @@ async fn run_session(
                         route.replay = None;
                     }
                 }
-                updates.modify(None, |snapshot| {
-                    snapshot.turns.clear();
-                    snapshot.notice = Some("기존 맥락을 재개했습니다. 이 에이전트는 이전 메시지 표시를 지원하지 않습니다.".into());
+                updates.modify(None, |conversation| {
+                    conversation.turns.clear();
+                    conversation.notice = Some("기존 맥락을 재개했습니다. 이 에이전트는 이전 메시지 표시를 지원하지 않습니다.".into());
                 });
             } else {
                 return Err(ConnectionFailure::ResumptionUnsupported);
@@ -313,9 +313,9 @@ async fn run_session(
         Ok(Err(failure)) => return failure,
         Err(_) => return ConnectionFailure::TimedOut,
     };
-    updates.modify(None, |snapshot| {
-        snapshot.remote_session_id = Some(remote.to_string());
-        snapshot.status = ConversationStatus::SessionReady;
+    updates.modify(None, |conversation| {
+        conversation.remote_session_id = Some(remote.to_string());
+        conversation.status = ConversationStatus::SessionReady;
     });
     let mut next_prompt = None;
     loop {
@@ -424,18 +424,18 @@ fn failed(updates: &RuntimeUpdates, failure: ConnectionFailure) {
     if failure == ConnectionFailure::AuthenticationRequired {
         updates.record_authentication(AuthenticationStatus::Required);
     }
-    updates.modify(None, |snapshot| {
-        snapshot.interrupted |= matches!(
-            snapshot.status,
+    updates.modify(None, |conversation| {
+        conversation.interrupted |= matches!(
+            conversation.status,
             ConversationStatus::Running
                 | ConversationStatus::WaitingForApproval
                 | ConversationStatus::Cancelling
         );
-        snapshot.status = ConversationStatus::Failed;
+        conversation.status = ConversationStatus::Failed;
         if failure == ConnectionFailure::AuthenticationRequired {
-            snapshot.authentication = AuthenticationStatus::Required;
+            conversation.authentication = AuthenticationStatus::Required;
         }
-        snapshot.failure = Some(failure);
+        conversation.failure = Some(failure);
     });
 }
 

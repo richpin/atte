@@ -15,13 +15,13 @@ fn migrates_separate_queues_into_conversation_rows_without_losing_order() {
     ] {
         database.execute_batch(migration).unwrap();
     }
-    for summary in original.list().unwrap() {
+    for metadata in original.list().unwrap() {
         database
             .execute(
                 "INSERT INTO conversations VALUES (?1, ?2)",
                 rusqlite::params![
-                    summary.id.to_string(),
-                    serde_json::to_string(&summary).unwrap()
+                    metadata.id.to_string(),
+                    serde_json::to_string(&metadata).unwrap()
                 ],
             )
             .unwrap();

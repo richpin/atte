@@ -1,8 +1,8 @@
 import { createMemo, createSignal, For, Show } from "solid-js";
-import type { ConversationSummary } from "../model/types";
+import type { ConversationMetadata } from "../model/types";
 
 export function ConversationSidebar(props: {
-  conversations: ConversationSummary[];
+  conversations: ConversationMetadata[];
   selected?: string;
   loading: boolean;
   failed: boolean;
@@ -14,7 +14,7 @@ export function ConversationSidebar(props: {
 }) {
   const [collapsed, setCollapsed] = createSignal(new Set<string>());
   const groups = createMemo(() => {
-    const folders = new Map<string, ConversationSummary[]>();
+    const folders = new Map<string, ConversationMetadata[]>();
     for (const conversation of props.conversations) {
       const entries = folders.get(conversation.workingFolder) ?? [];
       entries.push(conversation);

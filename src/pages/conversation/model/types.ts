@@ -44,7 +44,7 @@ export interface QueuedMessage {
   text: string;
 }
 
-export type ConversationSummary = Pick<
+export type ConversationMetadata = Pick<
   Conversation,
   | "id"
   | "title"
@@ -107,7 +107,7 @@ export const failureMessages: Record<ConnectionFailure, string> = {
 };
 
 export type ConversationUpdate =
-  | { kind: "snapshot"; snapshot: Conversation }
+  | { kind: "conversation"; conversation: Conversation }
   | {
       kind: "textDelta";
       conversationId: string;

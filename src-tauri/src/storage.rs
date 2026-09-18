@@ -2,7 +2,7 @@
 use crate::{
     agent::AgentDefinition,
     agent_management::registry::{Registry, RegistryAgent},
-    conversation::{ConversationSummary, QueuedMessage},
+    conversation::{ConversationMetadata, QueuedMessage},
 };
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
@@ -68,7 +68,7 @@ impl Store {
         Ok(Self(Mutex::new(connection)))
     }
 
-    pub(crate) fn conversations(&self) -> Result<Vec<ConversationSummary>, StorageError> {
+    pub(crate) fn conversations(&self) -> Result<Vec<ConversationMetadata>, StorageError> {
         let connection = self.0.lock().map_err(|_| StorageError::Unavailable)?;
         let mut statement = connection.prepare("SELECT metadata FROM conversations")?;
         let rows = statement.query_map([], |row| row.get::<_, String>(0))?;
@@ -94,21 +94,21 @@ impl Store {
 
     pub(crate) fn save_queue(
         &self,
-        summary: &ConversationSummary,
+        metadata: &ConversationMetadata,
         messages: &[QueuedMessage],
     ) -> Result<(), StorageError> {
         let connection = self.0.lock().map_err(|_| StorageError::Unavailable)?;
-        connection.execute("INSERT INTO conversations (id, metadata, queued_messages) VALUES (?1, ?2, ?3) ON CONFLICT(id) DO UPDATE SET queued_messages=excluded.queued_messages", params![summary.id.to_string(), serde_json::to_string(summary)?, serde_json::to_string(messages)?])?;
+        connection.execute("INSERT INTO conversations (id, metadata, queued_messages) VALUES (?1, ?2, ?3) ON CONFLICT(id) DO UPDATE SET queued_messages=excluded.queued_messages", params![metadata.id.to_string(), serde_json::to_string(metadata)?, serde_json::to_string(messages)?])?;
         Ok(())
     }
 
     pub(crate) fn save_conversation(
         &self,
-        summary: &ConversationSummary,
+        metadata: &ConversationMetadata,
     ) -> Result<(), StorageError> {
         self.0.lock().map_err(|_| StorageError::Unavailable)?.execute(
             "INSERT INTO conversations (id, metadata) VALUES (?1, ?2) ON CONFLICT(id) DO UPDATE SET metadata=excluded.metadata",
-            params![summary.id.to_string(), serde_json::to_string(summary)?],
+            params![metadata.id.to_string(), serde_json::to_string(metadata)?],
         )?;
         Ok(())
     }

@@ -1,13 +1,13 @@
 import { Channel, invoke } from "@tauri-apps/api/core";
 import type {
   Conversation,
-  ConversationSummary,
+  ConversationMetadata,
   ConversationUpdate,
   PreparedAgent,
 } from "../model/types";
 
 export function listConversations() {
-  return invoke<ConversationSummary[]>("list_conversations");
+  return invoke<ConversationMetadata[]>("list_conversations");
 }
 
 export function selectWorkingFolder(agentId: string) {
@@ -55,7 +55,7 @@ export function subscribeConversation(
 }
 
 export function subscribeConversationList(
-  receive: (entries: ConversationSummary[]) => void,
+  receive: (entries: ConversationMetadata[]) => void,
   failed: () => void,
 ): () => void {
   return subscribe("subscribe_conversation_list", {}, receive, failed);
@@ -70,8 +70,8 @@ function subscribe<T>(
   const channel = new Channel<T>();
   let disposed = false;
   let subscription: string | undefined;
-  channel.onmessage = (snapshot) => {
-    if (!disposed) receive(snapshot);
+  channel.onmessage = (update) => {
+    if (!disposed) receive(update);
   };
   const unsubscribe = (subscription: string) => {
     void invoke("unsubscribe_conversation", { subscription }).catch(() => {

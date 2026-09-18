@@ -31,6 +31,8 @@ Status: complete
 
 ## Comments
 
+- 2026-09-18 용어 정리: `summary()`와 `ConversationSummary`를 `metadata()`와 `ConversationMetadata`로 바꾸고, 대화 상태를 가리키던 `snapshot`은 `conversation`으로 바꿨다. 구독 메시지도 `kind: conversation`과 `conversation` 필드로 통일했다. 저장된 JSON 필드와 DB 스키마는 바뀌지 않는다.
+
 - 2026-09-18 후속 사용자 결정: 큐는 별도 테이블 대신 기존 `conversations` 행의 `queued_messages` JSON 컬럼에 저장한다. DB v4 마이그레이션으로 v3 큐를 메시지 ID·내용·순서 그대로 옮기고 이전 테이블을 제거한다. 빈 큐는 `[]`로 저장하며 대화 행은 유지한다. 전송·중단 정책은 동일하다.
 - 후속 검증: v3 데이터 이전·순서 보존·삭제·빈 큐 재복원 테스트를 추가했다. Rust 전체 68개 통과(실연결 4개 제외), Clippy와 포맷 검사를 통과했고 Standards/Spec 리뷰 지적은 없다.
 

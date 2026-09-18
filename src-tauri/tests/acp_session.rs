@@ -91,9 +91,9 @@ async fn shared_connection_isolates_sessions_permissions_and_cancellation() {
     let mut stream = subscribe(&conversations, first.id);
     let waiting = tokio::time::timeout(Duration::from_secs(5), async {
         loop {
-            let snapshot = stream.recv().await.unwrap();
-            if !snapshot.permissions.is_empty() {
-                break snapshot;
+            let conversation = stream.recv().await.unwrap();
+            if !conversation.permissions.is_empty() {
+                break conversation;
             }
         }
     })
@@ -169,13 +169,13 @@ async fn real_codex_concurrent_sessions_keep_approval_and_queue_isolated() {
     let mut first_stream = subscribe(&conversations, first.id);
     let waiting = tokio::time::timeout(Duration::from_secs(120), async {
         loop {
-            let snapshot = first_stream.recv().await.unwrap();
-            if snapshot.status == ConversationStatus::WaitingForApproval {
-                break snapshot;
+            let conversation = first_stream.recv().await.unwrap();
+            if conversation.status == ConversationStatus::WaitingForApproval {
+                break conversation;
             }
             assert!(
-                matches!(snapshot.status, ConversationStatus::Running),
-                "Expected permission: {snapshot:?}"
+                matches!(conversation.status, ConversationStatus::Running),
+                "Expected permission: {conversation:?}"
             );
         }
     })
@@ -191,11 +191,11 @@ async fn real_codex_concurrent_sessions_keep_approval_and_queue_isolated() {
     let mut second_stream = subscribe(&conversations, second.id);
     let finished = tokio::time::timeout(Duration::from_secs(120), async {
         loop {
-            let snapshot = second_stream.recv().await.unwrap();
-            if snapshot.status == ConversationStatus::SessionReady
-                || snapshot.status == ConversationStatus::Failed
+            let conversation = second_stream.recv().await.unwrap();
+            if conversation.status == ConversationStatus::SessionReady
+                || conversation.status == ConversationStatus::Failed
             {
-                break snapshot;
+                break conversation;
             }
         }
     })
@@ -307,10 +307,10 @@ async fn failed_queue_storage_does_not_acknowledge_or_send_input() {
         .send_message(draft.id, "must not be acknowledged".into())
         .is_err());
     writer.execute_batch("ROLLBACK").unwrap();
-    let snapshot = conversations.get(draft.id).unwrap();
-    assert!(snapshot.queued_messages.is_empty());
+    let conversation = conversations.get(draft.id).unwrap();
+    assert!(conversation.queued_messages.is_empty());
     conversations
-        .cancel_turn(draft.id, snapshot.turns[0].id)
+        .cancel_turn(draft.id, conversation.turns[0].id)
         .unwrap();
     assert_eq!(settle(&conversations, draft.id).await.turns.len(), 1);
     conversations.shutdown().await;
@@ -345,9 +345,9 @@ async fn failed_removal_storage_keeps_the_followup_without_dispatching_it() {
     std::fs::write(gate, "continue").unwrap();
     let completed = tokio::time::timeout(Duration::from_secs(20), async {
         loop {
-            let snapshot = updates.recv().await.unwrap();
-            if snapshot.status == ConversationStatus::SessionReady {
-                break snapshot;
+            let conversation = updates.recv().await.unwrap();
+            if conversation.status == ConversationStatus::SessionReady {
+                break conversation;
             }
         }
     })
@@ -572,10 +572,10 @@ async fn restart_of_an_approval_wait_restores_only_metadata_without_replaying_th
     .unwrap();
     first.shutdown().await;
     let restored = Conversations::with_store(vec![agent], store).unwrap();
-    let snapshot = restored.get(draft.id).unwrap();
-    assert!(snapshot.interrupted);
-    assert!(snapshot.permissions.is_empty());
-    assert!(snapshot.turns.is_empty());
+    let conversation = restored.get(draft.id).unwrap();
+    assert!(conversation.interrupted);
+    assert!(conversation.permissions.is_empty());
+    assert!(conversation.turns.is_empty());
     assert!(restored
         .answer_permission(draft.id, permission, "arbitrary-allow".into())
         .is_err());
@@ -685,11 +685,11 @@ async fn real_codex_restores_history_and_context_after_process_and_core_restart(
     let original = tokio::time::timeout(Duration::from_secs(120), async {
         let mut updates = subscribe(&first, draft.id);
         loop {
-            let snapshot = updates.recv().await.unwrap();
-            if snapshot.status == ConversationStatus::SessionReady
-                || snapshot.status == ConversationStatus::Failed
+            let conversation = updates.recv().await.unwrap();
+            if conversation.status == ConversationStatus::SessionReady
+                || conversation.status == ConversationStatus::Failed
             {
-                break snapshot;
+                break conversation;
             }
         }
     })
@@ -722,11 +722,11 @@ async fn real_codex_restores_history_and_context_after_process_and_core_restart(
     let answer = tokio::time::timeout(Duration::from_secs(120), async {
         let mut updates = subscribe(&restored, draft.id);
         loop {
-            let snapshot = updates.recv().await.unwrap();
-            if snapshot.status == ConversationStatus::SessionReady
-                || snapshot.status == ConversationStatus::Failed
+            let conversation = updates.recv().await.unwrap();
+            if conversation.status == ConversationStatus::SessionReady
+                || conversation.status == ConversationStatus::Failed
             {
-                break snapshot;
+                break conversation;
             }
         }
     })
@@ -756,13 +756,13 @@ async fn cancels_only_the_active_turn_and_continues_the_same_session() {
         .unwrap();
     let active = tokio::time::timeout(Duration::from_secs(5), async {
         loop {
-            let snapshot = stream.recv().await.unwrap();
-            if snapshot
+            let conversation = stream.recv().await.unwrap();
+            if conversation
                 .turns
                 .last()
                 .is_some_and(|turn| turn.response == "Started")
             {
-                break snapshot;
+                break conversation;
             }
         }
     })
@@ -813,15 +813,15 @@ async fn settle(
 ) -> atte_lib::conversation::Conversation {
     tokio::time::timeout(Duration::from_secs(5), async {
         loop {
-            let snapshot = conversations.get(id).unwrap();
+            let conversation = conversations.get(id).unwrap();
             if !matches!(
-                snapshot.status,
+                conversation.status,
                 ConversationStatus::Connecting
                     | ConversationStatus::Running
                     | ConversationStatus::WaitingForApproval
                     | ConversationStatus::Cancelling
             ) {
-                return snapshot;
+                return conversation;
             }
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
@@ -903,10 +903,10 @@ async fn process_exit_after_session_creation_is_observable() {
     );
     tokio::time::timeout(Duration::from_secs(5), async {
         loop {
-            let snapshot = conversations.get(draft.id).unwrap();
-            if snapshot.status == ConversationStatus::Failed {
+            let conversation = conversations.get(draft.id).unwrap();
+            if conversation.status == ConversationStatus::Failed {
                 assert_eq!(
-                    snapshot.failure,
+                    conversation.failure,
                     Some(atte_lib::conversation::ConnectionFailure::ProcessExited)
                 );
                 break;
@@ -1002,12 +1002,12 @@ async fn real_codex_initializes_and_creates_a_session() {
     conversations.connect(draft.id).unwrap();
     let connected = tokio::time::timeout(Duration::from_secs(35), async {
         loop {
-            let snapshot = conversations.get(draft.id).unwrap();
+            let conversation = conversations.get(draft.id).unwrap();
             if !matches!(
-                snapshot.status,
+                conversation.status,
                 ConversationStatus::Connecting | ConversationStatus::Running
             ) {
-                break snapshot;
+                break conversation;
             }
             tokio::time::sleep(Duration::from_millis(50)).await;
         }
@@ -1135,9 +1135,9 @@ async fn resubscription_is_coherent_and_detaching_does_not_stop_a_turn() {
     std::fs::write(gate, "continue").unwrap();
     let completed = tokio::time::timeout(Duration::from_secs(5), async {
         loop {
-            let snapshot = conversations.get(draft.id).unwrap();
-            if snapshot.status == ConversationStatus::SessionReady {
-                break snapshot;
+            let conversation = conversations.get(draft.id).unwrap();
+            if conversation.status == ConversationStatus::SessionReady {
+                break conversation;
             }
             tokio::task::yield_now().await;
         }
@@ -1394,13 +1394,13 @@ async fn real_codex_streams_and_continues_without_file_changes() {
 
 struct TranscriptSubscription {
     receiver: tokio::sync::mpsc::UnboundedReceiver<atte_lib::conversation::ConversationUpdate>,
-    snapshot: Option<atte_lib::conversation::Conversation>,
+    conversation: Option<atte_lib::conversation::Conversation>,
 }
 
 fn subscribe(conversations: &Conversations, id: uuid::Uuid) -> TranscriptSubscription {
     TranscriptSubscription {
         receiver: conversations.subscribe(id).unwrap(),
-        snapshot: None,
+        conversation: None,
     }
 }
 
@@ -1408,26 +1408,28 @@ impl TranscriptSubscription {
     async fn recv(&mut self) -> Option<atte_lib::conversation::Conversation> {
         use atte_lib::conversation::ConversationUpdate;
         match self.receiver.recv().await? {
-            ConversationUpdate::Snapshot { snapshot } => self.snapshot = Some(*snapshot),
+            ConversationUpdate::Conversation { conversation } => {
+                self.conversation = Some(*conversation)
+            }
             ConversationUpdate::TextDelta {
                 conversation_id,
                 revision,
                 turn_id,
                 text,
             } => {
-                let snapshot = self
-                    .snapshot
+                let conversation = self
+                    .conversation
                     .as_mut()
-                    .expect("initial snapshot precedes deltas");
-                assert_eq!(conversation_id, snapshot.id);
-                assert_eq!(revision, snapshot.revision + 1);
-                let turn = snapshot.turns.last_mut().unwrap();
+                    .expect("initial conversation precedes deltas");
+                assert_eq!(conversation_id, conversation.id);
+                assert_eq!(revision, conversation.revision + 1);
+                let turn = conversation.turns.last_mut().unwrap();
                 assert_eq!(turn_id, turn.id);
                 turn.response.push_str(&text);
-                snapshot.revision = revision;
+                conversation.revision = revision;
             }
         }
-        self.snapshot.clone()
+        self.conversation.clone()
     }
 }
 

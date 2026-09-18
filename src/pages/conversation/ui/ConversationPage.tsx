@@ -25,7 +25,7 @@ import {
 } from "../api/conversations";
 import {
   type Conversation,
-  type ConversationSummary,
+  type ConversationMetadata,
   type ConversationUpdate,
   failureMessages,
   statusLabels,
@@ -50,7 +50,7 @@ export function ConversationPage(props: {
   const [pendingFolder, setPendingFolder] = createSignal<string>();
   let listVersion = 0;
   const [history, { refetch: reloadList, mutate: updateList }] = createResource(
-    async (): Promise<ConversationSummary[]> => {
+    async (): Promise<ConversationMetadata[]> => {
       try {
         const version = listVersion;
         setListError(false);
@@ -117,15 +117,18 @@ export function ConversationPage(props: {
     !sending() &&
     !streamError();
 
-  function applySnapshot(snapshot: Conversation) {
+  function applyConversation(updatedConversation: Conversation) {
     const current = conversation();
-    if (current?.id === snapshot.id && snapshot.revision >= current.revision) {
-      remember(snapshot);
-      setConversation(snapshot);
+    if (
+      current?.id === updatedConversation.id &&
+      updatedConversation.revision >= current.revision
+    ) {
+      remember(updatedConversation);
+      setConversation(updatedConversation);
     }
   }
 
-  function remember(snapshot: Conversation) {
+  function remember(updatedConversation: Conversation) {
     listVersion++;
     const {
       id,
@@ -138,8 +141,8 @@ export function ConversationPage(props: {
       updatedAt,
       failure,
       interrupted,
-    } = snapshot;
-    const summary = {
+    } = updatedConversation;
+    const metadata = {
       id,
       title,
       workingFolder,
@@ -152,7 +155,7 @@ export function ConversationPage(props: {
       interrupted,
     };
     updateList((previous) => [
-      summary,
+      metadata,
       ...(previous ?? []).filter((entry) => entry.id !== id),
     ]);
   }
@@ -163,12 +166,12 @@ export function ConversationPage(props: {
     const attempt = ++selection;
     setError(undefined);
     try {
-      const snapshot = await getConversation(id);
+      const updatedConversation = await getConversation(id);
       if (attempt !== selection) return;
-      setConversation(snapshot);
+      setConversation(updatedConversation);
       setMessage("");
       setConnectionRejected(false);
-      if (snapshot.status === "disconnected") void connect();
+      if (updatedConversation.status === "disconnected") void connect();
     } catch (cause) {
       if (attempt === selection)
         setError(errorMessage(cause, "대화를 열 수 없습니다."));
@@ -176,8 +179,8 @@ export function ConversationPage(props: {
   }
 
   function applyUpdate(update: ConversationUpdate) {
-    if (update.kind === "snapshot") {
-      applySnapshot(update.snapshot);
+    if (update.kind === "conversation") {
+      applyConversation(update.conversation);
       return;
     }
     const current = conversation();
@@ -225,9 +228,9 @@ export function ConversationPage(props: {
     setSending(true);
     setError(undefined);
     try {
-      const snapshot = await sendMessage(current.id, message());
+      const updatedConversation = await sendMessage(current.id, message());
       if (conversation()?.id === current.id) {
-        applySnapshot(snapshot);
+        applyConversation(updatedConversation);
         setMessage("");
       }
     } catch (cause) {
@@ -242,8 +245,8 @@ export function ConversationPage(props: {
     const current = conversation();
     if (!current) return;
     try {
-      const snapshot = await deleteQueuedMessage(current.id, id);
-      applySnapshot(snapshot);
+      const updatedConversation = await deleteQueuedMessage(current.id, id);
+      applyConversation(updatedConversation);
     } catch (cause) {
       if (conversation()?.id === current.id)
         setError(errorMessage(cause, "대기 메시지를 삭제할 수 없습니다."));
@@ -256,7 +259,7 @@ export function ConversationPage(props: {
     setAnswering(request);
     setError(undefined);
     try {
-      applySnapshot(await answerPermission(current.id, request, option));
+      applyConversation(await answerPermission(current.id, request, option));
     } catch (cause) {
       if (conversation()?.id === current.id)
         setError(errorMessage(cause, "승인 응답을 전달할 수 없습니다."));
@@ -272,7 +275,7 @@ export function ConversationPage(props: {
     setCancelling(turn);
     setError(undefined);
     try {
-      applySnapshot(await cancelTurn(current.id, turn));
+      applyConversation(await cancelTurn(current.id, turn));
     } catch (cause) {
       if (conversation()?.id === current.id)
         setError(errorMessage(cause, "작업을 중단할 수 없습니다."));
@@ -288,8 +291,9 @@ export function ConversationPage(props: {
     setConnectionRejected(false);
     setError(undefined);
     try {
-      const snapshot = await connectConversation(draft.id);
-      if (conversation()?.id === draft.id) applySnapshot(snapshot);
+      const updatedConversation = await connectConversation(draft.id);
+      if (conversation()?.id === draft.id)
+        applyConversation(updatedConversation);
     } catch (cause) {
       if (conversation()?.id === draft.id) {
         setConnectionRejected(true);

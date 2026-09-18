@@ -17,8 +17,8 @@ vi.mock("@tauri-apps/api/core", () => ({
   },
 }));
 let receiveUpdate: (update: Record<string, unknown>) => void;
-const receive = (snapshot: Record<string, unknown>) =>
-  receiveUpdate({ kind: "snapshot", snapshot });
+const receive = (conversation: Record<string, unknown>) =>
+  receiveUpdate({ kind: "conversation", conversation });
 afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
@@ -215,7 +215,7 @@ it("keeps the saved list accessible without agents and restores on selection onl
   ).toBe(false);
 });
 
-it("loads selected history once and keeps newer list metadata when an older snapshot arrives", async () => {
+it("loads selected history once and keeps newer list metadata when an older conversation arrives", async () => {
   const saved = {
     id: "saved-1",
     title: "저장된 제목",
@@ -522,19 +522,19 @@ it("shows authentication failures and retries only when requested", async () => 
     agentId: "codex",
     status: "disconnected",
   };
-  let snapshot = draft;
+  let conversation = draft;
   requests.mockImplementation(async (command) => {
     if (command === "select_working_folder") return draft;
     if (command === "connect_conversation") {
-      snapshot = { ...draft, status: "failed" };
+      conversation = { ...draft, status: "failed" };
       return {
-        ...snapshot,
+        ...conversation,
         authentication: "required",
         failure: "authenticationRequired",
       };
     }
     return {
-      ...snapshot,
+      ...conversation,
       authentication: "required",
       failure: "authenticationRequired",
     };
@@ -1418,7 +1418,7 @@ it("replaces the composer with agent choices and restores the draft after one de
 });
 
 it.each(["running", "waitingForApproval"])(
-  "can stop a %s turn and ignores a late snapshot",
+  "can stop a %s turn and ignores a late conversation",
   async (status) => {
     const turn = {
       id: "turn-1",

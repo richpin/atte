@@ -1,13 +1,13 @@
-use super::{mpsc, ConversationSummary, HashMap, Uuid};
+use super::{mpsc, ConversationMetadata, HashMap, Uuid};
 
 #[derive(Default)]
 pub(super) struct ConversationList {
-    pub entries: HashMap<Uuid, ConversationSummary>,
-    subscribers: Vec<mpsc::UnboundedSender<Vec<ConversationSummary>>>,
+    pub entries: HashMap<Uuid, ConversationMetadata>,
+    subscribers: Vec<mpsc::UnboundedSender<Vec<ConversationMetadata>>>,
 }
 
 impl ConversationList {
-    pub fn snapshot(&self) -> Vec<ConversationSummary> {
+    pub fn sorted_entries(&self) -> Vec<ConversationMetadata> {
         let mut entries: Vec<_> = self.entries.values().cloned().collect();
         entries.sort_by(|a, b| {
             b.updated_at
@@ -17,16 +17,16 @@ impl ConversationList {
         entries
     }
 
-    pub fn publish(&mut self, summary: ConversationSummary) {
-        self.entries.insert(summary.id, summary);
-        let snapshot = self.snapshot();
+    pub fn publish(&mut self, metadata: ConversationMetadata) {
+        self.entries.insert(metadata.id, metadata);
+        let entries = self.sorted_entries();
         self.subscribers
-            .retain(|subscriber| subscriber.send(snapshot.clone()).is_ok());
+            .retain(|subscriber| subscriber.send(entries.clone()).is_ok());
     }
 
-    pub fn subscribe(&mut self) -> mpsc::UnboundedReceiver<Vec<ConversationSummary>> {
+    pub fn subscribe(&mut self) -> mpsc::UnboundedReceiver<Vec<ConversationMetadata>> {
         let (sender, receiver) = mpsc::unbounded_channel();
-        let _ = sender.send(self.snapshot());
+        let _ = sender.send(self.sorted_entries());
         self.subscribers
             .retain(|subscriber| !subscriber.is_closed());
         self.subscribers.push(sender);

@@ -11,7 +11,7 @@ use std::{
 use tokio::sync::{mpsc, oneshot};
 use uuid::Uuid;
 
-/// A local snapshot. Creation does not establish an agent session.
+/// A local conversation. Creation does not establish an agent session.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Conversation {
@@ -47,10 +47,10 @@ pub struct QueuedMessage {
     pub text: String,
 }
 
-/// The entire durable record and list interface. Content never crosses this seam.
+/// Metadata for listing and reconnecting conversations, excluding content and queued input.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct ConversationSummary {
+pub struct ConversationMetadata {
     pub id: Uuid,
     pub title: String,
     pub working_folder: PathBuf,
@@ -64,8 +64,8 @@ pub struct ConversationSummary {
 }
 
 impl Conversation {
-    fn summary(&self) -> ConversationSummary {
-        ConversationSummary {
+    fn metadata(&self) -> ConversationMetadata {
+        ConversationMetadata {
             id: self.id,
             title: self.title.clone(),
             working_folder: self.working_folder.clone(),
@@ -233,7 +233,7 @@ impl Conversations {
                         | ConversationStatus::WaitingForApproval
                         | ConversationStatus::Cancelling
                 );
-            let snapshot = Conversation {
+            let conversation = Conversation {
                 id: saved.id,
                 title: saved.title,
                 working_folder: saved.working_folder,
@@ -253,11 +253,11 @@ impl Conversations {
                 queued_messages: store.queued_messages(saved.id)?,
             };
             entries.insert(
-                snapshot.id,
+                conversation.id,
                 Entry {
                     state: Arc::new(Mutex::new(ConversationState {
                         list: list.clone(),
-                        snapshot,
+                        conversation,
                         generation: 0,
                         subscribers: Vec::new(),
                         permissions: HashMap::new(),
@@ -275,8 +275,8 @@ impl Conversations {
                         .state
                         .lock()
                         .map_err(|_| StorageError::Unavailable)?
-                        .snapshot
-                        .summary(),
+                        .conversation
+                        .metadata(),
                 );
         }
         Ok(Self {
@@ -291,14 +291,18 @@ impl Conversations {
         })
     }
 
-    pub fn list(&self) -> Result<Vec<ConversationSummary>, ConversationError> {
-        Ok(self.list.lock().map_err(|_| unavailable())?.snapshot())
+    pub fn list(&self) -> Result<Vec<ConversationMetadata>, ConversationError> {
+        Ok(self
+            .list
+            .lock()
+            .map_err(|_| unavailable())?
+            .sorted_entries())
     }
 
     /// Subscribes to list metadata even for conversations that are not open in a view.
     pub fn subscribe_list(
         &self,
-    ) -> Result<mpsc::UnboundedReceiver<Vec<ConversationSummary>>, ConversationError> {
+    ) -> Result<mpsc::UnboundedReceiver<Vec<ConversationMetadata>>, ConversationError> {
         Ok(self.list.lock().map_err(|_| unavailable())?.subscribe())
     }
 
@@ -345,22 +349,22 @@ impl Conversations {
             agents.retain(|agent| agent.id != id);
             for entry in state.entries.values_mut() {
                 let mut current = entry.state.lock().map_err(|_| unavailable())?;
-                if current.snapshot.agent_id != id {
+                if current.conversation.agent_id != id {
                     continue;
                 }
                 current.generation += 1;
-                current.snapshot.interrupted |= matches!(
-                    current.snapshot.status,
+                current.conversation.interrupted |= matches!(
+                    current.conversation.status,
                     ConversationStatus::Running
                         | ConversationStatus::WaitingForApproval
                         | ConversationStatus::Cancelling
                 );
-                current.snapshot.status = ConversationStatus::Failed;
-                current.snapshot.failure = Some(ConnectionFailure::AgentRemoved);
-                current.snapshot.authentication = AuthenticationStatus::Unknown;
+                current.conversation.status = ConversationStatus::Failed;
+                current.conversation.failure = Some(ConnectionFailure::AgentRemoved);
+                current.conversation.authentication = AuthenticationStatus::Unknown;
                 current.clear_permissions();
                 if let Some(turn) = current
-                    .snapshot
+                    .conversation
                     .turns
                     .last_mut()
                     .filter(|turn| turn.stop_reason.is_none())
@@ -446,7 +450,7 @@ impl Conversations {
         }
         if let Some(store) = &self.store {
             store
-                .save_conversation(&draft.summary())
+                .save_conversation(&draft.metadata())
                 .map_err(|error| ConversationError::Unavailable(error.to_string()))?;
         }
         state.entries.insert(
@@ -454,7 +458,7 @@ impl Conversations {
             Entry {
                 state: Arc::new(Mutex::new(ConversationState {
                     list: self.list.clone(),
-                    snapshot: draft.clone(),
+                    conversation: draft.clone(),
                     generation: 0,
                     subscribers: Vec::new(),
                     permissions: HashMap::new(),
@@ -466,24 +470,24 @@ impl Conversations {
         self.list
             .lock()
             .map_err(|_| unavailable())?
-            .publish(draft.summary());
+            .publish(draft.metadata());
         Ok(draft)
     }
 
-    /// Retrieves the current snapshot by its app-owned ID.
+    /// Retrieves the current conversation by its app-owned ID.
     ///
     /// # Errors
     /// Returns an error for an unknown ID or unavailable application state.
     pub fn get(&self, id: Uuid) -> Result<Conversation, ConversationError> {
         let state = self.lock()?;
         let entry = state.entries.get(&id).ok_or_else(not_found)?;
-        let snapshot = entry
+        let conversation = entry
             .state
             .lock()
             .map_err(|_| unavailable())?
-            .snapshot
+            .conversation
             .clone();
-        Ok(snapshot)
+        Ok(conversation)
     }
 
     /// Starts one connection attempt. Concurrent requests return the same state.
@@ -496,32 +500,32 @@ impl Conversations {
         }
         let entry = state.entries.get_mut(&id).ok_or_else(not_found)?;
         let mut current = entry.state.lock().map_err(|_| unavailable())?;
-        let mut snapshot = current.snapshot.clone();
+        let mut conversation = current.conversation.clone();
         if matches!(
-            snapshot.status,
+            conversation.status,
             ConversationStatus::Connecting
                 | ConversationStatus::SessionReady
                 | ConversationStatus::Running
                 | ConversationStatus::WaitingForApproval
                 | ConversationStatus::Cancelling
         ) {
-            return Ok(snapshot);
+            return Ok(conversation);
         }
-        if !snapshot.working_folder.is_dir() {
+        if !conversation.working_folder.is_dir() {
             return Err(ConversationError::InvalidWorkingFolder(
                 "작업 폴더를 찾을 수 없습니다. 폴더를 다시 선택해주세요.".into(),
             ));
         }
         let Some(agent) = agents
             .iter()
-            .find(|agent| agent.id == snapshot.agent_id)
+            .find(|agent| agent.id == conversation.agent_id)
             .cloned()
         else {
-            if current.snapshot.status != ConversationStatus::Failed
-                || current.snapshot.failure != Some(ConnectionFailure::AgentRemoved)
+            if current.conversation.status != ConversationStatus::Failed
+                || current.conversation.failure != Some(ConnectionFailure::AgentRemoved)
             {
-                current.snapshot.status = ConversationStatus::Failed;
-                current.snapshot.failure = Some(ConnectionFailure::AgentRemoved);
+                current.conversation.status = ConversationStatus::Failed;
+                current.conversation.failure = Some(ConnectionFailure::AgentRemoved);
                 current.publish();
             }
             return Err(ConversationError::NotReady(
@@ -529,13 +533,13 @@ impl Conversations {
             ));
         };
         let handle = tokio::runtime::Handle::try_current().map_err(|_| unavailable())?;
-        snapshot.status = ConversationStatus::Connecting;
-        snapshot.authentication = AuthenticationStatus::Unknown;
-        snapshot.failure = None;
+        conversation.status = ConversationStatus::Connecting;
+        conversation.authentication = AuthenticationStatus::Unknown;
+        conversation.failure = None;
         current.generation += 1;
-        current.snapshot = snapshot;
+        current.conversation = conversation;
         current.publish();
-        let snapshot = current.snapshot.clone();
+        let conversation = current.conversation.clone();
         let updates = RuntimeUpdates {
             authentication: self.authentication.clone(),
             state: entry.state.clone(),
@@ -543,7 +547,7 @@ impl Conversations {
         };
         let (prompts, requests) = mpsc::unbounded_channel();
         let (cancellations, cancelled) = mpsc::unbounded_channel();
-        let folder = snapshot.working_folder.clone();
+        let folder = conversation.working_folder.clone();
         entry.runtime = Some(SessionCommands {
             prompts,
             cancellations,
@@ -551,7 +555,7 @@ impl Conversations {
         drop(current);
         let session = crate::agent_runtime::Session {
             id,
-            remote_session: snapshot.remote_session_id.clone(),
+            remote_session: conversation.remote_session_id.clone(),
             updates,
             prompts: requests,
             cancellations: cancelled,
@@ -585,16 +589,16 @@ impl Conversations {
             state.runtimes.last_mut().ok_or_else(unavailable)?
         };
         if let Err(error) = runtime.sessions.send(session) {
-            error.0.updates.modify(None, |snapshot| {
-                snapshot.status = ConversationStatus::Failed;
-                snapshot.failure = Some(ConnectionFailure::ConnectionClosed);
+            error.0.updates.modify(None, |conversation| {
+                conversation.status = ConversationStatus::Failed;
+                conversation.failure = Some(ConnectionFailure::ConnectionClosed);
             });
             return Err(unavailable());
         }
-        Ok(snapshot)
+        Ok(conversation)
     }
 
-    /// Atomically subscribes to a snapshot and every subsequent revision.
+    /// Atomically subscribes to a conversation and every subsequent revision.
     /// Dropping the receiver does not stop the conversation.
     pub fn subscribe(
         &self,
@@ -604,8 +608,8 @@ impl Conversations {
         let entry = state.entries.get(&id).ok_or_else(not_found)?;
         let mut current = entry.state.lock().map_err(|_| unavailable())?;
         let (sender, receiver) = mpsc::unbounded_channel();
-        let _ = sender.send(ConversationUpdate::Snapshot {
-            snapshot: Box::new(current.snapshot.clone()),
+        let _ = sender.send(ConversationUpdate::Conversation {
+            conversation: Box::new(current.conversation.clone()),
         });
         current
             .subscribers
@@ -628,12 +632,12 @@ impl Conversations {
         let entry = state.entries.get(&id).ok_or_else(not_found)?;
         let mut current = entry.state.lock().map_err(|_| unavailable())?;
         if matches!(
-            current.snapshot.status,
+            current.conversation.status,
             ConversationStatus::Running
                 | ConversationStatus::WaitingForApproval
                 | ConversationStatus::Cancelling
         ) {
-            let mut queue = current.snapshot.queued_messages.clone();
+            let mut queue = current.conversation.queued_messages.clone();
             queue.push(QueuedMessage {
                 id: Uuid::new_v4(),
                 text,
@@ -642,7 +646,7 @@ impl Conversations {
             current.publish();
             return Ok(());
         }
-        if current.snapshot.status != ConversationStatus::SessionReady {
+        if current.conversation.status != ConversationStatus::SessionReady {
             return Err(ConversationError::NotReady(
                 "응답이 완료된 연결된 대화에서 전송해주세요.".into(),
             ));
@@ -656,13 +660,13 @@ impl Conversations {
                 text: text.clone(),
             })
             .map_err(|_| unavailable())?;
-        current.snapshot.status = ConversationStatus::Running;
-        current.snapshot.failure = None;
-        current.snapshot.interrupted = false;
-        if current.snapshot.title == "새 대화" {
-            current.snapshot.title = text.trim().chars().take(60).collect();
+        current.conversation.status = ConversationStatus::Running;
+        current.conversation.failure = None;
+        current.conversation.interrupted = false;
+        if current.conversation.title == "새 대화" {
+            current.conversation.title = text.trim().chars().take(60).collect();
         }
-        current.snapshot.turns.push(Turn {
+        current.conversation.turns.push(Turn {
             id: turn,
             message: text,
             response: String::new(),
@@ -677,7 +681,7 @@ impl Conversations {
         let state = self.lock()?;
         let entry = state.entries.get(&id).ok_or_else(not_found)?;
         let mut current = entry.state.lock().map_err(|_| unavailable())?;
-        let mut queue = current.snapshot.queued_messages.clone();
+        let mut queue = current.conversation.queued_messages.clone();
         let index = queue
             .iter()
             .position(|item| item.id == message)
@@ -695,16 +699,16 @@ impl Conversations {
         let state = self.lock()?;
         let entry = state.entries.get(&id).ok_or_else(not_found)?;
         let mut current = entry.state.lock().map_err(|_| unavailable())?;
-        if current.snapshot.turns.last().map(|item| item.id) != Some(turn) {
+        if current.conversation.turns.last().map(|item| item.id) != Some(turn) {
             return Err(ConversationError::NotReady(
                 "이미 종료된 작업입니다.".into(),
             ));
         }
-        if current.snapshot.status == ConversationStatus::Cancelling {
+        if current.conversation.status == ConversationStatus::Cancelling {
             return Ok(());
         }
         if !matches!(
-            current.snapshot.status,
+            current.conversation.status,
             ConversationStatus::Running | ConversationStatus::WaitingForApproval
         ) {
             return Err(ConversationError::NotReady(
@@ -718,7 +722,7 @@ impl Conversations {
             .cancellations
             .send(turn)
             .map_err(|_| unavailable())?;
-        current.snapshot.status = ConversationStatus::Cancelling;
+        current.conversation.status = ConversationStatus::Cancelling;
         current.clear_permissions();
         current.publish();
         Ok(())
@@ -734,8 +738,8 @@ impl Conversations {
         let state = self.lock()?;
         let entry = state.entries.get(&id).ok_or_else(not_found)?;
         let mut current = entry.state.lock().map_err(|_| unavailable())?;
-        if current.snapshot.status != ConversationStatus::WaitingForApproval
-            || !current.snapshot.permissions.iter().any(|permission| {
+        if current.conversation.status != ConversationStatus::WaitingForApproval
+            || !current.conversation.permissions.iter().any(|permission| {
                 permission.id == request
                     && permission.options.iter().any(|choice| choice.id == option)
             })
@@ -750,11 +754,11 @@ impl Conversations {
             .ok_or_else(unavailable)?;
         let result = response.send(option).map_err(|_| unavailable());
         current
-            .snapshot
+            .conversation
             .permissions
             .retain(|permission| permission.id != request);
-        if current.snapshot.permissions.is_empty() {
-            current.snapshot.status = ConversationStatus::Running;
+        if current.conversation.permissions.is_empty() {
+            current.conversation.status = ConversationStatus::Running;
         }
         current.publish();
         result
@@ -770,13 +774,13 @@ impl Conversations {
             state.closed = true;
             for entry in state.entries.values_mut() {
                 if let Ok(mut current) = entry.state.lock() {
-                    current.snapshot.interrupted |= matches!(
-                        current.snapshot.status,
+                    current.conversation.interrupted |= matches!(
+                        current.conversation.status,
                         ConversationStatus::Running
                             | ConversationStatus::WaitingForApproval
                             | ConversationStatus::Cancelling
                     );
-                    current.snapshot.status = ConversationStatus::Disconnected;
+                    current.conversation.status = ConversationStatus::Disconnected;
                     current.clear_permissions();
                     current.publish();
                     current.generation += 1;
@@ -834,7 +838,7 @@ pub(crate) struct Prompt {
 struct ConversationState {
     list: Arc<Mutex<list::ConversationList>>,
     store: Option<Arc<Store>>,
-    snapshot: Conversation,
+    conversation: Conversation,
     generation: u64,
     subscribers: Vec<mpsc::UnboundedSender<ConversationUpdate>>,
     permissions: HashMap<Uuid, oneshot::Sender<String>>,
@@ -844,35 +848,35 @@ impl ConversationState {
     fn save_queue(&mut self, queue: Vec<QueuedMessage>) -> Result<(), ConversationError> {
         if let Some(store) = &self.store {
             store
-                .save_queue(&self.snapshot.summary(), &queue)
+                .save_queue(&self.conversation.metadata(), &queue)
                 .map_err(|error| ConversationError::Unavailable(error.to_string()))?;
         }
-        self.snapshot.queued_messages = queue;
+        self.conversation.queued_messages = queue;
         Ok(())
     }
 
     fn clear_permissions(&mut self) {
         // Dropped senders resolve every pending ACP request as cancelled.
         self.permissions.clear();
-        self.snapshot.permissions.clear();
+        self.conversation.permissions.clear();
     }
 
     fn publish(&mut self) {
-        self.snapshot.updated_at = now();
+        self.conversation.updated_at = now();
         if let Some(store) = &self.store {
-            self.snapshot.storage_error = store
-                .save_conversation(&self.snapshot.summary())
+            self.conversation.storage_error = store
+                .save_conversation(&self.conversation.metadata())
                 .err()
                 .map(|error| error.to_string());
         }
-        self.snapshot.revision += 1;
+        self.conversation.revision += 1;
         if let Ok(mut list) = self.list.lock() {
-            list.publish(self.snapshot.summary());
+            list.publish(self.conversation.metadata());
         }
         self.subscribers.retain(|sender| {
             sender
-                .send(ConversationUpdate::Snapshot {
-                    snapshot: Box::new(self.snapshot.clone()),
+                .send(ConversationUpdate::Conversation {
+                    conversation: Box::new(self.conversation.clone()),
                 })
                 .is_ok()
         });
@@ -890,8 +894,8 @@ fn now() -> u64 {
 #[derive(Clone, Debug, Serialize)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum ConversationUpdate {
-    Snapshot {
-        snapshot: Box<Conversation>,
+    Conversation {
+        conversation: Box<Conversation>,
     },
     TextDelta {
         #[serde(rename = "conversationId")]
@@ -920,40 +924,40 @@ impl RuntimeUpdates {
         let mut state = self.state.lock().ok()?;
         if state.generation != self.generation
             || !matches!(
-                state.snapshot.status,
+                state.conversation.status,
                 ConversationStatus::Running
                     | ConversationStatus::WaitingForApproval
                     | ConversationStatus::Cancelling
             )
-            || state.snapshot.turns.last().map(|item| item.id) != Some(turn)
+            || state.conversation.turns.last().map(|item| item.id) != Some(turn)
         {
             return None;
         }
-        let cancelled = state.snapshot.status == ConversationStatus::Cancelling;
-        state.snapshot.interrupted =
+        let cancelled = state.conversation.status == ConversationStatus::Cancelling;
+        state.conversation.interrupted =
             cancelled || reason == agent_client_protocol::schema::v1::StopReason::Cancelled;
-        if let Some(turn) = state.snapshot.turns.last_mut() {
+        if let Some(turn) = state.conversation.turns.last_mut() {
             turn.stop_reason = serde_json::to_value(reason)
                 .ok()
                 .and_then(|value| value.as_str().map(str::to_owned));
         }
-        state.snapshot.status = ConversationStatus::SessionReady;
-        state.snapshot.authentication = AuthenticationStatus::Authenticated;
+        state.conversation.status = ConversationStatus::SessionReady;
+        state.conversation.authentication = AuthenticationStatus::Authenticated;
         state.clear_permissions();
         let next = if !cancelled
             && reason == agent_client_protocol::schema::v1::StopReason::EndTurn
-            && !state.snapshot.queued_messages.is_empty()
+            && !state.conversation.queued_messages.is_empty()
         {
-            let mut queue = state.snapshot.queued_messages.clone();
+            let mut queue = state.conversation.queued_messages.clone();
             let queued = queue.remove(0);
             if let Err(error) = state.save_queue(queue) {
-                state.snapshot.notice = Some(error.to_string());
+                state.conversation.notice = Some(error.to_string());
                 state.publish();
                 return None;
             }
             let turn = Uuid::new_v4();
-            state.snapshot.status = ConversationStatus::Running;
-            state.snapshot.turns.push(Turn {
+            state.conversation.status = ConversationStatus::Running;
+            state.conversation.turns.push(Turn {
                 id: turn,
                 message: queued.text.clone(),
                 response: String::new(),
@@ -978,17 +982,17 @@ impl RuntimeUpdates {
         let mut state = self.state.lock().ok()?;
         if state.generation != self.generation
             || !matches!(
-                state.snapshot.status,
+                state.conversation.status,
                 ConversationStatus::Running | ConversationStatus::WaitingForApproval
             )
-            || state.snapshot.turns.last().map(|item| item.id) != Some(turn)
+            || state.conversation.turns.last().map(|item| item.id) != Some(turn)
         {
             return None;
         }
         let (sender, receiver) = oneshot::channel();
         state.permissions.insert(request.id, sender);
-        state.snapshot.permissions.push(request);
-        state.snapshot.status = ConversationStatus::WaitingForApproval;
+        state.conversation.permissions.push(request);
+        state.conversation.status = ConversationStatus::WaitingForApproval;
         state.publish();
         Some(receiver)
     }
@@ -1001,7 +1005,7 @@ impl RuntimeUpdates {
             return;
         }
         if let Ok(mut authentication) = self.authentication.lock() {
-            authentication.insert(state.snapshot.agent_id.clone(), status);
+            authentication.insert(state.conversation.agent_id.clone(), status);
         }
     }
 
@@ -1011,20 +1015,20 @@ impl RuntimeUpdates {
         };
         if state.generation != self.generation
             || !matches!(
-                state.snapshot.status,
+                state.conversation.status,
                 ConversationStatus::Running | ConversationStatus::WaitingForApproval
             )
-            || state.snapshot.turns.last().map(|item| item.id) != Some(turn)
+            || state.conversation.turns.last().map(|item| item.id) != Some(turn)
         {
             return;
         }
-        if let Some(last) = state.snapshot.turns.last_mut() {
+        if let Some(last) = state.conversation.turns.last_mut() {
             last.response.push_str(&text);
         }
-        state.snapshot.revision += 1;
+        state.conversation.revision += 1;
         let change = ConversationUpdate::TextDelta {
-            conversation_id: state.snapshot.id,
-            revision: state.snapshot.revision,
+            conversation_id: state.conversation.id,
+            revision: state.conversation.revision,
             turn_id: turn,
             text,
         };
@@ -1042,18 +1046,18 @@ impl RuntimeUpdates {
         }
         if let Some(turn) = turn {
             if !matches!(
-                state.snapshot.status,
+                state.conversation.status,
                 ConversationStatus::Running
                     | ConversationStatus::WaitingForApproval
                     | ConversationStatus::Cancelling
-            ) || state.snapshot.turns.last().map(|item| item.id) != Some(turn)
+            ) || state.conversation.turns.last().map(|item| item.id) != Some(turn)
             {
                 return;
             }
         }
-        update(&mut state.snapshot);
+        update(&mut state.conversation);
         if !matches!(
-            state.snapshot.status,
+            state.conversation.status,
             ConversationStatus::Running | ConversationStatus::WaitingForApproval
         ) {
             state.clear_permissions();

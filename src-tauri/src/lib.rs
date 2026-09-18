@@ -7,7 +7,7 @@ mod installation_files;
 pub mod storage;
 
 use conversation::{
-    Conversation, ConversationError, ConversationSummary, ConversationUpdate, Conversations,
+    Conversation, ConversationError, ConversationMetadata, ConversationUpdate, Conversations,
 };
 use std::{
     collections::HashMap,
@@ -65,7 +65,7 @@ async fn create_conversation(
 #[tauri::command]
 fn list_conversations(
     conversations: State<'_, Conversations>,
-) -> Result<Vec<ConversationSummary>, ConversationError> {
+) -> Result<Vec<ConversationMetadata>, ConversationError> {
     conversations.list()
 }
 
@@ -149,7 +149,7 @@ async fn subscribe_conversation(
 
 #[tauri::command]
 async fn subscribe_conversation_list(
-    channel: tauri::ipc::Channel<Vec<ConversationSummary>>,
+    channel: tauri::ipc::Channel<Vec<ConversationMetadata>>,
     window: tauri::WebviewWindow,
     conversations: State<'_, Conversations>,
     subscriptions: State<'_, Subscriptions>,
@@ -185,8 +185,8 @@ fn forward_subscription<T: serde::Serialize + Send + 'static>(
         loop {
             tokio::select! {
                 _ = &mut stopped => break,
-                snapshot = receiver.recv() => match snapshot {
-                    Some(snapshot) => if channel.send(snapshot).is_err() { break; },
+                update = receiver.recv() => match update {
+                    Some(update) => if channel.send(update).is_err() { break; },
                     None => break,
                 }
             }
