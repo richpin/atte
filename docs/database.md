@@ -1,6 +1,6 @@
 # 로컬 DB 구조
 
-현재 스키마: SQLite v4. Rust의 `Store`가 DB 접근과 트랜잭션을 소유하며 설치 관리와 대화 module이 같은 저장소를 공유한다. 파일 위치는 Tauri 앱 데이터 폴더의 `atte.sqlite`이며, macOS 기본 위치는 `~/Library/Application Support/com.atte.app/atte.sqlite`다. 별도 DB 서버는 없다.
+현재 스키마: SQLite v1. Rust의 `Store`가 DB 접근과 트랜잭션을 소유하며 설치 관리와 대화 module이 같은 저장소를 공유한다. 파일 위치는 Tauri 앱 데이터 폴더의 `atte.sqlite`이며, macOS 기본 위치는 `~/Library/Application Support/com.atte.app/atte.sqlite`다. 별도 DB 서버는 없다.
 
 ## agents
 
@@ -62,11 +62,9 @@ Registry 갱신은 `registry_metadata`만 트랜잭션으로 교체한다. 목�
 
 ## 초기 스키마와 버전
 
-agents 중심 구조가 첫 제품 스키마 v1이다. 새 DB는 `001_agents.sql`, `002_conversations.sql`, `003_queued_messages.sql`, `004_conversation_queue_column.sql`을 순서대로 적용해 v4로 초기화한다. v4는 기존 `conversation_queues`의 메시지 배열을 해당 대화 행으로 옮긴 후 큐 테이블을 제거한다. 기존 DB는 현재 버전 이후의 마이그레이션만 적용하며 설치 산출물·버전·Registry 메타데이터·대화 메타데이터를 보존한다. 초기화와 마이그레이션은 하나의 트랜잭션이고 `PRAGMA user_version = 4`을 기록한다. 지원 버전보다 새 DB는 열지 않는다.
+출시 전에는 스키마 버전을 v1으로 유지하고 [초기 스키마](../src-tauri/schema.sql)를 직접 수정한다. 새 DB는 이 SQL 하나를 트랜잭션으로 실행하고 `PRAGMA user_version = 1`을 기록한다. 현재 구조의 v1 DB는 그대로 다시 연다. 버전별 업그레이드 마이그레이션은 제공하지 않으며, 이전 개발용 구조의 DB는 호환 대상으로 삼지 않는다. 앱은 기존 DB를 자동 삭제하거나 버전 번호를 낮추지 않는다. 버전이 1보다 높은 DB는 열지 않는다.
 
-제품 스키마 도입 전 개발용 v1–v4 변환 경로는 제거했다. 당시 agents-only 개발용 v4를 백업·구조 확인 후 v1로 맞추던 일회성 절차는 현재 제품 v4에 적용하지 않는다. 현재 v4에는 대화와 대기열 컬럼이 있으며 버전 번호를 낮추지 않는다. 옛 installations 기반 개발 DB는 제품 스키마와 호환되지 않는다.
-
-정의: [v1 SQL](../src-tauri/migrations/001_agents.sql), [v2 SQL](../src-tauri/migrations/002_conversations.sql), [v3 SQL](../src-tauri/migrations/003_queued_messages.sql), [v4 SQL](../src-tauri/migrations/004_conversation_queue_column.sql), [저장소](../src-tauri/src/storage.rs), [대화 interface](../src-tauri/src/conversation.rs), [삭제 처리](../src-tauri/src/agent_management/removal.rs).
+정의: [v1 SQL](../src-tauri/schema.sql), [저장소](../src-tauri/src/storage.rs), [대화 interface](../src-tauri/src/conversation.rs), [삭제 처리](../src-tauri/src/agent_management/removal.rs).
 
 ## 새로고침과 설치의 갱신 범위
 

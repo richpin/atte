@@ -31,6 +31,8 @@ Status: complete
 
 ## Comments
 
+- 2026-09-18 최종 DB 정책: 미출시 단계이므로 `schema.sql` 하나에 최종 구조를 정의하고 스키마 v1을 유지한다. 버전별 마이그레이션과 과거 스키마 fixture를 제거하고 초기화·재열기·큐 보존 테스트로 대체했다. 아래 v3/v4 마이그레이션 설명은 이전 개발 이력이며 현재 적용하지 않는다. 큐 저장 구조 수정 커밋은 기능 커밋에 합쳤다.
+
 - 2026-09-18 용어 정리: `summary()`와 `ConversationSummary`를 `metadata()`와 `ConversationMetadata`로 바꾸고, 대화 상태를 가리키던 `snapshot`은 `conversation`으로 바꿨다. 구독 메시지도 `kind: conversation`과 `conversation` 필드로 통일했다. 저장된 JSON 필드와 DB 스키마는 바뀌지 않는다.
 
 - 2026-09-18 후속 사용자 결정: 큐는 별도 테이블 대신 기존 `conversations` 행의 `queued_messages` JSON 컬럼에 저장한다. DB v4 마이그레이션으로 v3 큐를 메시지 ID·내용·순서 그대로 옮기고 이전 테이블을 제거한다. 빈 큐는 `[]`로 저장하며 대화 행은 유지한다. 전송·중단 정책은 동일하다.

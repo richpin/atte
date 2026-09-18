@@ -1,31 +1,16 @@
 use atte_lib::conversation::Conversations;
 
 #[test]
-fn migrates_separate_queues_into_conversation_rows_without_losing_order() {
+fn restores_queued_messages_in_order_and_keeps_the_conversation_after_deletion() {
     let root = tempfile::tempdir().unwrap();
     let path = root.path().join("atte.sqlite");
-    let original = Conversations::default();
+    let store = std::sync::Arc::new(atte_lib::storage::Store::open(&path).unwrap());
+    let original =
+        Conversations::with_store(vec![atte_lib::agent::prepared_codex()], store).unwrap();
     let draft = original.create(root.path()).unwrap();
     let empty = original.create(root.path()).unwrap();
+    drop(original);
     let database = rusqlite::Connection::open(&path).unwrap();
-    for migration in [
-        include_str!("../migrations/001_agents.sql"),
-        include_str!("../migrations/002_conversations.sql"),
-        include_str!("../migrations/003_queued_messages.sql"),
-    ] {
-        database.execute_batch(migration).unwrap();
-    }
-    for metadata in original.list().unwrap() {
-        database
-            .execute(
-                "INSERT INTO conversations VALUES (?1, ?2)",
-                rusqlite::params![
-                    metadata.id.to_string(),
-                    serde_json::to_string(&metadata).unwrap()
-                ],
-            )
-            .unwrap();
-    }
     let messages = vec![
         atte_lib::conversation::QueuedMessage {
             id: uuid::Uuid::new_v4(),
@@ -38,7 +23,7 @@ fn migrates_separate_queues_into_conversation_rows_without_losing_order() {
     ];
     database
         .execute(
-            "INSERT INTO conversation_queues VALUES (?1, ?2)",
+            "UPDATE conversations SET queued_messages=?2 WHERE id=?1",
             rusqlite::params![
                 draft.id.to_string(),
                 serde_json::to_string(&messages).unwrap()
@@ -75,7 +60,6 @@ fn migrates_separate_queues_into_conversation_rows_without_losing_order() {
         .unwrap();
     assert_eq!(saved, "[]");
     assert_eq!(restored.list().unwrap().len(), 2);
-    assert!(!database.table_exists(None, "conversation_queues").unwrap());
     drop(restored);
     let reopened = Conversations::with_store(
         vec![],

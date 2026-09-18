@@ -60,7 +60,7 @@ v2 초안에서는 prompt 응답이 수락만 나타낸다. 실행 종료는 `se
 
 Rust `Conversations`가 대화별 FIFO와 실행 정책을 소유하고 SolidJS는 해당 상태를 표시한다. [send_message](../../src-tauri/src/conversation.rs)는 실행 중 제출을 대기열에 저장하고, [ACP runtime](../../src-tauri/src/agent_runtime.rs)은 완료 시 stop reason을 전달한다. 준비 상태 전환 자체는 큐 실행 트리거로 사용하지 않는다.
 
-사용자 결정에 따라 SQLite v4에서는 기존 `conversations` 행의 `queued_messages` 컬럼에 `{id, text}` JSON 배열을 저장한다. v3의 별도 큐 테이블은 마이그레이션으로 대화 행에 합친다. 빈 큐는 `[]`이며 대화 행을 삭제하지 않는다. 배열 순서가 FIFO 순서이므로 별도 sequence나 전송 상태 컬럼을 두지 않는다. 추가 작업의 저장 성공 후에만 프론트엔드에 접수 성공을 알린다. 기존 메타데이터의 best-effort 저장 방식으로는 이 보장을 대체할 수 없다. 사용자 삭제와 전송을 위한 제거를 대화별로 직렬화하며 RPC 응답을 기다리는 동안 상태 잠금을 유지하지 않는다.
+사용자 결정에 따라 SQLite v1 초기 스키마의 `conversations` 행에 `queued_messages` 컬럼을 두고 `{id, text}` JSON 배열을 저장한다. 출시 전에는 초기 스키마를 직접 수정하고 별도 큐 테이블이나 업그레이드 마이그레이션을 두지 않는다. 빈 큐는 `[]`이며 대화 행을 삭제하지 않는다. 배열 순서가 FIFO 순서이므로 별도 sequence나 전송 상태 컬럼을 두지 않는다. 추가 작업의 저장 성공 후에만 프론트엔드에 접수 성공을 알린다. 기존 메타데이터의 best-effort 저장 방식으로는 이 보장을 대체할 수 없다. 사용자 삭제와 전송을 위한 제거를 대화별로 직렬화하며 RPC 응답을 기다리는 동안 상태 잠금을 유지하지 않는다.
 
 Runtime은 기존 generation과 turn ID에 stop reason을 포함한 완료 결과를 전달한다. `end_turn`이며 해당 실행에 취소 의도가 없을 때만 FIFO 첫 항목을 선택한다. 같은 에이전트 실행 정의와 폴더의 대화는 연결을 공유하며, session ID별 라우팅과 active turn을 관리한다. FIFO는 대화별로 유지한다.
 

@@ -11,6 +11,10 @@ CREATE TABLE app_metadata (
     key TEXT PRIMARY KEY NOT NULL,
     value TEXT NOT NULL
 );
+-- Unsent input belongs to the conversation; array order is FIFO.
+CREATE TABLE conversations (
+    id TEXT PRIMARY KEY NOT NULL,
+    metadata TEXT NOT NULL,
+    queued_messages TEXT NOT NULL DEFAULT '[]'
+) STRICT;
 PRAGMA user_version = 1;
-INSERT INTO agents (id, installed_version, artifact_path, launch_definition)
-VALUES ('codex-acp', '1.12.0', '/installed/codex', '{"id":"codex-acp","name":"Codex","command":"/installed/node","args":["/installed/codex/adapter.js"],"env":{}}');

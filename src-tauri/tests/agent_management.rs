@@ -27,10 +27,10 @@ fn installation_survives_reopening_the_store() {
 }
 
 #[test]
-fn migrates_an_empty_database_and_reopens_schema_one() {
+fn initializes_an_empty_database_and_reopens_schema_one() {
     let root = tempfile::tempdir().unwrap();
     let path = root.path().join("atte.sqlite");
-    rusqlite::Connection::open(&path).unwrap();
+    let connection = rusqlite::Connection::open(&path).unwrap();
     assert!(Store::open(&path)
         .unwrap()
         .installations()
@@ -41,6 +41,18 @@ fn migrates_an_empty_database_and_reopens_schema_one() {
         .installations()
         .unwrap()
         .is_empty());
+    let version: u32 = connection
+        .pragma_query_value(None, "user_version", |row| row.get(0))
+        .unwrap();
+    assert_eq!(version, 1);
+    let tables: Vec<String> = connection
+        .prepare("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")
+        .unwrap()
+        .query_map([], |row| row.get(0))
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap();
+    assert_eq!(tables, ["agents", "app_metadata", "conversations"]);
 }
 
 #[test]
@@ -176,32 +188,6 @@ fn registry_selects_platform_binary_or_npm_and_excludes_other_agents() {
         .distribution("darwin-x86_64")
         .is_none());
     assert!(registry.target("other").is_none());
-}
-
-#[test]
-fn opens_the_oldest_committed_schema_fixture() {
-    let root = tempfile::tempdir().unwrap();
-    let path = root.path().join("atte.sqlite");
-    rusqlite::Connection::open(&path)
-        .unwrap()
-        .execute_batch(include_str!("fixtures/schema-v1.sql"))
-        .unwrap();
-    let installations = Store::open(&path).unwrap().installations().unwrap();
-    let connection = rusqlite::Connection::open(&path).unwrap();
-    let version: u32 = connection
-        .pragma_query_value(None, "user_version", |row| row.get(0))
-        .unwrap();
-    assert_eq!(version, 4);
-    let tables: Vec<String> = connection
-        .prepare("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")
-        .unwrap()
-        .query_map([], |row| row.get(0))
-        .unwrap()
-        .collect::<Result<_, _>>()
-        .unwrap();
-    assert_eq!(tables, ["agents", "app_metadata", "conversations"]);
-    assert_eq!(installations[0].definition.id, "codex-acp");
-    assert_eq!(installations[0].version, "1.12.0");
 }
 
 #[tokio::test]

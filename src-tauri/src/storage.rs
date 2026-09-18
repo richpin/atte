@@ -47,22 +47,11 @@ impl Store {
         let transaction = connection.transaction()?;
         let version: u32 =
             transaction.pragma_query_value(None, "user_version", |row| row.get(0))?;
-        if version > 4 {
+        if version > 1 {
             return Err(StorageError::NewerSchema);
         }
         if version == 0 {
-            transaction.execute_batch(include_str!("../migrations/001_agents.sql"))?;
-        }
-        if version < 2 {
-            transaction.execute_batch(include_str!("../migrations/002_conversations.sql"))?;
-        }
-        if version < 3 {
-            transaction.execute_batch(include_str!("../migrations/003_queued_messages.sql"))?;
-        }
-        if version < 4 {
-            transaction.execute_batch(include_str!(
-                "../migrations/004_conversation_queue_column.sql"
-            ))?;
+            transaction.execute_batch(include_str!("../schema.sql"))?;
         }
         transaction.commit()?;
         Ok(Self(Mutex::new(connection)))

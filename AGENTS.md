@@ -4,6 +4,7 @@ Use pnpm for SolidJS/TypeScript and Cargo for Rust.
 Prefix commit messages with the appropriate Conventional Commit type (for example, `feat:`, `fix:`, `docs:`, or `chore:`).
 Create or update README.md only when explicitly requested.
 Keep code and documentation in sync.
+Until the first release, keep the database at schema v1 by updating the initial schema directly, without upgrade migrations.
 Write test fixtures and helper programs in the project's existing Rust or TypeScript stack, using its existing toolchain and dependencies.
 
 Study how established products solve the problem before designing a solution. Adopt their proven patterns and conventions rather than inventing an approach from scratch.
