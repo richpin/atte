@@ -52,6 +52,9 @@ it("shows registry icons and falls back for missing or failed images", async () 
   });
   try {
     render(() => <App />);
+    await userEvent.click(
+      screen.getByRole("button", { name: "에이전트 관리" }),
+    );
     await screen.findByRole("heading", { name: "Available" });
     await waitFor(() => expect(images).toHaveLength(2));
     fireEvent.load(images[0]);
@@ -84,6 +87,7 @@ beforeEach(() => {
   );
   vi.resetAllMocks();
   vi.mocked(invoke).mockImplementation((command, args) => {
+    if (command === "list_conversations") return Promise.resolve([]);
     if (command === "prepared_agents")
       return Promise.resolve([{ id: "codex", name: "Codex" }]);
     if (command === "subscribe_conversation") {
@@ -94,6 +98,191 @@ beforeEach(() => {
     if (command === "unsubscribe_conversation") return Promise.resolve();
     return requests(command, args);
   });
+});
+
+it("keeps the saved list accessible without agents and restores on selection only", async () => {
+  const saved = {
+    id: "saved-1",
+    title: "지난 작업",
+    agentId: "missing-agent",
+    workingFolder: "/project",
+    status: "disconnected",
+    remoteSessionId: "remote-7",
+    turns: [],
+    permissions: [],
+    revision: 0,
+    failure: null,
+  };
+  vi.mocked(invoke).mockImplementation(async (command, args) => {
+    if (command === "prepared_agents" || command === "agent_catalog") return [];
+    if (command === "list_conversations") return [saved];
+    if (command === "get_conversation") return saved;
+    if (command === "connect_conversation")
+      return {
+        ...saved,
+        status: "failed",
+        failure: "agentRemoved",
+        revision: 1,
+      };
+    if (command === "subscribe_conversation") {
+      receiveUpdate = (args as { channel: { onmessage: typeof receiveUpdate } })
+        .channel.onmessage;
+      return "subscription";
+    }
+  });
+  render(() => <App />);
+  await screen.findByRole("button", { name: /지난 작업/ });
+  expect(screen.queryByRole("heading", { name: "에이전트 관리" })).toBeNull();
+  expect(
+    vi
+      .mocked(invoke)
+      .mock.calls.some(([command]) => command === "connect_conversation"),
+  ).toBe(false);
+  await userEvent.click(screen.getByRole("button", { name: /지난 작업/ }));
+  await screen.findByText(/에이전트를 설치한 뒤/);
+  await userEvent.click(
+    screen.getByRole("button", { name: "설치·인증 관리 열기" }),
+  );
+  await screen.findByRole("heading", { name: "에이전트 관리" });
+  expect(
+    vi
+      .mocked(invoke)
+      .mock.calls.some(([command]) => command === "send_message"),
+  ).toBe(false);
+});
+
+it("loads selected history once and keeps newer list metadata when an older snapshot arrives", async () => {
+  const saved = {
+    id: "saved-1",
+    title: "저장된 제목",
+    agentId: "codex",
+    workingFolder: "/project",
+    status: "disconnected",
+    remoteSessionId: "remote-7",
+    turns: [],
+    permissions: [],
+    revision: 0,
+    failure: null,
+  };
+  const original = vi.mocked(invoke).getMockImplementation();
+  vi.mocked(invoke).mockImplementation((command, args) => {
+    if (command === "list_conversations") return Promise.resolve([saved]);
+    if (command === "get_conversation") return Promise.resolve(saved);
+    if (command === "connect_conversation")
+      return Promise.resolve({ ...saved, status: "connecting", revision: 1 });
+    return original?.(command, args) ?? Promise.resolve();
+  });
+  render(() => <App />);
+  await userEvent.click(
+    await screen.findByRole("button", { name: /저장된 제목/ }),
+  );
+  await screen.findByText("이전 대화를 불러오는 중…");
+  expect(screen.getByRole("button", { name: "전송" })).toHaveProperty(
+    "disabled",
+    true,
+  );
+  receive({
+    ...saved,
+    title: "복원한 제목",
+    status: "sessionReady",
+    revision: 3,
+    turns: [
+      {
+        id: "old-turn",
+        message: "과거 질문",
+        response: "과거 답변",
+        stopReason: null,
+      },
+    ],
+  });
+  expect(await screen.findAllByText("과거 답변")).toHaveLength(1);
+  receive({ ...saved, revision: 1 });
+  expect(screen.getByRole("button", { name: /복원한 제목/ })).toBeTruthy();
+  expect(screen.queryByRole("button", { name: /저장된 제목/ })).toBeNull();
+  await userEvent.type(screen.getByRole("textbox"), "작성 중인 질문");
+  await userEvent.click(screen.getByRole("button", { name: /복원한 제목/ }));
+  expect(screen.getByRole("textbox")).toHaveProperty("value", "작성 중인 질문");
+  expect(
+    vi
+      .mocked(invoke)
+      .mock.calls.filter(([command]) => command === "get_conversation"),
+  ).toHaveLength(1);
+  expect(
+    vi
+      .mocked(invoke)
+      .mock.calls.filter(([command]) => command === "connect_conversation"),
+  ).toHaveLength(1);
+  expect(
+    vi
+      .mocked(invoke)
+      .mock.calls.some(([command]) => command === "send_message"),
+  ).toBe(false);
+});
+
+it("returns from setup to the same conversation and resumes only after an explicit retry", async () => {
+  const saved = {
+    id: "saved-auth",
+    title: "인증이 필요한 작업",
+    agentId: "codex",
+    workingFolder: "/project",
+    status: "disconnected",
+    remoteSessionId: "same-remote",
+    turns: [],
+    permissions: [],
+    revision: 0,
+    failure: null,
+  };
+  let attempts = 0;
+  const original = vi.mocked(invoke).getMockImplementation();
+  vi.mocked(invoke).mockImplementation((command, args) => {
+    if (command === "list_conversations") return Promise.resolve([saved]);
+    if (command === "get_conversation") return Promise.resolve(saved);
+    if (command === "agent_catalog" || command === "refresh_agent_catalog")
+      return Promise.resolve([]);
+    if (command === "connect_conversation") {
+      expect(args).toEqual({ id: saved.id });
+      attempts++;
+      return Promise.resolve(
+        attempts === 1
+          ? {
+              ...saved,
+              status: "failed",
+              failure: "authenticationRequired",
+              revision: 1,
+            }
+          : {
+              ...saved,
+              status: "sessionReady",
+              revision: 2,
+              notice:
+                "기존 맥락을 재개했습니다. 이 에이전트는 이전 메시지 표시를 지원하지 않습니다.",
+            },
+      );
+    }
+    return original?.(command, args) ?? Promise.resolve();
+  });
+  render(() => <App />);
+  await userEvent.click(
+    await screen.findByRole("button", { name: /인증이 필요한 작업/ }),
+  );
+  await userEvent.click(
+    await screen.findByRole("button", { name: "로그인 안내 열기" }),
+  );
+  await userEvent.click(
+    screen.getByRole("button", { name: "대화로 돌아가기" }),
+  );
+  expect(screen.getByRole("heading", { name: saved.title })).toBeTruthy();
+  expect(attempts).toBe(1);
+  await userEvent.click(screen.getByRole("button", { name: "다시 연결" }));
+  expect(
+    await screen.findByText(/이전 메시지 표시를 지원하지 않습니다/),
+  ).toBeTruthy();
+  expect(attempts).toBe(2);
+  expect(
+    vi
+      .mocked(invoke)
+      .mock.calls.some(([command]) => command === "send_message"),
+  ).toBe(false);
 });
 
 it("automatically connects a new conversation and disables sending while connecting", async () => {
@@ -111,7 +300,7 @@ it("automatically connects a new conversation and disables sending while connect
     .mockResolvedValueOnce({ ...draft, status: "connecting", revision: 1 });
   render(() => <App />);
   await userEvent.click(screen.getByRole("button", { name: "폴더 선택" }));
-  expect(await screen.findByText("/Users/test/작업")).toBeTruthy();
+  expect(await screen.findByTitle("/Users/test/작업")).toBeTruthy();
   expect(screen.getByRole("heading", { name: "새 대화" })).toBeTruthy();
   expect(screen.getByText("연결 중…")).toBeTruthy();
   expect(invoke).toHaveBeenCalledWith("connect_conversation", {
@@ -177,9 +366,9 @@ it("keeps the current conversation when another folder selection is cancelled", 
     .mockResolvedValueOnce(null);
   render(() => <App />);
   await userEvent.click(screen.getByRole("button", { name: "폴더 선택" }));
-  await screen.findByText("/Users/test/project");
+  await screen.findByTitle("/Users/test/project");
   await userEvent.click(screen.getByRole("button", { name: "폴더 선택" }));
-  expect(screen.getByText("/Users/test/project")).toBeTruthy();
+  expect(screen.getByTitle("/Users/test/project")).toBeTruthy();
   expect(screen.queryByRole("alert")).toBeNull();
 });
 
@@ -347,12 +536,14 @@ it("shows process exit after readiness without reconnecting automatically", asyn
 
 it("keeps the existing conversation's agent fixed when selecting a target for the next one", async () => {
   vi.mocked(invoke).mockImplementation((command, args) =>
-    command === "prepared_agents"
-      ? Promise.resolve([
-          { id: "codex", name: "Codex" },
-          { id: "fixture", name: "Fixture" },
-        ])
-      : requests(command, args),
+    command === "list_conversations"
+      ? Promise.resolve([])
+      : command === "prepared_agents"
+        ? Promise.resolve([
+            { id: "codex", name: "Codex" },
+            { id: "fixture", name: "Fixture" },
+          ])
+        : requests(command, args),
   );
   requests.mockResolvedValue({
     revision: 0,
@@ -378,7 +569,10 @@ it("keeps the existing conversation's agent fixed when selecting a target for th
 });
 
 it("reports prepared-agent loading failure without crashing the page", async () => {
-  vi.mocked(invoke).mockRejectedValue(new Error("offline"));
+  vi.mocked(invoke).mockImplementation(async (command) => {
+    if (command === "list_conversations") return [];
+    throw new Error("offline");
+  });
   render(() => <App />);
   expect((await screen.findByRole("alert")).textContent).toContain(
     "에이전트를 불러올 수 없습니다",
@@ -413,6 +607,41 @@ it("shows a removed working folder error from the connection command", async () 
     requests.mock.calls.filter(
       ([command]) => command === "connect_conversation",
     ),
+  ).toHaveLength(1);
+});
+
+it("sends with Enter, inserts a newline with Shift+Enter, and preserves IME composition", async () => {
+  const ready = {
+    id: "draft-1",
+    workingFolder: "/project",
+    agentId: "codex",
+    status: "sessionReady",
+    revision: 2,
+    turns: [],
+  };
+  requests.mockResolvedValue(ready);
+  render(() => <App />);
+  await userEvent.click(screen.getByRole("button", { name: "폴더 선택" }));
+  const input = screen.getByRole("textbox");
+  await userEvent.type(input, "첫 줄");
+  fireEvent.keyDown(input, { key: "Enter", isComposing: true });
+  fireEvent.keyDown(input, { key: "Enter", keyCode: 229 });
+  fireEvent.keyDown(input, { key: "Enter", repeat: true });
+  await userEvent.keyboard("{Shift>}{Enter}{/Shift}");
+  await userEvent.type(input, "둘째 줄");
+  expect(input).toHaveProperty("value", "첫 줄\n둘째 줄");
+  expect(
+    requests.mock.calls.filter(([command]) => command === "send_message"),
+  ).toHaveLength(0);
+  await userEvent.keyboard("{Enter}");
+  expect(requests).toHaveBeenCalledWith("send_message", {
+    id: "draft-1",
+    text: "첫 줄\n둘째 줄",
+  });
+  await waitFor(() => expect(input).toHaveProperty("value", ""));
+  await userEvent.keyboard("{Enter}");
+  expect(
+    requests.mock.calls.filter(([command]) => command === "send_message"),
   ).toHaveLength(1);
 });
 
@@ -613,7 +842,7 @@ it("does not disable the new conversation when old subscription cleanup fails", 
   expect(screen.queryByRole("alert")).toBeNull();
 });
 
-it("opens agent management when no agent is installed", async () => {
+it("opens agent management when creating a conversation without an installed agent", async () => {
   vi.mocked(invoke).mockImplementation(async (command) => {
     if (command === "prepared_agents") return [];
     if (command === "agent_catalog" || command === "refresh_agent_catalog")
@@ -636,6 +865,7 @@ it("opens agent management when no agent is installed", async () => {
       ];
   });
   render(() => <App />);
+  await userEvent.click(screen.getByRole("button", { name: "폴더 선택" }));
   expect(
     await screen.findByRole("heading", { name: "에이전트 관리" }),
   ).toBeTruthy();
@@ -716,6 +946,7 @@ it("retries a failed install and offers the installed agent without restarting",
     }
   });
   render(() => <App />);
+  await userEvent.click(screen.getByRole("button", { name: "에이전트 관리" }));
   await userEvent.click(
     await screen.findByRole("button", { name: "New Provider 설치" }),
   );
@@ -780,6 +1011,7 @@ it("shows new registry agents and unsupported reasons while keeping cached insta
       return agents;
   });
   render(() => <App />);
+  await userEvent.click(screen.getByRole("button", { name: "에이전트 관리" }));
   expect(
     await screen.findByRole("button", { name: "New Provider 설치" }),
   ).toHaveProperty("disabled", false);
@@ -833,7 +1065,7 @@ it("confirms uninstall, supports cancel and retry, and removes the agent from ne
   await userEvent.click(screen.getByRole("button", { name: "취소" }));
   expect(attempts).toBe(0);
   await userEvent.click(
-    screen.getByRole("button", { name: "New Provider 삭제" }),
+    await screen.findByRole("button", { name: "New Provider 삭제" }),
   );
   await userEvent.click(screen.getByRole("button", { name: "삭제 확인" }));
   expect(await screen.findByRole("alert")).toHaveProperty(
@@ -841,7 +1073,7 @@ it("confirms uninstall, supports cancel and retry, and removes the agent from ne
     "삭제 실패. 다시 시도해주세요.",
   );
   await userEvent.click(
-    screen.getByRole("button", { name: "New Provider 삭제" }),
+    await screen.findByRole("button", { name: "New Provider 삭제" }),
   );
   await userEvent.click(screen.getByRole("button", { name: "삭제 확인" }));
   expect(await screen.findByText(/삭제 완료/)).toBeTruthy();
@@ -857,7 +1089,7 @@ it("confirms uninstall, supports cancel and retry, and removes the agent from ne
   expect(screen.queryByRole("option", { name: "New Provider" })).toBeNull();
 });
 
-it("keeps conversation content after agent removal and prevents reconnecting its retired installation", async () => {
+it("keeps conversation content after agent removal and offers setup and explicit retry", async () => {
   const draft = {
     id: "removed-chat",
     workingFolder: "/Users/test/project",
@@ -887,10 +1119,11 @@ it("keeps conversation content after agent removal and prevents reconnecting its
     ],
   });
   expect(await screen.findByText("삭제 전 응답")).toBeTruthy();
+  expect(screen.getByText(/에이전트를 설치한 뒤/)).toBeTruthy();
+  expect(screen.getByRole("button", { name: "다시 연결" })).toBeTruthy();
   expect(
-    screen.getByText(/에이전트 삭제로 연결이 종료되었습니다/),
+    screen.getByRole("button", { name: "설치·인증 관리 열기" }),
   ).toBeTruthy();
-  expect(screen.queryByRole("button", { name: "다시 연결" })).toBeNull();
   expect(screen.getByRole("textbox")).toHaveProperty("disabled", true);
 });
 

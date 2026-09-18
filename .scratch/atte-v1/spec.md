@@ -14,17 +14,17 @@ Atte는 ACP Registry에서 지원 에이전트를 설치·관리하는 별도 �
 
 Rust Core가 에이전트 프로세스, ACP 연결, 대화 실행 상태, 승인 요청, 취소, 대기 메시지, 영속 데이터와 앱 수명주기를 소유한다. SolidJS UI는 Rust가 제공하는 대화 snapshot과 순서가 보장된 변경 스트림을 표시하고 사용자 의도를 좁은 Tauri 인터페이스로 전달한다.
 
-Atte는 표시용 대화 기록과 에이전트의 원격 세션 식별자를 함께 보관한다. 앱 재실행 시 기록을 즉시 열람할 수 있고, 사용자가 다음 메시지를 보낼 때 에이전트 capability와 인증 상태를 확인하여 실제 대화를 재개한다. 중단된 작업을 임의로 다시 실행하거나 승인 요청을 자동 허용하지 않는다.
+대화 본문과 맥락의 영구 원본은 에이전트가 소유한다. Atte는 목록과 재연결에 필요한 대화 메타데이터·원격 세션 참조를 저장하고, 앱 재실행 시 목록을 즉시 표시한다. 사용자가 대화를 선택하면 에이전트 capability에 따라 load로 본문과 맥락을 복원하거나, resume으로 본문 없이 맥락만 재개한다. 본문 복원에는 에이전트 연결이 필요하며 설치·인증 상태에 따라 실패할 수 있다. 메시지·도구 출력·승인 이력 전체를 앱 DB에 복제하지 않으며, 복원만으로 새 prompt를 보내거나 중단된 작업·승인 결정을 재실행하지 않는다.
 
 ## User Stories
 
-1. As an Atte user, I want to see the agent management screen when no agent is installed, so that I know what must be prepared before starting a conversation.
+1. As an Atte user, I want guidance to agent management when a conversation needs an unavailable agent, so that I can prepare it without losing access to the conversation list.
 2. As an Atte user, I want to discover agents from the ACP Registry in one catalog with platform compatibility shown, so that new agents can become available without an Atte code change.
 3. As an Atte user, I want agents to be obtained from the ACP Registry, so that installation uses the protocol ecosystem's official distribution metadata.
 4. As an Atte user, I want installation state, connection state, authentication state, and conversation readiness shown separately, so that one successful step is not mistaken for another.
 5. As an Atte user, I want to install and authenticate an agent from a dedicated management screen, so that setup does not clutter conversations.
 6. As an Atte user, I want authentication guidance to reflect the selected agent's advertised methods, so that I can complete the correct login flow.
-7. As an Atte user, I want my saved history to remain readable when an agent is missing or authentication expires, so that local records are not held hostage by runtime availability.
+7. As an Atte user, I want my conversation list to remain accessible when an agent is missing or authentication expires, with a clear recovery path when its content cannot be loaded.
 8. As an Atte user, I want to choose a local working folder before starting a conversation, so that every agent knows the intended project context.
 9. As an Atte user, I want to choose one installed agent when creating a conversation, so that the conversation has an explicit executor.
 10. As an Atte user, I want the selected agent fixed for the life of a conversation, so that its context and capabilities remain coherent.
@@ -55,10 +55,10 @@ Atte는 표시용 대화 기록과 에이전트의 원격 세션 식별자를 �
 35. As an Atte user, I want Atte never to auto-approve a request, so that tool execution always follows an explicit user or agent policy decision.
 36. As an Atte user, I want to cancel a turn while approval is pending, so that a blocked request does not trap the conversation.
 37. As an Atte user, I want an approval request in one conversation not to block another conversation, so that independent work remains usable.
-38. As an Atte user, I want conversations and display history restored when the app launches, so that I can orient myself before reconnecting an agent.
+38. As an Atte user, I want the conversation list restored when the app launches and content loaded from the agent when I open a conversation, so that Atte does not duplicate every transcript on disk.
 39. As an Atte user, I want an existing conversation to resume the agent's real prior context when supported, so that continuing work is more than replaying visible history.
-40. As an Atte user, I want a clear error when an agent cannot resume a conversation, so that local history is not presented as proof of restored agent context.
-41. As an Atte user, I want authentication requested only when reconnection or continuation requires it, so that offline history remains immediately available.
+40. As an Atte user, I want a clear error when an agent cannot resume a conversation and a notice when it can resume without showing prior messages, so that I understand what was restored.
+41. As an Atte user, I want authentication requested only when loading or continuing a conversation requires it, so that the conversation list remains immediately available.
 42. As an Atte user, I want connection failure and agent-process exit reflected in every affected conversation, so that stale running indicators do not mislead me.
 43. As an Atte user, I want an explicit retry after a connection failure, so that Atte does not repeatedly restart agents without my awareness.
 44. As an Atte user, I want closing the last window to leave active work running, so that ordinary macOS window management does not cancel tasks.
@@ -71,6 +71,7 @@ Atte는 표시용 대화 기록과 에이전트의 원격 세션 식별자를 �
 
 ## Implementation Decisions
 
+- The composer sends with Enter and inserts a newline with Shift+Enter. Enter used to confirm IME composition does not send a message. Keyboard submission uses the same readiness and duplicate-send guards as the send button.
 - The first version is a multi-slice build. The first tracer bullet ends at working folder selection, Codex-backed conversation creation, message send, and streamed response display. It is not the first-version completion boundary; persistence, actual resumption, independent concurrent conversations, queueing, approval, cancellation, lifecycle behavior, and agent management remain required.
 - The Rust Core owns OS access, child processes, ACP connections, authentication coordination, durable data, conversation execution state, and shutdown. The SolidJS frontend owns presentation state such as the selected conversation, expanded project groups, sidebar visibility, composer text, and temporary visual disclosure.
 - A deep conversation application module is the primary seam for both Tauri and integration tests. Its interface exposes user-level operations: inspect current state, create/open a conversation, send or queue a message, delete a queued message, cancel the active turn, answer an approval request, retry a failed connection, and subscribe to ordered changes. Callers do not construct ACP requests or manage processes.
@@ -82,20 +83,21 @@ Atte는 표시용 대화 기록과 에이전트의 원격 세션 식별자를 �
 - Installation, connection, authentication, and conversation readiness are distinct states. A process that initialized or a session that was created does not imply authentication is complete.
 - Agent management follows the Zed Registry architecture documented in docs/research/zed-registry-installation.md: a dynamic cached catalog, current-platform binary selection before npx, generic archive/package installation, and a shared managed Node runtime when needed. Binary formats include ZIP, tar.gz/tgz, tar.bz2/tbz2, and raw executables. Unsupported platforms and distribution types remain visible with reasons. No fixed provider allowlist or provider-specific download URLs are maintained.
 - Agent installation is managed from a separate screen using ACP Registry metadata. Installed artifacts, Registry identities, and resolved versions are tracked locally and survive Registry refresh failures or removal of an entry. A machine without Node/npm must support npx installation through an app-managed runtime. If no usable agent is installed, conversation creation routes to agent management.
-- A conversation has an Atte-owned stable identifier separate from the agent-issued session identifier. It records one working folder and one fixed agent. Remote identifiers are scoped by their connection/agent identity so equal strings from different agents cannot collide.
+- A conversation has an Atte-owned stable identifier separate from the agent-issued session identifier. It records one working folder and one fixed agent. Persisted session references are scoped by durable agent identity, not by a transient connection generation, so they survive process restarts and equal strings from different agents cannot collide.
 - Runtime status distinguishes at least idle, running, waiting for approval, connection failure, authentication required, cancelled, and unavailable. Status transitions belong to Rust; the frontend renders them without independently reconstructing protocol state.
 - One turn may run per conversation. Messages submitted during a non-idle turn become ordered queued messages. The next queued message is submitted only after the prior turn ends successfully; cancellation, failure, authentication loss, and unresolved approval do not silently drain the queue.
-- A queued message is persisted until sent or deleted. It is not editable in the first version. The UI shows one compact row per queued message, truncates long content, supports expand/collapse, and provides only a delete action.
+- A queued message is persisted until sent or deleted. It is Atte-owned unsent input, not a copy of an agent transcript; once sent it is not retained as local display history. It is not editable in the first version. The UI shows one compact row per queued message, truncates long content, supports expand/collapse, and provides only a delete action.
 - Turn cancellation, conversation closure, record deletion, connection termination, and application quit are separate operations. Cancelling sends a session-scoped ACP cancellation and does not kill a shared connection or alter another conversation.
 - Each turn and connection generation is identified internally. Late output from a cancelled turn or replaced connection cannot mutate the current conversation snapshot.
 - Connection ownership is hidden behind the agent runtime module. Connections may be reused for conversations with the same agent, working scope, and execution configuration when supported, while the module may isolate agents that require separate processes. The frontend and stored conversation model do not depend on a fixed one-process-per-conversation or one-process-per-app policy.
 - A connection failure updates every conversation using that connection. Recovery is user-triggered. Resumption re-establishes subscriptions before loading a session so early replay events cannot be lost, and duplicate concurrent load attempts for the same conversation are coalesced.
-- Display history is stored by Atte independently of agent availability. Actual conversation resumption uses the agent's persisted session and declared capability; replaying Atte's display history is never treated as rebuilding agent context.
-- Durable storage includes installed-agent metadata, working folders, conversation metadata, remote session references, display messages and relevant tool/approval records, queued messages, timestamps, and terminal interruption/error state. Storage is Rust-owned, versioned through migrations, and accessed behind a storage interface. The concrete embedded database library is selected in the storage ticket after checking current maintained dependencies.
-- Streaming text is stored and emitted as ordered content updates. Persistence commits enough information to rebuild the final display after restart; the UI may coalesce rendering updates but cannot discard protocol order.
+- External conversation storage follows the [Zed source investigation](../../docs/research/zed-session-history.md): agents own durable transcripts and context; Atte stores lightweight list/reconnection metadata. Opening a known conversation connects to its agent and prefers `session/load` to reconstruct the in-memory transcript. If only `session/resume` is supported, context resumes with an explicit notice that previous messages are unavailable. If neither is supported or restoration fails, show the reason and do not substitute a new session.
+- The saved list is available without agents or authentication. Content availability depends on the agent's load capability and successful connection; offline full-transcript access is not guaranteed. Listing conversations at startup does not connect every agent or load every transcript. `session/list` is independent of load/resume and is not required to restore Atte's known session references. Importing externally created sessions remains out of scope.
+- Durable storage includes installed-agent metadata, working folders, conversation IDs/titles/fixed agents, remote session references, timestamps, last interruption/error metadata, and Atte-owned unsent queued messages. It excludes transcript bodies, tool outputs, and approval history; no persistent transcript cache is introduced. Extend the Rust-owned SQLite/rusqlite store from ticket 04 with versioned migrations preserving installation records.
+- Streaming content and replay build an in-memory transcript and are emitted as ordered updates. Reuse an already open conversation; on reconnection rebuild from replay rather than append it to old content, and do not present a failed partial replay as complete. The UI may coalesce rendering updates but cannot discard protocol order. Avoiding disk duplication does not eliminate the memory/rendering cost of a large loaded conversation.
 - Approval requests belong to their conversation. The composer is replaced by a compact approval surface showing request context and agent-supplied choices. The working-folder label and actions share one footer row. A conversation-list indicator exposes approval waiting outside the selected conversation.
 - Atte never synthesizes or automatically chooses a permission option. If a turn is cancelled while permission is pending, the pending request is resolved as cancelled according to ACP and the requested action must not execute.
-- Closing a window is distinct from quitting the application. Rust-owned work remains active with no visible window. A full quit with active turns requires confirmation; confirmed quit cancels turns, resolves pending approvals, persists terminal state, and reaps managed child processes. Relaunch restores history and statuses but never replays interrupted prompts.
+- Closing a window is distinct from quitting the application. Rust-owned work remains active with no visible window. A full quit with active turns requires confirmation; confirmed quit cancels turns, resolves pending approvals, persists terminal-state metadata, and reaps managed child processes. Relaunch restores the list and unsent queued messages, marks previously active work as interrupted, and never resubmits prompts or approval decisions. Opening a conversation restores agent context/content without executing a new prompt or draining its queue.
 - The production frontend follows Feature-Sliced Design and Solid's fine-grained reactivity rules. The selected A/Workspace prototype is rewritten as production code rather than merged wholesale. Its durable decisions are project-grouped navigation, collapsible project rows with project-level creation, collapsible sidebar, compact header, right-aligned user bubbles, full-width unlabeled agent responses, compact queue rows, and composer-position approval.
 - The first version targets macOS. Capabilities and command scopes follow least privilege: working-folder inputs are validated again in Rust, agent processes receive only intentional arguments and environment, and the frontend is not given general shell or filesystem primitives.
 - First-version support claims distinguish implementation from verification. Codex is the real end-to-end validation target in the current authenticated environment. Other Registry agents, including Claude and Antigravity, use the same common paths, but catalog presence and successful installation do not imply verified authenticated compatibility.
@@ -109,7 +111,7 @@ Atte는 표시용 대화 기록과 에이전트의 원격 세션 식별자를 �
 - Concurrency tests verify that two conversations can run through one supported connection, output never crosses conversation identifiers, cancelling one does not cancel the other, and an approval wait in one does not prevent progress in another.
 - Queue tests verify FIFO submission after successful completion, deletion before submission, persistence across application reconstruction, and non-draining after cancellation, connection failure, or authentication failure.
 - Permission tests use option identifiers invented by the fake agent to prove common code does not rely on Codex-specific IDs. They verify allow, reject when supplied, cancellation, composer restoration state, and non-execution after cancellation.
-- Persistence tests construct the Rust application over a temporary store, create conversations and messages, reconstruct the application, and assert immediate history visibility plus the correct distinction between readable history and resumable agent state. Migration tests open the oldest committed schema fixture supported by the first version.
+- Persistence tests reconstruct the Rust application over a temporary store and assert immediate list visibility with preserved session references, without persisted transcript/tool/approval bodies. Content appears through agent replay after load; resume-only and unsupported agents have distinct UI outcomes. Tests cover missing agents, expired authentication, reinstall/retry, list-unsupported but load-capable agents, early/partial replay, duplicate loads, and stale output. Migration tests preserve installation records from the oldest committed schema fixture supported by the first version.
 - Lifecycle tests exercise window-close versus application-quit decisions through the Rust application interface and a thin Tauri adapter test where needed. They verify that window closure preserves work, quit reports active work, confirmed quit cancels and reaps processes, and restart never resubmits interrupted prompts.
 - SolidJS tests use the existing Testing Library and Vitest style. The Tauri adapter is replaced at the frontend seam, and tests operate through accessible controls to verify routing to agent management, folder/agent creation flow, project collapse and plus creation, sidebar toggle, message alignment structure, queue expansion/deletion, status indicators, approval replacement, and composer restoration.
 - UI tests assert roles, labels, visible content, enabled state, and dispatched user intentions rather than CSS implementation details. A small number of browser checks validate the chosen layout and responsive behavior because visual hierarchy cannot be proven through DOM assertions alone.
@@ -123,6 +125,7 @@ Atte는 표시용 대화 기록과 에이전트의 원격 세션 식별자를 �
 - Automatically creating a Git worktree for every conversation.
 - Worktree creation triggered by the first file mutation. This remains a required follow-up design after the core behaviors are verified.
 - Importing conversations created in external tools or listing every pre-existing agent session.
+- Persisting full external transcripts, tool outputs, or approval history in Atte, adding a disk transcript cache, or directly parsing provider-specific session files. Full content access without an available agent is not guaranteed.
 - Moving context or a conversation between different agents.
 - Changing the agent assigned to an existing conversation.
 - Reconstructing an agent's internal context solely from Atte's display history when the agent cannot load the original session.
@@ -139,6 +142,7 @@ Atte는 표시용 대화 기록과 에이전트의 원격 세션 식별자를 �
 
 ## Further Notes
 
+- 2026-09-18 사용자 결정: [Zed 외부 ACP 조사](../../docs/research/zed-session-history.md)를 근거로 전체 본문 영구 복제를 제외했다. 06은 목록·재연결 메타데이터 저장과 선택 시 load/resume을 담당한다. 에이전트 부재 시 전체 본문 열람 요구는 목록 접근과 복구 안내로 대체하며, 07의 미전송 대기 메시지 저장은 유지한다. 06 구현에서 DB v2에 목록·재연결 메타데이터 저장과 선택 시 load/resume을 추가했다. 미전송 대기 메시지 저장은 후속 07의 구현 범위다.
 - Product terminology comes from the repository domain glossary. In particular, “대화” is the user-facing durable concept; “세션” refers only to the agent protocol object when necessary.
 - The ACP validation prototype is preserved on `codex/prototype-acp-validation`. Its key evidence commits are `59d4e437e9193576f6c2a123a77214929a8078d1` and `65023dc16fc7d62e6065082f11e138e4b9f8385d`.
 - The UI prototype is preserved on `codex/prototype-ui`; the chosen refinements end at commit `b591a6e`.
@@ -147,7 +151,7 @@ Atte는 표시용 대화 기록과 에이전트의 원격 세션 식별자를 �
 
 ## 설치된 ACP 삭제
 
-에이전트 관리 화면에서 설치된 ACP를 확인 후 삭제할 수 있다. 해당 에이전트의 모든 연결과 진행 중인 작업을 종료한 뒤 설치 파일을 즉시 삭제한다. 파일 삭제 성공 후 설치 정보를 비우며 실패하면 설치 정보를 남겨 명시적으로 재시도할 수 있다. 기존 대화 내용, 다른 에이전트의 연결, 공용 Node 런타임, 로그인 정보와 작업 폴더는 유지한다. 삭제로 종료된 대화는 이전 실행 정의로 재연결하지 않으며, 재설치 후 새 대화를 시작한다.
+에이전트 관리 화면에서 설치된 ACP를 확인 후 삭제할 수 있다. 해당 에이전트의 모든 연결과 진행 중인 작업을 종료한 뒤 설치 파일을 즉시 삭제한다. 파일 삭제 성공 후 설치 정보를 비우며 실패하면 설치 정보를 남겨 명시적으로 재시도할 수 있다. 대화 목록 메타데이터·원격 세션 참조, 다른 에이전트의 연결, 공용 Node 런타임, 로그인 정보와 작업 폴더는 유지하며 에이전트 소유 세션 기록을 삭제 대상으로 삼지 않는다. 삭제로 종료된 대화는 이전 실행 정의로 재연결하지 않는다. 06에서 재설치 후 현재 설치 정의로 기존 세션의 명시적 load/resume 재시도를 제공한다. 성공 여부는 에이전트의 capability와 세션 보존 여부에 따르며, 실패를 새 세션 생성으로 대체하지 않는다.
 
 ## 에이전트 아이콘
 
@@ -155,4 +159,4 @@ Atte는 표시용 대화 기록과 에이전트의 원격 세션 식별자를 �
 
 ## 에이전트 저장 구조
 
-SQLite v1의 `agents`에서 Registry ID당 한 행으로 Registry 메타데이터와 현재 설치 정보를 함께 관리한다. 전체 Registry 갱신 시각만 `app_metadata`에 저장한다. `installation_source`와 삭제 대기 테이블은 사용하지 않는다. Registry 갱신은 설치 정보를 덮어쓰지 않으며 정상 설치에 대한 중복 설치 요청은 기존 설치를 사용한다. 변경된 배포를 설치하려면 삭제 후 설치한다. 상세 컬럼·마이그레이션·실패 처리는 [DB 구조](../../docs/database.md)를 따른다.
+SQLite v1에서 도입한 `agents`에서 Registry ID당 한 행으로 Registry 메타데이터와 현재 설치 정보를 함께 관리한다. 전체 Registry 갱신 시각만 `app_metadata`에 저장한다. `installation_source`와 삭제 대기 테이블은 사용하지 않는다. Registry 갱신은 설치 정보를 덮어쓰지 않으며 정상 설치에 대한 중복 설치 요청은 기존 설치를 사용한다. 변경된 배포를 설치하려면 삭제 후 설치한다. v2는 설치 정보를 보존하면서 대화 메타데이터용 `conversations`를 추가한다. 상세 컬럼·마이그레이션·실패 처리는 [DB 구조](../../docs/database.md)를 따른다.

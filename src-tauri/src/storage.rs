@@ -2,6 +2,7 @@
 use crate::{
     agent::AgentDefinition,
     agent_management::registry::{Registry, RegistryAgent},
+    conversation::ConversationSummary,
 };
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
@@ -25,9 +26,11 @@ pub struct StoredAgent {
 
 #[derive(Debug, thiserror::Error)]
 pub enum StorageError {
-    #[error("설치 정보를 저장하거나 불러올 수 없습니다. 앱 저장 폴더의 권한과 여유 공간을 확인해주세요.")]
+    #[error(
+        "앱 정보를 저장하거나 불러올 수 없습니다. 앱 저장 폴더의 권한과 여유 공간을 확인해주세요."
+    )]
     Database(#[from] rusqlite::Error),
-    #[error("설치 정보 형식을 읽을 수 없습니다.")]
+    #[error("저장 정보 형식을 읽을 수 없습니다.")]
     Data(#[from] serde_json::Error),
     #[error("더 새로운 앱의 저장소입니다. 앱을 업데이트해주세요.")]
     NewerSchema,
@@ -44,14 +47,35 @@ impl Store {
         let transaction = connection.transaction()?;
         let version: u32 =
             transaction.pragma_query_value(None, "user_version", |row| row.get(0))?;
-        if version > 1 {
+        if version > 2 {
             return Err(StorageError::NewerSchema);
         }
         if version == 0 {
             transaction.execute_batch(include_str!("../migrations/001_agents.sql"))?;
         }
+        if version < 2 {
+            transaction.execute_batch(include_str!("../migrations/002_conversations.sql"))?;
+        }
         transaction.commit()?;
         Ok(Self(Mutex::new(connection)))
+    }
+
+    pub(crate) fn conversations(&self) -> Result<Vec<ConversationSummary>, StorageError> {
+        let connection = self.0.lock().map_err(|_| StorageError::Unavailable)?;
+        let mut statement = connection.prepare("SELECT metadata FROM conversations")?;
+        let rows = statement.query_map([], |row| row.get::<_, String>(0))?;
+        rows.map(|row| Ok(serde_json::from_str(&row?)?)).collect()
+    }
+
+    pub(crate) fn save_conversation(
+        &self,
+        summary: &ConversationSummary,
+    ) -> Result<(), StorageError> {
+        self.0.lock().map_err(|_| StorageError::Unavailable)?.execute(
+            "INSERT INTO conversations (id, metadata) VALUES (?1, ?2) ON CONFLICT(id) DO UPDATE SET metadata=excluded.metadata",
+            params![summary.id.to_string(), serde_json::to_string(summary)?],
+        )?;
+        Ok(())
     }
 
     pub fn agents(&self) -> Result<Vec<StoredAgent>, StorageError> {

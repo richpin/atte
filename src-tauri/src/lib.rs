@@ -6,7 +6,9 @@ pub mod conversation;
 mod installation_files;
 pub mod storage;
 
-use conversation::{Conversation, ConversationError, ConversationUpdate, Conversations};
+use conversation::{
+    Conversation, ConversationError, ConversationSummary, ConversationUpdate, Conversations,
+};
 use std::{
     collections::HashMap,
     sync::{Arc, Mutex},
@@ -52,6 +54,13 @@ async fn select_working_folder(
 }
 
 #[tauri::command]
+fn list_conversations(
+    conversations: State<'_, Conversations>,
+) -> Result<Vec<ConversationSummary>, ConversationError> {
+    conversations.list()
+}
+
+#[tauri::command]
 fn get_conversation(
     id: Uuid,
     conversations: State<'_, Conversations>,
@@ -73,7 +82,7 @@ async fn connect_conversation(
 }
 
 #[tauri::command]
-fn send_message(
+async fn send_message(
     id: Uuid,
     text: String,
     conversations: State<'_, Conversations>,
@@ -83,7 +92,7 @@ fn send_message(
 }
 
 #[tauri::command]
-fn cancel_turn(
+async fn cancel_turn(
     id: Uuid,
     turn: Uuid,
     conversations: State<'_, Conversations>,
@@ -93,7 +102,7 @@ fn cancel_turn(
 }
 
 #[tauri::command]
-fn answer_permission(
+async fn answer_permission(
     id: Uuid,
     request: Uuid,
     option: String,
@@ -166,8 +175,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             let management = agent_management::AgentManagement::open(&app.path().app_data_dir()?)?;
-            let conversations = Conversations::new(Vec::new());
-            management.restore(&conversations)?;
+            let conversations = management.restore_conversations()?;
             app.manage(conversations);
             app.manage(management);
             Ok(())
@@ -188,6 +196,7 @@ pub fn run() {
             authenticate_agent,
             select_working_folder,
             get_conversation,
+            list_conversations,
             prepared_agents,
             connect_conversation,
             send_message,

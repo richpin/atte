@@ -1,6 +1,7 @@
-//! In-memory conversations, independent of the desktop and agent transport.
+//! Durable conversation identity and in-memory content, independent of desktop transport.
 use crate::agent::{prepared_codex, AgentDefinition, PreparedAgent};
-use serde::Serialize;
+use crate::storage::{StorageError, Store};
+use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
     path::{Path, PathBuf},
@@ -15,6 +16,11 @@ use uuid::Uuid;
 pub struct Conversation {
     /// App-owned identifier, independent of any remote session.
     pub id: Uuid,
+    pub title: String,
+    pub created_at: u64,
+    pub updated_at: u64,
+    pub interrupted: bool,
+    pub storage_error: Option<String>,
     /// Absolute working directory.
     pub working_folder: PathBuf,
     /// Fixed execution target for this conversation.
@@ -30,6 +36,39 @@ pub struct Conversation {
     pub turns: Vec<Turn>,
     pub notice: Option<String>,
     pub permissions: Vec<PermissionRequest>,
+}
+
+/// The entire durable record and list interface. Content never crosses this seam.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConversationSummary {
+    pub id: Uuid,
+    pub title: String,
+    pub working_folder: PathBuf,
+    pub agent_id: String,
+    pub remote_session_id: Option<String>,
+    pub created_at: u64,
+    pub updated_at: u64,
+    pub status: ConversationStatus,
+    pub failure: Option<ConnectionFailure>,
+    pub interrupted: bool,
+}
+
+impl Conversation {
+    fn summary(&self) -> ConversationSummary {
+        ConversationSummary {
+            id: self.id,
+            title: self.title.clone(),
+            working_folder: self.working_folder.clone(),
+            agent_id: self.agent_id.clone(),
+            remote_session_id: self.remote_session_id.clone(),
+            created_at: self.created_at,
+            updated_at: self.updated_at,
+            status: self.status.clone(),
+            failure: self.failure.clone(),
+            interrupted: self.interrupted,
+        }
+    }
 }
 
 /// A pending decision with agent-supplied labels and opaque choice identifiers.
@@ -49,7 +88,7 @@ pub struct PermissionOption {
 }
 
 /// Current agent connection state.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum ConversationStatus {
     /// A local draft with no remote session.
@@ -72,7 +111,7 @@ pub enum AuthenticationStatus {
 }
 
 /// Actionable connection failures without exposing agent payloads or credentials.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum ConnectionFailure {
     ExecutableNotFound,
@@ -85,6 +124,8 @@ pub enum ConnectionFailure {
     TimedOut,
     PromptFailed,
     AgentRemoved,
+    ResumptionUnsupported,
+    SessionRestorationFailed,
 }
 
 /// Failures exposed to application callers and the UI.
@@ -108,6 +149,7 @@ pub enum ConversationError {
 
 /// Owns conversation state and agent runtime lifetimes.
 pub struct Conversations {
+    store: Option<Arc<Store>>,
     agents: Mutex<Vec<AgentDefinition>>,
     lifecycle: tokio::sync::Mutex<()>,
     authentication: Arc<Mutex<HashMap<String, AuthenticationStatus>>>,
@@ -121,8 +163,6 @@ struct State {
 }
 
 struct Entry {
-    agent: AgentDefinition,
-    removed: bool,
     state: Arc<Mutex<ConversationState>>,
     runtime: Option<Runtime>,
 }
@@ -152,11 +192,90 @@ impl Conversations {
     /// Uses trusted launch definitions supplied by the outer application adapter.
     pub fn new(agents: Vec<AgentDefinition>) -> Self {
         Self {
+            store: None,
             agents: Mutex::new(agents),
             lifecycle: tokio::sync::Mutex::new(()),
             authentication: Arc::default(),
             state: Mutex::new(State::default()),
         }
+    }
+
+    /// Restores only metadata. Opening the list never starts an agent process.
+    pub fn with_store(
+        agents: Vec<AgentDefinition>,
+        store: Arc<Store>,
+    ) -> Result<Self, StorageError> {
+        let mut entries = HashMap::new();
+        for saved in store.conversations()? {
+            let interrupted = saved.interrupted
+                || matches!(
+                    saved.status,
+                    ConversationStatus::Running
+                        | ConversationStatus::WaitingForApproval
+                        | ConversationStatus::Cancelling
+                );
+            let snapshot = Conversation {
+                id: saved.id,
+                title: saved.title,
+                working_folder: saved.working_folder,
+                agent_id: saved.agent_id,
+                remote_session_id: saved.remote_session_id,
+                created_at: saved.created_at,
+                updated_at: saved.updated_at,
+                interrupted,
+                storage_error: None,
+                status: ConversationStatus::Disconnected,
+                authentication: AuthenticationStatus::Unknown,
+                failure: saved.failure,
+                revision: 0,
+                turns: Vec::new(),
+                notice: None,
+                permissions: Vec::new(),
+            };
+            entries.insert(
+                snapshot.id,
+                Entry {
+                    state: Arc::new(Mutex::new(ConversationState {
+                        snapshot,
+                        generation: 0,
+                        subscribers: Vec::new(),
+                        permissions: HashMap::new(),
+                        store: Some(store.clone()),
+                    })),
+                    runtime: None,
+                },
+            );
+        }
+        Ok(Self {
+            store: Some(store),
+            state: Mutex::new(State {
+                entries,
+                closed: false,
+            }),
+            ..Self::new(agents)
+        })
+    }
+
+    pub fn list(&self) -> Result<Vec<ConversationSummary>, ConversationError> {
+        let mut summaries = self
+            .lock()?
+            .entries
+            .values()
+            .map(|entry| {
+                Ok(entry
+                    .state
+                    .lock()
+                    .map_err(|_| unavailable())?
+                    .snapshot
+                    .summary())
+            })
+            .collect::<Result<Vec<_>, ConversationError>>()?;
+        summaries.sort_by(|a, b| {
+            b.updated_at
+                .cmp(&a.updated_at)
+                .then_with(|| a.id.cmp(&b.id))
+        });
+        Ok(summaries)
     }
 
     pub fn prepared_agents(&self) -> Vec<PreparedAgent> {
@@ -201,17 +320,20 @@ impl Conversations {
             let mut state = self.lock()?;
             agents.retain(|agent| agent.id != id);
             let mut runtimes = Vec::new();
-            for entry in state
-                .entries
-                .values_mut()
-                .filter(|entry| entry.agent.id == id)
-            {
-                entry.removed = true;
+            for entry in state.entries.values_mut() {
                 let mut current = entry.state.lock().map_err(|_| unavailable())?;
+                if current.snapshot.agent_id != id {
+                    continue;
+                }
                 current.generation += 1;
+                current.snapshot.interrupted |= matches!(
+                    current.snapshot.status,
+                    ConversationStatus::Running
+                        | ConversationStatus::WaitingForApproval
+                        | ConversationStatus::Cancelling
+                );
                 current.snapshot.status = ConversationStatus::Failed;
                 current.snapshot.failure = Some(ConnectionFailure::AgentRemoved);
-                current.snapshot.remote_session_id = None;
                 current.snapshot.authentication = AuthenticationStatus::Unknown;
                 current.clear_permissions();
                 if let Some(turn) = current
@@ -257,7 +379,7 @@ impl Conversations {
     ) -> Result<Conversation, ConversationError> {
         // Keep this guard until insertion so unregister cannot miss a new owner.
         let agents = self.agents.lock().map_err(|_| unavailable())?;
-        let agent = agents
+        let _agent = agents
             .iter()
             .find(|agent| agent.id == agent_id)
             .cloned()
@@ -269,6 +391,11 @@ impl Conversations {
         }
         let draft = Conversation {
             id: Uuid::new_v4(),
+            title: "새 대화".into(),
+            created_at: now(),
+            updated_at: now(),
+            interrupted: false,
+            storage_error: None,
             working_folder: folder.canonicalize().map_err(|_| {
                 ConversationError::InvalidWorkingFolder("작업 폴더를 찾을 수 없습니다.".into())
             })?,
@@ -286,16 +413,20 @@ impl Conversations {
         if state.closed {
             return Err(unavailable());
         }
+        if let Some(store) = &self.store {
+            store
+                .save_conversation(&draft.summary())
+                .map_err(|error| ConversationError::Unavailable(error.to_string()))?;
+        }
         state.entries.insert(
             draft.id,
             Entry {
-                agent,
-                removed: false,
                 state: Arc::new(Mutex::new(ConversationState {
                     snapshot: draft.clone(),
                     generation: 0,
                     subscribers: Vec::new(),
                     permissions: HashMap::new(),
+                    store: self.store.clone(),
                 })),
                 runtime: None,
             },
@@ -322,14 +453,12 @@ impl Conversations {
     /// Starts one connection attempt. Concurrent requests return the same state.
     /// Requires a Tokio runtime; failures are observed through `get`.
     pub fn connect(&self, id: Uuid) -> Result<Conversation, ConversationError> {
+        let agents = self.agents.lock().map_err(|_| unavailable())?;
         let mut state = self.lock()?;
         if state.closed {
             return Err(unavailable());
         }
         let entry = state.entries.get_mut(&id).ok_or_else(not_found)?;
-        if entry.removed {
-            return Err(ConversationError::NotReady("에이전트 삭제로 연결이 종료되었습니다. 설치 상태를 확인하고 새 대화를 시작해주세요.".into()));
-        }
         let mut current = entry.state.lock().map_err(|_| unavailable())?;
         let mut snapshot = current.snapshot.clone();
         if matches!(
@@ -347,10 +476,24 @@ impl Conversations {
                 "작업 폴더를 찾을 수 없습니다. 폴더를 다시 선택해주세요.".into(),
             ));
         }
-        let agent = entry.agent.clone();
+        let Some(agent) = agents
+            .iter()
+            .find(|agent| agent.id == snapshot.agent_id)
+            .cloned()
+        else {
+            if current.snapshot.status != ConversationStatus::Failed
+                || current.snapshot.failure != Some(ConnectionFailure::AgentRemoved)
+            {
+                current.snapshot.status = ConversationStatus::Failed;
+                current.snapshot.failure = Some(ConnectionFailure::AgentRemoved);
+                current.publish();
+            }
+            return Err(ConversationError::NotReady(
+                "에이전트를 설치한 뒤 다시 시도해주세요.".into(),
+            ));
+        };
         let handle = tokio::runtime::Handle::try_current().map_err(|_| unavailable())?;
         snapshot.status = ConversationStatus::Connecting;
-        snapshot.remote_session_id = None;
         snapshot.authentication = AuthenticationStatus::Unknown;
         snapshot.failure = None;
         current.generation += 1;
@@ -371,7 +514,13 @@ impl Conversations {
             cancellations,
             stop: Some(stop),
             task: Some(handle.spawn(crate::agent_runtime::run(
-                agent, folder, updates, receiver, requests, cancelled,
+                agent,
+                folder,
+                snapshot.remote_session_id.clone(),
+                updates,
+                receiver,
+                requests,
+                cancelled,
             ))),
         });
         Ok(snapshot)
@@ -426,7 +575,10 @@ impl Conversations {
             .map_err(|_| unavailable())?;
         current.snapshot.status = ConversationStatus::Running;
         current.snapshot.failure = None;
-        current.snapshot.notice = None;
+        current.snapshot.interrupted = false;
+        if current.snapshot.title == "새 대화" {
+            current.snapshot.title = text.trim().chars().take(60).collect();
+        }
         current.snapshot.turns.push(Turn {
             id: turn,
             message: text,
@@ -568,6 +720,7 @@ pub(crate) struct Prompt {
 }
 
 struct ConversationState {
+    store: Option<Arc<Store>>,
     snapshot: Conversation,
     generation: u64,
     subscribers: Vec<mpsc::UnboundedSender<ConversationUpdate>>,
@@ -582,6 +735,13 @@ impl ConversationState {
     }
 
     fn publish(&mut self) {
+        self.snapshot.updated_at = now();
+        if let Some(store) = &self.store {
+            self.snapshot.storage_error = store
+                .save_conversation(&self.snapshot.summary())
+                .err()
+                .map(|error| error.to_string());
+        }
         self.snapshot.revision += 1;
         self.subscribers.retain(|sender| {
             sender
@@ -591,6 +751,13 @@ impl ConversationState {
                 .is_ok()
         });
     }
+}
+
+fn now() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
 }
 
 /// Ordered subscription item. Text chunks carry only their delta, not history.

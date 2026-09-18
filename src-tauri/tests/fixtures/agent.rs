@@ -70,9 +70,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut output = io::stdout().lock();
     let mut sessions = 0;
     let mut prompts = 0;
+    let mut history: Vec<Value> = env::var_os("SESSION_FILE")
+        .and_then(|path| fs::read(path).ok())
+        .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+        .unwrap_or_default();
     while let Some(line) = input.next() {
         let request: Value = serde_json::from_str(&line?)?;
         let method = request["method"].as_str().unwrap_or_default();
+        if let Some(path) = env::var_os("REQUEST_LOG") {
+            writeln!(
+                fs::OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open(path)?,
+                "{method}"
+            )?;
+        }
         let mut error = None;
         let result = match method {
             "initialize" => {
@@ -87,7 +100,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 if mode == "init-error" {
                     error = Some(json!({"code": -32603, "message": "initialize rejected"}));
                 }
-                json!({"protocolVersion": if mode == "wrong-version" { 99 } else { 1 }, "agentCapabilities": {}, "authMethods": if mode == "future-auth" { json!([{"id":"future-method","name":"Future auth","type":"future_protocol"}]) } else if mode == "key-auth" { json!([{"id": "api-key", "name": "API Key"}]) } else if env::var_os("AUTH_FILE").is_some() { json!([{ "id": "fixture-login", "name": "Fixture login" }, { "id": "fixture-denied", "name": "Denied login" }]) } else { json!([]) }})
+                json!({"protocolVersion": if mode == "wrong-version" { 99 } else { 1 }, "agentCapabilities": if mode == "resume-only" {json!({"sessionCapabilities":{"resume":{}}})} else if mode == "no-resume" {json!({})} else {json!({"loadSession":true})}, "authMethods": if mode == "future-auth" { json!([{"id":"future-method","name":"Future auth","type":"future_protocol"}]) } else if mode == "key-auth" { json!([{"id": "api-key", "name": "API Key"}]) } else if env::var_os("AUTH_FILE").is_some() { json!([{ "id": "fixture-login", "name": "Fixture login" }, { "id": "fixture-denied", "name": "Denied login" }]) } else { json!([]) }})
             }
             "authenticate" => {
                 if request["params"]["methodId"] == "fixture-denied" {
@@ -129,8 +142,51 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 sessions += 1;
                 json!({"sessionId": format!("remote-{sessions}")})
             }
+            "session/resume" => {
+                assert_eq!(mode, "resume-only");
+                assert_eq!(request["params"]["sessionId"], "remote-1");
+                json!({})
+            }
+            "session/load" => {
+                assert_ne!(mode, "resume-only");
+                assert_eq!(request["params"]["sessionId"], "remote-1");
+                if mode == "replay-chunks" {
+                    for (kind, id, text) in [
+                        ("user_message_chunk", "a", "Same"),
+                        ("user_message_chunk", "a", " question"),
+                        ("user_message_chunk", "b", "Same question"),
+                        ("agent_message_chunk", "c", "Answer"),
+                    ] {
+                        send(
+                            &mut output,
+                            json!({"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"remote-1","update":{"sessionUpdate":kind,"messageId":id,"content":{"type":"text","text":text}}}}),
+                        )?;
+                    }
+                }
+                for update in &history {
+                    send(
+                        &mut output,
+                        json!({"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"remote-1","update":update}}),
+                    )?;
+                }
+                if mode == "load-error" {
+                    error = Some(json!({"code":-32603,"message":"session missing"}));
+                }
+                if mode == "load-auth" {
+                    error = Some(json!({"code":-32000,"message":"Authentication required"}));
+                }
+                if mode == "load-exit" {
+                    process::exit(16);
+                }
+                json!({})
+            }
             "session/prompt" => {
                 prompts += 1;
+                history.push(json!({"sessionUpdate":"user_message_chunk","content":request["params"]["prompt"][0]}));
+                history.push(json!({"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"Hello world"}}));
+                if let Some(path) = env::var_os("SESSION_FILE") {
+                    fs::write(path, serde_json::to_vec(&history)?)?;
+                }
                 assert_eq!(request["params"]["sessionId"], "remote-1");
                 if mode == "cancel" && prompts == 1 {
                     send(
@@ -249,8 +305,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
             _ => continue,
         };
-        if matches!(method, "session/new" | "session/prompt")
-            && env::var_os("AUTH_FILE").is_some_and(|path| !std::path::Path::new(&path).exists())
+        if matches!(
+            method,
+            "session/new" | "session/prompt" | "session/load" | "session/resume"
+        ) && env::var_os("AUTH_FILE").is_some_and(|path| !std::path::Path::new(&path).exists())
         {
             error = Some(json!({"code": -32000, "message": "Authentication required"}));
         }

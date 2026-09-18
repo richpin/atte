@@ -8,10 +8,17 @@ export type ConnectionFailure =
   | "connectionClosed"
   | "timedOut"
   | "agentRemoved"
+  | "resumptionUnsupported"
+  | "sessionRestorationFailed"
   | "promptFailed";
 
 export interface Conversation {
   id: string;
+  title: string;
+  createdAt: number;
+  updatedAt: number;
+  interrupted: boolean;
+  storageError: string | null;
   workingFolder: string;
   agentId: string;
   status:
@@ -30,6 +37,20 @@ export interface Conversation {
   notice: string | null;
   permissions: PermissionRequest[];
 }
+
+export type ConversationSummary = Pick<
+  Conversation,
+  | "id"
+  | "title"
+  | "workingFolder"
+  | "agentId"
+  | "status"
+  | "remoteSessionId"
+  | "createdAt"
+  | "updatedAt"
+  | "failure"
+  | "interrupted"
+>;
 
 export interface PermissionRequest {
   id: string;
@@ -73,8 +94,10 @@ export const failureMessages: Record<ConnectionFailure, string> = {
   connectionClosed: "에이전트와의 연결이 끊어졌습니다.",
   promptFailed: "메시지 실행에 실패했습니다. 다시 연결해주세요.",
   timedOut: "에이전트 연결 시간이 초과되었습니다.",
-  agentRemoved:
-    "에이전트 삭제로 연결이 종료되었습니다. 설치 상태를 확인하고 새 대화를 시작해주세요.",
+  agentRemoved: "에이전트를 설치한 뒤 이 대화에서 다시 시도해주세요.",
+  resumptionUnsupported: "이 에이전트는 기존 대화 재개를 지원하지 않습니다.",
+  sessionRestorationFailed:
+    "기존 대화를 복원할 수 없습니다. 세션이 삭제되었거나 사용할 수 없는지 확인해주세요.",
 };
 
 export type ConversationUpdate =

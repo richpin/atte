@@ -191,7 +191,7 @@ fn opens_the_oldest_committed_schema_fixture() {
     let version: u32 = connection
         .pragma_query_value(None, "user_version", |row| row.get(0))
         .unwrap();
-    assert_eq!(version, 1);
+    assert_eq!(version, 2);
     let tables: Vec<String> = connection
         .prepare("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")
         .unwrap()
@@ -199,7 +199,7 @@ fn opens_the_oldest_committed_schema_fixture() {
         .unwrap()
         .collect::<Result<_, _>>()
         .unwrap();
-    assert_eq!(tables, ["agents", "app_metadata"]);
+    assert_eq!(tables, ["agents", "app_metadata", "conversations"]);
     assert_eq!(installations[0].definition.id, "codex-acp");
     assert_eq!(installations[0].version, "1.12.0");
 }

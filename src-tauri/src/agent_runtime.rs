@@ -1,4 +1,5 @@
 //! ACP stdio ownership. Process isolation is internal, not part of the UI contract.
+mod replay;
 use crate::{
     agent::AgentDefinition,
     conversation::{
@@ -9,10 +10,11 @@ use crate::{
 use agent_client_protocol::{
     schema::{
         v1::{
-            CancelNotification, ContentBlock, InitializeRequest, NewSessionRequest, PromptRequest,
-            RequestPermissionOutcome, RequestPermissionRequest, RequestPermissionResponse,
-            SelectedPermissionOutcome, SessionNotification, SessionUpdate, ToolCallContent,
-            ToolCallUpdate, ToolCallUpdateFields,
+            CancelNotification, ContentBlock, InitializeRequest, LoadSessionRequest,
+            NewSessionRequest, PromptRequest, RequestPermissionOutcome, RequestPermissionRequest,
+            RequestPermissionResponse, ResumeSessionRequest, SelectedPermissionOutcome, SessionId,
+            SessionNotification, SessionUpdate, ToolCallContent, ToolCallUpdate,
+            ToolCallUpdateFields,
         },
         ProtocolVersion,
     },
@@ -34,6 +36,7 @@ use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
 pub(crate) async fn run(
     agent: AgentDefinition,
     folder: PathBuf,
+    remote_session: Option<String>,
     updates: RuntimeUpdates,
     mut stop: oneshot::Receiver<()>,
     mut prompts: mpsc::UnboundedReceiver<Prompt>,
@@ -73,6 +76,8 @@ pub(crate) async fn run(
         return;
     };
     let active = Arc::new(Mutex::new(None::<ActiveTurn>));
+    let replay = Arc::new(Mutex::new(remote_session.clone().map(replay::Replay::new)));
+    let notification_replay = replay.clone();
     let notification_active = active.clone();
     let notification_updates = updates.clone();
     let permission_updates = updates.clone();
@@ -117,6 +122,12 @@ pub(crate) async fn run(
         )
         .on_receive_notification(
             async move |notification: SessionNotification, _cx| {
+                if let Ok(mut replay) = notification_replay.lock() {
+                    if let Some(replay) = replay.as_mut().filter(|replay| replay.session == notification.session_id.to_string()) {
+                        replay.update(notification.update);
+                        return Ok(());
+                    }
+                }
                 if let Ok(mut active) = notification_active.lock() {
                     if let Some(active) = active.as_mut().filter(|active| active.session == notification.session_id.to_string()) {
                         match notification.update {
@@ -149,11 +160,31 @@ pub(crate) async fn run(
                     if initialized.protocol_version != ProtocolVersion::V1 {
                         return Err(ConnectionFailure::InitializationFailed);
                     }
-                    connection
-                        .send_request(NewSessionRequest::new(folder))
-                        .block_task()
-                        .await
-                        .map_err(|error| classify(error, ConnectionFailure::SessionCreationFailed))
+                    if let Some(id) = remote_session {
+                        if initialized.agent_capabilities.load_session {
+                            connection.send_request(LoadSessionRequest::new(id.clone(), &folder))
+                                .block_task().await.map_err(|error| classify(error, ConnectionFailure::SessionRestorationFailed))?;
+                            let history = replay.lock().ok().and_then(|mut replay| replay.take());
+                            if let Some(history) = history {
+                                updates.modify(None, |snapshot| { snapshot.turns = history.turns; snapshot.notice = None; });
+                            }
+                        } else if initialized.agent_capabilities.session_capabilities.resume.is_some() {
+                            connection.send_request(ResumeSessionRequest::new(id.clone(), &folder))
+                                .block_task().await.map_err(|error| classify(error, ConnectionFailure::SessionRestorationFailed))?;
+                            if let Ok(mut replay) = replay.lock() { *replay = None; }
+                            updates.modify(None, |snapshot| {
+                                snapshot.turns.clear();
+                                snapshot.notice = Some("기존 맥락을 재개했습니다. 이 에이전트는 이전 메시지 표시를 지원하지 않습니다.".into());
+                            });
+                        } else {
+                            return Err(ConnectionFailure::ResumptionUnsupported);
+                        }
+                        Ok(SessionId::new(id))
+                    } else {
+                        connection.send_request(NewSessionRequest::new(folder)).block_task().await
+                            .map(|session| session.session_id)
+                            .map_err(|error| classify(error, ConnectionFailure::SessionCreationFailed))
+                    }
                 };
                 let session = match tokio::time::timeout(Duration::from_secs(30), handshake).await {
                     Ok(Ok(session)) => session,
@@ -161,7 +192,7 @@ pub(crate) async fn run(
                     Err(_) => return Ok(ConnectionFailure::TimedOut),
                 };
                 updates.modify(None, |snapshot| {
-                    snapshot.remote_session_id = Some(session.session_id.to_string());
+                    snapshot.remote_session_id = Some(session.to_string());
                     snapshot.status = ConversationStatus::SessionReady;
                 });
                 loop {
@@ -169,17 +200,18 @@ pub(crate) async fn run(
                         _ = connection.incoming_closed() => return Ok(ConnectionFailure::ConnectionClosed),
                         prompt = prompts.recv() => match prompt { Some(prompt) => prompt, None => return Ok(ConnectionFailure::ConnectionClosed) },
                     };
-                    if let Ok(mut active) = active.lock() { *active = Some(ActiveTurn { session: session.session_id.to_string(), turn: prompt.turn, tools: HashMap::new() }); }
+                    if let Ok(mut active) = active.lock() { *active = Some(ActiveTurn { session: session.to_string(), turn: prompt.turn, tools: HashMap::new() }); }
                     let (finished, mut completion) = oneshot::channel();
                     let turn_updates = updates.clone();
                     let turn_active = active.clone();
-                    connection.send_request(PromptRequest::new(session.session_id.clone(), vec![prompt.text.into()]))
+                    connection.send_request(PromptRequest::new(session.clone(), vec![prompt.text.into()]))
                         .on_receiving_result(async move |result| {
                             if let Ok(mut active) = turn_active.lock() { *active = None; }
                             let failure = match result {
                                 Ok(response) => {
                                     turn_updates.record_authentication(AuthenticationStatus::Authenticated);
                                     turn_updates.modify(Some(prompt.turn), |snapshot| {
+                                        snapshot.interrupted = response.stop_reason == agent_client_protocol::schema::v1::StopReason::Cancelled;
                                         if let Some(turn) = snapshot.turns.last_mut() {
                                             turn.stop_reason = serde_json::to_value(response.stop_reason).ok().and_then(|value| value.as_str().map(str::to_owned));
                                         }
@@ -201,7 +233,7 @@ pub(crate) async fn run(
                             result = &mut completion => break result,
                             Some(turn) = cancellations.recv() => {
                                 if turn == prompt.turn {
-                                    connection.send_notification(CancelNotification::new(session.session_id.clone()))?;
+                                    connection.send_notification(CancelNotification::new(session.clone()))?;
                                 }
                             }
                         }
@@ -244,8 +276,13 @@ pub(crate) async fn run(
         Some(failure) => failed(&updates, failure),
         None => {
             updates.modify(None, |snapshot| {
+                snapshot.interrupted |= matches!(
+                    snapshot.status,
+                    ConversationStatus::Running
+                        | ConversationStatus::WaitingForApproval
+                        | ConversationStatus::Cancelling
+                );
                 snapshot.status = ConversationStatus::Disconnected;
-                snapshot.remote_session_id = None;
             });
         }
     }
@@ -296,6 +333,12 @@ fn failed(updates: &RuntimeUpdates, failure: ConnectionFailure) {
         updates.record_authentication(AuthenticationStatus::Required);
     }
     updates.modify(None, |snapshot| {
+        snapshot.interrupted |= matches!(
+            snapshot.status,
+            ConversationStatus::Running
+                | ConversationStatus::WaitingForApproval
+                | ConversationStatus::Cancelling
+        );
         snapshot.status = ConversationStatus::Failed;
         if failure == ConnectionFailure::AuthenticationRequired {
             snapshot.authentication = AuthenticationStatus::Required;

@@ -12,6 +12,8 @@ import {
   answerPermission,
   cancelTurn,
   connectConversation,
+  getConversation,
+  listConversations,
   preparedAgents,
   selectWorkingFolder,
   sendMessage,
@@ -35,6 +37,18 @@ export function ConversationPage(props: {
   const [error, setError] = createSignal<string>();
   const [agentsFailed, setAgentsFailed] = createSignal(false);
   const [selecting, setSelecting] = createSignal(false);
+  const [listError, setListError] = createSignal(false);
+  const [history, { refetch: reloadList, mutate: updateList }] = createResource(
+    async () => {
+      try {
+        setListError(false);
+        return await listConversations();
+      } catch {
+        setListError(true);
+        return [];
+      }
+    },
+  );
 
   const [agents] = createResource(
     () => props.agentsRevision,
@@ -42,7 +56,6 @@ export function ConversationPage(props: {
       try {
         setAgentsFailed(false);
         const installed = await preparedAgents();
-        if (!installed.length) props.onManage();
         return installed;
       } catch {
         setAgentsFailed(true);
@@ -56,7 +69,9 @@ export function ConversationPage(props: {
     agents()?.some((agent) => agent.id === selectedAgent())
       ? selectedAgent()
       : agents()?.[0]?.id || "";
-  const [connecting, setConnecting] = createSignal(false);
+  const [connectingId, setConnectingId] = createSignal<string>();
+  const connecting = () =>
+    Boolean(connectingId()) && connectingId() === conversation()?.id;
   const [connectionRejected, setConnectionRejected] = createSignal(false);
   const [message, setMessage] = createSignal("");
   const [sending, setSending] = createSignal(false);
@@ -75,8 +90,59 @@ export function ConversationPage(props: {
 
   function applySnapshot(snapshot: Conversation) {
     const current = conversation();
-    if (current?.id === snapshot.id && snapshot.revision >= current.revision)
+    if (current?.id === snapshot.id && snapshot.revision >= current.revision) {
+      remember(snapshot);
       setConversation(snapshot);
+    }
+  }
+
+  function remember(snapshot: Conversation) {
+    const {
+      id,
+      title,
+      workingFolder,
+      agentId,
+      status,
+      remoteSessionId,
+      createdAt,
+      updatedAt,
+      failure,
+      interrupted,
+    } = snapshot;
+    const summary = {
+      id,
+      title,
+      workingFolder,
+      agentId,
+      status,
+      remoteSessionId,
+      createdAt,
+      updatedAt,
+      failure,
+      interrupted,
+    };
+    updateList((previous) => [
+      summary,
+      ...(previous ?? []).filter((entry) => entry.id !== id),
+    ]);
+  }
+
+  let selection = 0;
+  async function openConversation(id: string) {
+    if (conversation()?.id === id) return;
+    const attempt = ++selection;
+    setError(undefined);
+    try {
+      const snapshot = await getConversation(id);
+      if (attempt !== selection) return;
+      setConversation(snapshot);
+      setMessage("");
+      setConnectionRejected(false);
+      if (snapshot.status === "disconnected") void connect();
+    } catch (cause) {
+      if (attempt === selection)
+        setError(errorMessage(cause, "대화를 열 수 없습니다."));
+    }
   }
 
   function applyUpdate(update: ConversationUpdate) {
@@ -176,7 +242,7 @@ export function ConversationPage(props: {
   async function connect() {
     const draft = conversation();
     if (!draft || connecting()) return;
-    setConnecting(true);
+    setConnectingId(draft.id);
     setConnectionRejected(false);
     setError(undefined);
     try {
@@ -190,7 +256,7 @@ export function ConversationPage(props: {
         );
       }
     } finally {
-      setConnecting(false);
+      if (connectingId() === draft.id) setConnectingId(undefined);
     }
   }
 
@@ -205,7 +271,9 @@ export function ConversationPage(props: {
     try {
       const draft = await selectWorkingFolder(agentId());
       if (draft) {
+        ++selection;
         setConversation(draft);
+        remember(draft);
         setMessage("");
         setConnectionRejected(false);
         if (draft.status === "disconnected") void connect();
@@ -229,7 +297,9 @@ export function ConversationPage(props: {
         <Show when={conversation()}>
           {(draft) => (
             <>
-              <h1 class="shrink-0 text-sm font-medium">새 대화</h1>
+              <h1 class="max-w-64 truncate text-sm font-medium">
+                {draft().title || "새 대화"}
+              </h1>
               <span
                 class="min-w-0 flex-1 truncate text-xs text-muted"
                 title={draft().workingFolder}
@@ -273,159 +343,250 @@ export function ConversationPage(props: {
           에이전트 관리
         </button>
       </header>
-      <Show when={error()}>
-        {(message) => (
-          <p
-            role="alert"
-            class="mx-6 mt-4 rounded-lg border border-line bg-panel p-3 text-sm"
-          >
-            {message()}
-          </p>
-        )}
-      </Show>
-      <Show
-        when={conversation()}
-        fallback={
-          <section class="flex flex-1 flex-col items-center justify-center gap-3 px-6 text-center">
-            <h1 class="text-xl font-medium">어디에서 작업할까요?</h1>
-            <p class="text-sm text-muted">
-              폴더를 선택해 새 대화를 준비하세요.
-            </p>
-          </section>
-        }
-      >
-        <ConversationHistory
-          followKey={`${conversation()?.id}:${activeTurn()}`}
+      <div class="flex min-h-0 flex-1">
+        <nav
+          aria-label="대화 목록"
+          class="w-56 shrink-0 overflow-y-auto border-r border-line bg-panel p-3"
         >
-          <Show when={!conversation()?.turns?.length}>
-            <h2 class="text-lg font-medium">대화가 준비되었습니다</h2>
-            <Show when={conversation()?.status === "disconnected"}>
-              <p class="text-sm text-muted">
-                아직 에이전트에 연결되지 않았습니다.
-              </p>
-            </Show>
-          </Show>
-          <Show when={streamError()}>
-            <p role="alert">대화 상태를 구독할 수 없습니다.</p>
-            <button
-              type="button"
-              onClick={() => setSubscriptionAttempt((value) => value + 1)}
-            >
-              상태 다시 불러오기
-            </button>
-          </Show>
-          <Show when={conversation()?.failure}>
-            {(failure) => (
-              <p role="alert" class="text-sm">
-                {failureMessages[failure()]}
-              </p>
-            )}
-          </Show>
-          <Show when={conversation()?.failure === "authenticationRequired"}>
-            <button type="button" onClick={props.onManage}>
-              로그인 안내 열기
-            </button>
-          </Show>
-          <Show
-            when={
-              conversation()?.authentication === "unknown" &&
-              conversation()?.status === "sessionReady" &&
-              !conversation()?.turns?.length
-            }
-          >
-            <p class="text-sm text-muted">
-              인증 상태는 아직 확인되지 않았습니다.
+          <h2 class="mb-3 text-xs font-medium text-muted">대화</h2>
+          <Show when={listError()}>
+            <p role="alert" class="text-sm">
+              대화 목록을 불러올 수 없습니다.
             </p>
-          </Show>
-          <Show
-            when={
-              !connecting() &&
-              (conversation()?.status === "failed" || connectionRejected()) &&
-              conversation()?.failure !== "agentRemoved"
-            }
-          >
-            <button
-              type="button"
-              class="rounded-lg bg-accent px-4 py-2 text-sm text-white disabled:opacity-50"
-              disabled={connecting() || conversation()?.status === "connecting"}
-              onClick={connect}
-            >
-              다시 연결
+            <button type="button" onClick={() => void reloadList()}>
+              목록 다시 불러오기
             </button>
           </Show>
-          <Transcript turns={conversation()?.turns ?? []} />
-          <Show when={conversation()?.notice}>
-            {(notice) => (
-              <p role="status" class="text-sm text-muted">
-                {notice()}
+          <Show when={!history.loading && !history()?.length && !listError()}>
+            <p class="text-sm text-muted">저장된 대화가 없습니다.</p>
+          </Show>
+          <For each={history()}>
+            {(entry) => (
+              <button
+                type="button"
+                aria-current={
+                  conversation()?.id === entry.id ? "page" : undefined
+                }
+                class="mb-1 w-full rounded-lg px-3 py-2 text-left text-sm hover:bg-canvas aria-[current=page]:bg-canvas"
+                onClick={() => void openConversation(entry.id)}
+              >
+                <span class="block truncate">{entry.title || "새 대화"}</span>
+                <span class="block truncate text-xs text-muted">
+                  {entry.workingFolder}
+                </span>
+              </button>
+            )}
+          </For>
+        </nav>
+        <div class="flex min-w-0 flex-1 flex-col overflow-hidden">
+          <Show when={error()}>
+            {(message) => (
+              <p
+                role="alert"
+                class="mx-6 mt-4 rounded-lg border border-line bg-panel p-3 text-sm"
+              >
+                {message()}
               </p>
             )}
           </Show>
-        </ConversationHistory>
-        <div class="mx-auto mb-6 w-full max-w-3xl shrink-0 px-6">
-          <form
-            class="max-h-[60dvh] overflow-y-auto rounded-2xl border border-line bg-panel p-4"
-            onSubmit={(event) => {
-              event.preventDefault();
-              if (!showStop()) void send();
-            }}
+          <Show
+            when={conversation()}
+            fallback={
+              <section class="flex flex-1 flex-col items-center justify-center gap-3 px-6 text-center">
+                <h1 class="text-xl font-medium">어디에서 작업할까요?</h1>
+                <p class="text-sm text-muted">
+                  폴더를 선택해 새 대화를 준비하세요.
+                </p>
+              </section>
+            }
           >
-            <Show
-              when={conversation()?.permissions?.[0]}
-              fallback={
-                <textarea
-                  aria-label="메시지"
-                  aria-describedby="connection-note"
-                  class="w-full resize-none bg-transparent text-sm disabled:cursor-not-allowed"
-                  disabled={
-                    sending() ||
-                    !["sessionReady", "running", "cancelling"].includes(
-                      conversation()?.status ?? "",
-                    )
-                  }
-                  value={message()}
-                  onInput={(event) => setMessage(event.currentTarget.value)}
-                  rows={2}
-                  placeholder="메시지를 입력하세요"
-                />
-              }
+            <ConversationHistory
+              followKey={`${conversation()?.id}:${activeTurn()}`}
             >
-              {(request) => (
-                <PermissionPanel
-                  request={request()}
-                  workingFolder={conversation()?.workingFolder ?? ""}
-                  disabled={Boolean(answering()) || Boolean(cancelling())}
-                  onAnswer={answer}
-                />
-              )}
-            </Show>
-            <div class="mt-3 flex items-center justify-between text-xs text-muted">
-              <span>
-                {agents()?.find((agent) => agent.id === conversation()?.agentId)
-                  ?.name ?? conversation()?.agentId}
-              </span>
-              <button
-                type={showStop() ? "button" : "submit"}
-                aria-label={showStop() ? "현재 작업 중단" : "전송"}
-                class="rounded-lg bg-accent px-4 py-2 text-white disabled:opacity-40"
-                disabled={
-                  showStop() ? stopping() : !canSend() || !message().trim()
+              <Show when={conversation()?.status === "connecting"}>
+                <p role="status">
+                  {conversation()?.remoteSessionId
+                    ? "이전 대화를 불러오는 중…"
+                    : "에이전트에 연결 중…"}
+                </p>
+              </Show>
+              <Show when={conversation()?.interrupted}>
+                <p role="status">
+                  이전 작업이 중단되었습니다. 새 메시지를 보내 계속할 수
+                  있습니다.
+                </p>
+              </Show>
+              <Show when={conversation()?.storageError}>
+                {(message) => <p role="alert">{message()}</p>}
+              </Show>
+              <Show
+                when={
+                  !conversation()?.turns?.length &&
+                  conversation()?.status === "sessionReady" &&
+                  !conversation()?.notice
                 }
-                onClick={() => {
-                  if (showStop()) void cancel();
+              >
+                <h2 class="text-lg font-medium">대화가 준비되었습니다</h2>
+                <Show when={conversation()?.status === "disconnected"}>
+                  <p class="text-sm text-muted">
+                    아직 에이전트에 연결되지 않았습니다.
+                  </p>
+                </Show>
+              </Show>
+              <Show when={streamError()}>
+                <p role="alert">대화 상태를 구독할 수 없습니다.</p>
+                <button
+                  type="button"
+                  onClick={() => setSubscriptionAttempt((value) => value + 1)}
+                >
+                  상태 다시 불러오기
+                </button>
+              </Show>
+              <Show when={conversation()?.failure}>
+                {(failure) => (
+                  <p role="alert" class="text-sm">
+                    {failureMessages[failure()]}
+                  </p>
+                )}
+              </Show>
+              <Show when={conversation()?.failure === "authenticationRequired"}>
+                <button type="button" onClick={props.onManage}>
+                  로그인 안내 열기
+                </button>
+              </Show>
+              <Show
+                when={
+                  conversation() &&
+                  (["agentRemoved", "executableNotFound"].includes(
+                    conversation()?.failure ?? "",
+                  ) ||
+                    !agents()?.some(
+                      (agent) => agent.id === conversation()?.agentId,
+                    ))
+                }
+              >
+                <button type="button" onClick={props.onManage}>
+                  설치·인증 관리 열기
+                </button>
+              </Show>
+              <Show
+                when={
+                  conversation()?.authentication === "unknown" &&
+                  conversation()?.status === "sessionReady" &&
+                  !conversation()?.turns?.length
+                }
+              >
+                <p class="text-sm text-muted">
+                  인증 상태는 아직 확인되지 않았습니다.
+                </p>
+              </Show>
+              <Show
+                when={
+                  !connecting() &&
+                  (conversation()?.status === "failed" || connectionRejected())
+                }
+              >
+                <button
+                  type="button"
+                  class="rounded-lg bg-accent px-4 py-2 text-sm text-white disabled:opacity-50"
+                  disabled={
+                    connecting() || conversation()?.status === "connecting"
+                  }
+                  onClick={connect}
+                >
+                  다시 연결
+                </button>
+              </Show>
+              <Transcript turns={conversation()?.turns ?? []} />
+              <Show when={conversation()?.notice}>
+                {(notice) => (
+                  <p role="status" class="text-sm text-muted">
+                    {notice()}
+                  </p>
+                )}
+              </Show>
+            </ConversationHistory>
+            <div class="mx-auto mb-6 w-full max-w-3xl shrink-0 px-6">
+              <form
+                class="max-h-[60dvh] overflow-y-auto rounded-2xl border border-line bg-panel p-4"
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  if (!showStop()) void send();
                 }}
               >
-                {showStop() ? "중단" : "전송"}
-              </button>
+                <Show
+                  when={conversation()?.permissions?.[0]}
+                  fallback={
+                    <textarea
+                      aria-label="메시지"
+                      aria-describedby="connection-note"
+                      class="w-full resize-none bg-transparent text-sm disabled:cursor-not-allowed"
+                      disabled={
+                        sending() ||
+                        !["sessionReady", "running", "cancelling"].includes(
+                          conversation()?.status ?? "",
+                        )
+                      }
+                      value={message()}
+                      onInput={(event) => setMessage(event.currentTarget.value)}
+                      onKeyDown={(event) => {
+                        if (
+                          event.key !== "Enter" ||
+                          event.shiftKey ||
+                          event.isComposing ||
+                          event.keyCode === 229
+                        )
+                          return;
+                        event.preventDefault();
+                        if (!event.repeat) void send();
+                      }}
+                      rows={2}
+                      placeholder="메시지를 입력하세요"
+                    />
+                  }
+                >
+                  {(request) => (
+                    <PermissionPanel
+                      request={request()}
+                      workingFolder={conversation()?.workingFolder ?? ""}
+                      disabled={Boolean(answering()) || Boolean(cancelling())}
+                      onAnswer={answer}
+                    />
+                  )}
+                </Show>
+                <div class="mt-3 flex items-center justify-between text-xs text-muted">
+                  <span>
+                    {agents()?.find(
+                      (agent) => agent.id === conversation()?.agentId,
+                    )?.name ?? conversation()?.agentId}
+                  </span>
+                  <button
+                    type={showStop() ? "button" : "submit"}
+                    aria-label={showStop() ? "현재 작업 중단" : "전송"}
+                    class="rounded-lg bg-accent px-4 py-2 text-white disabled:opacity-40"
+                    disabled={
+                      showStop() ? stopping() : !canSend() || !message().trim()
+                    }
+                    onClick={() => {
+                      if (showStop()) void cancel();
+                    }}
+                  >
+                    {showStop() ? "중단" : "전송"}
+                  </button>
+                </div>
+              </form>
+              <p
+                id="connection-note"
+                class="mt-2 text-center text-xs text-muted"
+              >
+                {conversation()?.status === "running"
+                  ? "응답이 완료되면 다음 메시지를 보낼 수 있습니다."
+                  : "연결된 대화에 메시지를 보내세요."}
+              </p>
             </div>
-          </form>
-          <p id="connection-note" class="mt-2 text-center text-xs text-muted">
-            {conversation()?.status === "running"
-              ? "응답이 완료되면 다음 메시지를 보낼 수 있습니다."
-              : "연결된 대화에 메시지를 보내세요."}
-          </p>
+          </Show>
         </div>
-      </Show>
+      </div>
     </main>
   );
 }

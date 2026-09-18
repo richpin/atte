@@ -49,6 +49,331 @@ fn mock_agent() -> AgentDefinition {
 }
 
 #[tokio::test]
+async fn restores_agent_history_after_restart_without_persisting_a_transcript() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("atte.sqlite");
+    let store = std::sync::Arc::new(atte_lib::storage::Store::open(&path).unwrap());
+    let mut agent = mock_agent();
+    agent.env.insert("FIXTURE_MODE".into(), "history".into());
+    agent.env.insert(
+        "SESSION_FILE".into(),
+        root.path()
+            .join("agent-history.json")
+            .to_string_lossy()
+            .into(),
+    );
+    let conversations = Conversations::with_store(vec![agent.clone()], store.clone()).unwrap();
+    let draft = conversations.create(root.path()).unwrap();
+    conversations.connect(draft.id).unwrap();
+    settle(&conversations, draft.id).await;
+    conversations
+        .send_message(draft.id, "Remember my marker".into())
+        .unwrap();
+    let original = settle(&conversations, draft.id).await;
+    conversations.shutdown().await;
+    drop(conversations);
+    let restored = Conversations::with_store(vec![agent], store).unwrap();
+    assert!(restored.get(draft.id).unwrap().turns.is_empty());
+    assert_eq!(
+        restored.list().unwrap()[0].remote_session_id,
+        original.remote_session_id
+    );
+    restored.connect(draft.id).unwrap();
+    restored.connect(draft.id).unwrap();
+    let loaded = settle(&restored, draft.id).await;
+    assert_eq!(loaded.status, ConversationStatus::SessionReady);
+    assert_eq!(loaded.turns.len(), 1);
+    assert_eq!(loaded.turns[0].message, "Remember my marker");
+    assert_eq!(loaded.turns[0].response, "Hello world");
+    restored.connect(draft.id).unwrap();
+    assert_eq!(restored.get(draft.id).unwrap().turns.len(), 1);
+    restored.send_message(draft.id, "Follow up".into()).unwrap();
+    assert_eq!(settle(&restored, draft.id).await.turns.len(), 2);
+    restored.shutdown().await;
+    // Storage contents are part of this ticket's explicit no-transcript contract.
+    let bytes = std::fs::read(&path).unwrap();
+    assert!(!bytes
+        .windows(b"Hello world".len())
+        .any(|slice| slice == b"Hello world"));
+}
+
+#[tokio::test]
+async fn resume_only_restores_context_with_an_explicit_no_history_notice() {
+    let root = tempfile::tempdir().unwrap();
+    let store = std::sync::Arc::new(
+        atte_lib::storage::Store::open(&root.path().join("atte.sqlite")).unwrap(),
+    );
+    let mut agent = mock_agent();
+    agent
+        .env
+        .insert("FIXTURE_MODE".into(), "resume-only".into());
+    let first = Conversations::with_store(vec![agent.clone()], store.clone()).unwrap();
+    let draft = first.create(root.path()).unwrap();
+    first.connect(draft.id).unwrap();
+    settle(&first, draft.id).await;
+    first.shutdown().await;
+    let restored = Conversations::with_store(vec![agent], store).unwrap();
+    restored.connect(draft.id).unwrap();
+    let ready = settle(&restored, draft.id).await;
+    assert_eq!(ready.status, ConversationStatus::SessionReady);
+    assert!(ready
+        .notice
+        .as_deref()
+        .unwrap_or_default()
+        .contains("이전 메시지"));
+    assert!(ready.turns.is_empty());
+    restored.send_message(draft.id, "continue".into()).unwrap();
+    assert!(settle(&restored, draft.id).await.notice.is_some());
+    restored.shutdown().await;
+}
+
+#[tokio::test]
+async fn failed_restoration_keeps_the_reference_and_never_exposes_partial_replay() {
+    use atte_lib::conversation::ConnectionFailure;
+    for (mode, failure) in [
+        ("no-resume", ConnectionFailure::ResumptionUnsupported),
+        ("load-error", ConnectionFailure::SessionRestorationFailed),
+        ("load-auth", ConnectionFailure::AuthenticationRequired),
+        ("load-exit", ConnectionFailure::ProcessExited),
+    ] {
+        let root = tempfile::tempdir().unwrap();
+        let store = std::sync::Arc::new(
+            atte_lib::storage::Store::open(&root.path().join("atte.sqlite")).unwrap(),
+        );
+        let mut agent = mock_agent();
+        agent.env.insert(
+            "SESSION_FILE".into(),
+            root.path().join("agent.json").to_string_lossy().into(),
+        );
+        let first = Conversations::with_store(vec![agent.clone()], store.clone()).unwrap();
+        let draft = first.create(root.path()).unwrap();
+        first.connect(draft.id).unwrap();
+        settle(&first, draft.id).await;
+        first.send_message(draft.id, "remember".into()).unwrap();
+        settle(&first, draft.id).await;
+        first.shutdown().await;
+        agent.env.insert("FIXTURE_MODE".into(), mode.into());
+        let restored = Conversations::with_store(vec![agent.clone()], store).unwrap();
+        restored.connect(draft.id).unwrap();
+        let failed = settle(&restored, draft.id).await;
+        assert_eq!(failed.failure, Some(failure), "{mode}");
+        assert_eq!(failed.remote_session_id.as_deref(), Some("remote-1"));
+        assert!(failed.turns.is_empty());
+        assert!(failed.permissions.is_empty());
+        agent.env.remove("FIXTURE_MODE");
+        restored.register_agent(agent).unwrap();
+        assert_eq!(
+            restored.get(draft.id).unwrap().status,
+            ConversationStatus::Failed
+        );
+        restored.connect(draft.id).unwrap();
+        let ready = settle(&restored, draft.id).await;
+        assert_eq!(ready.status, ConversationStatus::SessionReady);
+        assert_eq!(ready.turns.len(), 1);
+        restored.shutdown().await;
+    }
+}
+
+#[tokio::test]
+async fn restart_of_an_approval_wait_restores_only_metadata_without_replaying_the_decision() {
+    let root = tempfile::tempdir().unwrap();
+    let store = std::sync::Arc::new(
+        atte_lib::storage::Store::open(&root.path().join("atte.sqlite")).unwrap(),
+    );
+    let mut agent = mock_agent();
+    agent
+        .env
+        .insert("FIXTURE_MODE".into(), "prompt-permission".into());
+    let first = Conversations::with_store(vec![agent.clone()], store.clone()).unwrap();
+    let draft = first.create(root.path()).unwrap();
+    first.connect(draft.id).unwrap();
+    settle(&first, draft.id).await;
+    first
+        .send_message(draft.id, "Do not restart this operation".into())
+        .unwrap();
+    let mut stream = subscribe(&first, draft.id);
+    let permission = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let next = stream.recv().await.unwrap();
+            if next.status == ConversationStatus::WaitingForApproval {
+                break next.permissions[0].id;
+            }
+        }
+    })
+    .await
+    .unwrap();
+    first.shutdown().await;
+    let restored = Conversations::with_store(vec![agent], store).unwrap();
+    let snapshot = restored.get(draft.id).unwrap();
+    assert!(snapshot.interrupted);
+    assert!(snapshot.permissions.is_empty());
+    assert!(snapshot.turns.is_empty());
+    assert!(restored
+        .answer_permission(draft.id, permission, "arbitrary-allow".into())
+        .is_err());
+    restored.connect(draft.id).unwrap();
+    let ready = settle(&restored, draft.id).await;
+    assert_eq!(ready.status, ConversationStatus::SessionReady);
+    assert!(ready.turns.is_empty());
+    restored.shutdown().await;
+    let reopened = Conversations::with_store(
+        vec![],
+        std::sync::Arc::new(
+            atte_lib::storage::Store::open(&root.path().join("atte.sqlite")).unwrap(),
+        ),
+    )
+    .unwrap();
+    assert!(reopened.get(draft.id).unwrap().interrupted);
+}
+
+#[tokio::test]
+async fn missing_agent_keeps_the_session_reference_and_can_be_reinstalled_for_explicit_retry() {
+    use atte_lib::conversation::ConnectionFailure;
+    let root = tempfile::tempdir().unwrap();
+    let store = std::sync::Arc::new(
+        atte_lib::storage::Store::open(&root.path().join("atte.sqlite")).unwrap(),
+    );
+    let first = Conversations::with_store(vec![mock_agent()], store.clone()).unwrap();
+    let draft = first.create(root.path()).unwrap();
+    first.connect(draft.id).unwrap();
+    settle(&first, draft.id).await;
+    first.shutdown().await;
+    let restored = Conversations::with_store(vec![], store).unwrap();
+    assert!(restored.connect(draft.id).is_err());
+    assert_eq!(
+        restored.get(draft.id).unwrap().failure,
+        Some(ConnectionFailure::AgentRemoved)
+    );
+    restored.register_agent(mock_agent()).unwrap();
+    assert_eq!(
+        restored.get(draft.id).unwrap().status,
+        ConversationStatus::Failed
+    );
+    restored.connect(draft.id).unwrap();
+    let ready = settle(&restored, draft.id).await;
+    assert_eq!(ready.status, ConversationStatus::SessionReady);
+    assert_eq!(ready.remote_session_id.as_deref(), Some("remote-1"));
+    restored.shutdown().await;
+}
+
+#[tokio::test]
+async fn replay_keeps_distinct_message_ids_even_when_the_text_is_identical() {
+    let root = tempfile::tempdir().unwrap();
+    let store = std::sync::Arc::new(
+        atte_lib::storage::Store::open(&root.path().join("atte.sqlite")).unwrap(),
+    );
+    let first = Conversations::with_store(vec![mock_agent()], store.clone()).unwrap();
+    let draft = first.create(root.path()).unwrap();
+    first.connect(draft.id).unwrap();
+    settle(&first, draft.id).await;
+    first.shutdown().await;
+    let mut agent = mock_agent();
+    agent
+        .env
+        .insert("FIXTURE_MODE".into(), "replay-chunks".into());
+    let log = root.path().join("requests.log");
+    agent
+        .env
+        .insert("REQUEST_LOG".into(), log.to_string_lossy().into());
+    let restored = Conversations::with_store(vec![agent], store).unwrap();
+    restored.connect(draft.id).unwrap();
+    restored.connect(draft.id).unwrap();
+    let loaded = settle(&restored, draft.id).await;
+    assert_eq!(
+        loaded
+            .turns
+            .iter()
+            .map(|turn| turn.message.as_str())
+            .collect::<Vec<_>>(),
+        ["Same question", "Same question"]
+    );
+    assert_eq!(loaded.turns[1].response, "Answer");
+    restored.shutdown().await;
+    assert_eq!(
+        std::fs::read_to_string(log).unwrap(),
+        "initialize\nsession/load\n"
+    );
+}
+
+#[tokio::test]
+#[ignore = "requires ATTE_CODEX_ACP pointing to the installed Codex adapter and its existing login"]
+async fn real_codex_restores_history_and_context_after_process_and_core_restart() {
+    let root = tempfile::tempdir().unwrap();
+    let store = std::sync::Arc::new(
+        atte_lib::storage::Store::open(&root.path().join("atte.sqlite")).unwrap(),
+    );
+    let marker = format!("ATTE-06-{}", uuid::Uuid::new_v4());
+    let first =
+        Conversations::with_store(vec![atte_lib::agent::prepared_codex()], store.clone()).unwrap();
+    let draft = first.create(root.path()).unwrap();
+    first.connect(draft.id).unwrap();
+    let connected = settle(&first, draft.id).await;
+    assert_eq!(
+        connected.status,
+        ConversationStatus::SessionReady,
+        "{connected:?}"
+    );
+    first.send_message(draft.id, format!("Do not use tools or access any files. Remember this marker for our conversation: {marker}. Reply with only this marker.")).unwrap();
+    let original = tokio::time::timeout(Duration::from_secs(120), async {
+        let mut updates = subscribe(&first, draft.id);
+        loop {
+            let snapshot = updates.recv().await.unwrap();
+            if snapshot.status == ConversationStatus::SessionReady
+                || snapshot.status == ConversationStatus::Failed
+            {
+                break snapshot;
+            }
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(
+        original.status,
+        ConversationStatus::SessionReady,
+        "{original:?}"
+    );
+    assert!(original.turns[0].response.contains(&marker));
+    first.shutdown().await;
+    drop(first);
+    let restored =
+        Conversations::with_store(vec![atte_lib::agent::prepared_codex()], store).unwrap();
+    assert!(restored.get(draft.id).unwrap().turns.is_empty());
+    restored.connect(draft.id).unwrap();
+    let loaded = settle(&restored, draft.id).await;
+    assert_eq!(
+        loaded.status,
+        ConversationStatus::SessionReady,
+        "{loaded:?}"
+    );
+    assert_eq!(loaded.remote_session_id, original.remote_session_id);
+    assert!(loaded
+        .turns
+        .iter()
+        .any(|turn| turn.response.contains(&marker)));
+    restored.send_message(draft.id, "Without tools or file access, what marker did I ask you to remember? Reply with the marker only.".into()).unwrap();
+    let answer = tokio::time::timeout(Duration::from_secs(120), async {
+        let mut updates = subscribe(&restored, draft.id);
+        loop {
+            let snapshot = updates.recv().await.unwrap();
+            if snapshot.status == ConversationStatus::SessionReady
+                || snapshot.status == ConversationStatus::Failed
+            {
+                break snapshot;
+            }
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(
+        answer.status,
+        ConversationStatus::SessionReady,
+        "{answer:?}"
+    );
+    assert!(answer.turns.last().unwrap().response.contains(&marker));
+    restored.shutdown().await;
+}
+
+#[tokio::test]
 async fn cancels_only_the_active_turn_and_continues_the_same_session() {
     let folder = tempfile::tempdir().unwrap();
     let mut agent = mock_agent();
@@ -82,6 +407,7 @@ async fn cancels_only_the_active_turn_and_continues_the_same_session() {
     assert_eq!(cancelled.status, ConversationStatus::SessionReady);
     assert_eq!(cancelled.turns[0].stop_reason.as_deref(), Some("cancelled"));
     assert_eq!(cancelled.turns[0].response, "Started");
+    assert!(cancelled.interrupted);
     conversations
         .send_message(draft.id, "continue".into())
         .unwrap();
@@ -474,6 +800,14 @@ async fn prompt_failures_preserve_partial_output_and_reject_stale_updates() {
     ] {
         let folder = tempfile::tempdir().unwrap();
         let mut agent = mock_agent();
+        agent.env.insert(
+            "SESSION_FILE".into(),
+            folder
+                .path()
+                .join("agent-history.json")
+                .to_string_lossy()
+                .into(),
+        );
         agent.env.insert("FIXTURE_MODE".into(), mode.into());
         let conversations = Conversations::new(vec![agent]);
         let draft = conversations.create(folder.path()).unwrap();
@@ -787,6 +1121,13 @@ async fn all_targets_authenticate_then_retry_the_same_conversation_after_expiry(
         let root = tempfile::tempdir().unwrap();
         let login = root.path().join("login");
         let mut agent = mock_agent();
+        agent.env.insert(
+            "SESSION_FILE".into(),
+            root.path()
+                .join("agent-history.json")
+                .to_string_lossy()
+                .into(),
+        );
         agent.id = id.into();
         agent
             .env
@@ -848,10 +1189,12 @@ async fn all_targets_authenticate_then_retry_the_same_conversation_after_expiry(
 }
 
 #[tokio::test]
-async fn replacing_a_definition_only_changes_new_conversations() {
+async fn replacing_a_definition_preserves_live_connections_and_applies_to_new_connections() {
     let folder = tempfile::tempdir().unwrap();
     let conversations = Conversations::new(vec![mock_agent()]);
     let original = conversations.create(folder.path()).unwrap();
+    conversations.connect(original.id).unwrap();
+    settle(&conversations, original.id).await;
     let mut replacement = mock_agent();
     replacement.command = folder.path().join("missing-agent");
     conversations.register_agent(replacement).unwrap();

@@ -18,7 +18,7 @@ use serde::Serialize;
 use std::{
     collections::{HashMap, HashSet},
     path::{Path, PathBuf},
-    sync::Mutex,
+    sync::{Arc, Mutex},
 };
 
 #[derive(Debug, Serialize, thiserror::Error)]
@@ -74,7 +74,7 @@ pub struct ManagedAgent {
 
 pub struct AgentManagement {
     root: PathBuf,
-    store: Store,
+    store: Arc<Store>,
     refresh_lock: tokio::sync::Mutex<()>,
     last_attempt: Mutex<i64>,
     authentication: Mutex<HashMap<String, Authentication>>,
@@ -88,7 +88,7 @@ impl AgentManagement {
         let fetched_at = store.registry_fetched_at()?;
         Ok(Self {
             root: root.into(),
-            store,
+            store: Arc::new(store),
             refresh_lock: tokio::sync::Mutex::new(()),
             last_attempt: Mutex::new(fetched_at),
             authentication: Mutex::new(HashMap::new()),
@@ -105,6 +105,13 @@ impl AgentManagement {
             }
         }
         Ok(())
+    }
+
+    /// Restores the local list before resolving any agent execution definitions.
+    pub fn restore_conversations(&self) -> Result<Conversations, ManagementError> {
+        let conversations = Conversations::with_store(Vec::new(), self.store.clone())?;
+        self.restore(&conversations)?;
+        Ok(conversations)
     }
 
     pub fn set_registry(&self, registry: Registry) -> Result<(), ManagementError> {

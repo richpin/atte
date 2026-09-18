@@ -1,9 +1,14 @@
 import { Channel, invoke } from "@tauri-apps/api/core";
 import type {
   Conversation,
+  ConversationSummary,
   ConversationUpdate,
   PreparedAgent,
 } from "../model/types";
+
+export function listConversations() {
+  return invoke<ConversationSummary[]>("list_conversations");
+}
 
 export function selectWorkingFolder(agentId: string) {
   return invoke<Conversation | null>("select_working_folder", { agentId });

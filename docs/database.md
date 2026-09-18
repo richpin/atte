@@ -1,6 +1,6 @@
 # 로컬 DB 구조
 
-현재 스키마: SQLite v1. Rust의 `Store`가 DB 접근과 트랜잭션을 소유한다. 파일 위치는 Tauri 앱 데이터 폴더의 `atte.sqlite`이며, macOS 기본 위치는 `~/Library/Application Support/com.atte.app/atte.sqlite`다. 별도 DB 서버는 없다.
+현재 스키마: SQLite v2. Rust의 `Store`가 DB 접근과 트랜잭션을 소유하며 설치 관리와 대화 module이 같은 저장소를 공유한다. 파일 위치는 Tauri 앱 데이터 폴더의 `atte.sqlite`이며, macOS 기본 위치는 `~/Library/Application Support/com.atte.app/atte.sqlite`다. 별도 DB 서버는 없다.
 
 ## agents
 
@@ -31,6 +31,8 @@ Registry 갱신은 `registry_metadata`만 트랜잭션으로 교체한다. 목�
 
 ## 삭제와 실패 복구
 
+대화 목록과 세션 참조는 설치 정보와 독립적으로 보존한다. 목록을 읽기 위해 에이전트 프로세스나 작업 폴더가 존재할 필요는 없다.
+
 1. 삭제 위치가 앱의 설치 디렉터리인지 검사한다. 공용 `agents/runtime`과 외부 경로는 거부한다.
 2. 새 대화 선택에서 제외하고 해당 에이전트의 모든 연결·작업을 종료한다. 프로세스 종료를 기다린 뒤 파일 삭제를 시작한다. 다른 에이전트는 영향을 받지 않는다.
 3. 설치 디렉터리를 즉시 삭제한다. 심볼릭 링크는 대상을 따라가지 않고 링크 자체만 제거한다.
@@ -38,15 +40,26 @@ Registry 갱신은 `registry_metadata`만 트랜잭션으로 교체한다. 목�
 
 파일 삭제 실패 시 설치 정보는 남고 UI에서 삭제 재시도를 할 수 있다. 연결은 이미 종료되었을 수 있다. 파일 삭제 후 DB 반영 전 앱이 종료되면 다음 실행에서 설치 파일 없음으로 표시하며 삭제를 다시 시도하거나 재설치할 수 있다. 없는 경로의 삭제는 성공으로 취급한다. 별도 삭제 대기 테이블이나 재시작 시의 정상 삭제 작업은 없다.
 
-삭제된 설치를 사용한 대화의 표시 내용은 현재 앱 메모리에 남지만, 그 실행 정의는 폐기되어 재연결할 수 없다. 재설치 후 새 대화를 시작한다. 대화 기록의 디스크 저장은 아직 구현되지 않았다. 작업 폴더·공용 Node·공급자 로그인 정보는 삭제하지 않는다.
+삭제된 설치를 사용한 대화의 표시 내용은 현재 앱 메모리에 남고, 대화 메타데이터와 세션 참조는 DB에 남는다. 이전 실행 정의로 재연결하지 않으며 재설치 후 현재 설치 정의로 명시적으로 load/resume을 재시도한다. 에이전트의 기존 세션이 사라졌거나 재개 미지원이면 실패 이유를 표시한다. 작업 폴더·공용 Node·공급자 로그인 정보와 에이전트 소유 세션 기록은 삭제 대상으로 삼지 않는다.
+
+## conversations
+
+| 컬럼 | SQL 타입 | 의미 |
+| --- | --- | --- |
+| `id` | TEXT PRIMARY KEY NOT NULL | Atte가 발급한 대화 UUID |
+| `metadata` | TEXT NOT NULL | `ConversationSummary` JSON: 제목, 작업 폴더, 고정 에이전트 ID, 원격 세션 ID, 생성·수정 Unix 초, 마지막 상태·오류, 중단 여부와 대화 ID |
+
+저장 interface는 본문을 포함하지 않는 `ConversationSummary`만 받는다. 메시지 본문·도구 출력·승인 이력·실행 핸들·인증 정보는 이 테이블에 저장하지 않는다. 제목은 첫 메시지의 앞 60자를 사용한다. 대화 생성과 상태 변경 시 메타데이터를 저장하고, 응답 텍스트 delta는 메모리에만 반영한다. 저장 오류는 대화 snapshot의 `storageError`로 표시한다.
+
+재실행 시 메타데이터로 목록을 만들고 연결 상태는 `disconnected`로 복원한다. 이전 실행 중·승인 대기·중단 처리 상태는 중단 여부로 남기며 승인 조작이나 prompt를 되살리지 않는다. 사용자가 대화를 선택하면 `session/load`를 우선 사용하고 전체 replay 성공 후 메모리의 본문을 교체한다. 실패한 부분 replay는 표시하지 않는다. `resume`만 지원하면 본문 없이 기존 맥락을 이어간다는 안내를 표시한다. 에이전트 부재 시 전체 본문을 읽을 수 있는 디스크 사본은 없다. 07의 미전송 대기 메시지 저장은 아직 이 스키마에 포함되지 않는다.
 
 ## 초기 스키마와 버전
 
-현재 agents 중심 구조를 첫 제품 스키마 v1으로 확정했다. 새 DB는 `001_agents.sql` 한 파일로 초기화하고 `PRAGMA user_version = 1`을 기록한다. 초기화는 트랜잭션이며 v1 재실행 시 기존 데이터를 유지한다. 지원 버전보다 새 DB는 열지 않는다. 향후 실제 스키마 변경부터 새 마이그레이션을 추가한다.
+agents 중심 구조가 첫 제품 스키마 v1이다. 새 DB는 `001_agents.sql` 다음 `002_conversations.sql`을 적용해 v2로 초기화한다. 기존 v1은 두 번째 마이그레이션만 적용하며 설치 산출물·버전·Registry 메타데이터를 보존한다. 초기화와 마이그레이션은 하나의 트랜잭션이고 `PRAGMA user_version = 2`를 기록한다. 지원 버전보다 새 DB는 열지 않는다.
 
 개발 중 사용한 이전 v1–v4 변환 경로는 제품 코드에서 제거했다. 같은 구조를 가진 개발용 v4 DB는 백업 및 스키마 확인 후 버전 번호만 일회성으로 v1에 맞춘다. 이는 앱의 자동 다운그레이드 기능이 아니다. 옛 installations 기반 개발 DB는 현재 v1과 호환되지 않는다.
 
-정의: [v1 SQL](../src-tauri/migrations/001_agents.sql), [저장소](../src-tauri/src/storage.rs), [삭제 처리](../src-tauri/src/agent_management/removal.rs).
+정의: [v1 SQL](../src-tauri/migrations/001_agents.sql), [v2 SQL](../src-tauri/migrations/002_conversations.sql), [저장소](../src-tauri/src/storage.rs), [대화 interface](../src-tauri/src/conversation.rs), [삭제 처리](../src-tauri/src/agent_management/removal.rs).
 
 ## 새로고침과 설치의 갱신 범위
 

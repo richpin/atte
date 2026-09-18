@@ -461,7 +461,12 @@ async fn uninstall_stops_live_acp_and_removes_files_before_returning() {
         .unwrap();
     assert!(replacement.exists());
     assert_ne!(artifact, replacement);
-    assert!(conversations.connect(draft.id).is_err());
+    conversations.connect(draft.id).unwrap();
+    wait_ready(&conversations, draft.id).await;
+    assert_eq!(
+        conversations.get(draft.id).unwrap().remote_session_id,
+        state.remote_session_id
+    );
     let next = conversations
         .create_for_agent(root.path(), "unknown-agent")
         .unwrap();
