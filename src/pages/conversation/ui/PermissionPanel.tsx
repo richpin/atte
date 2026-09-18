@@ -8,10 +8,7 @@ export function PermissionPanel(props: {
   onAnswer: (request: string, option: string) => void;
 }) {
   return (
-    <section
-      aria-label="승인 요청"
-      class="rounded-2xl border border-line bg-panel p-4"
-    >
+    <section aria-label="승인 요청">
       <p class="mb-2 text-xs text-muted">승인 요청</p>
       <h2 class="break-words text-sm font-medium">{props.request.title}</h2>
       <Show when={props.request.details}>

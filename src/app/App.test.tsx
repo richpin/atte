@@ -19,7 +19,10 @@ vi.mock("@tauri-apps/api/core", () => ({
 let receiveUpdate: (update: Record<string, unknown>) => void;
 const receive = (snapshot: Record<string, unknown>) =>
   receiveUpdate({ kind: "snapshot", snapshot });
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  vi.unstubAllGlobals();
+});
 
 it("shows registry icons and falls back for missing or failed images", async () => {
   const images: HTMLImageElement[] = [];
@@ -72,6 +75,13 @@ it("shows registry icons and falls back for missing or failed images", async () 
 });
 const requests = vi.fn();
 beforeEach(() => {
+  vi.stubGlobal(
+    "ResizeObserver",
+    class {
+      observe() {}
+      disconnect() {}
+    },
+  );
   vi.resetAllMocks();
   vi.mocked(invoke).mockImplementation((command, args) => {
     if (command === "prepared_agents")
@@ -455,7 +465,9 @@ it("sends once, renders streaming text and completion, and admits the next messa
   receive({ ...ready, status: "running", revision: 3, turns: [turn] });
   finish();
   expect(await screen.findByText("Hi")).toBeTruthy();
-  expect((button as HTMLButtonElement).disabled).toBe(true);
+  expect(screen.queryByRole("button", { name: "전송" })).toBeNull();
+  expect(screen.getByRole("button", { name: "현재 작업 중단" })).toBe(button);
+  expect((button as HTMLButtonElement).disabled).toBe(false);
   receive({
     ...ready,
     revision: 4,
@@ -950,57 +962,68 @@ it("replaces the composer with agent choices and restores the draft after one de
   expect(screen.queryByRole("region", { name: "승인 요청" })).toBeNull();
 });
 
-it("can stop a turn while approval is pending and ignores a late approval snapshot", async () => {
-  const turn = {
-    id: "turn-1",
-    message: "start",
-    response: "",
-    stopReason: null,
-  };
-  const waiting = {
-    id: "draft-1",
-    workingFolder: "/project",
-    agentId: "codex",
-    status: "waitingForApproval",
-    revision: 4,
-    turns: [turn],
-    permissions: [
-      {
-        id: "p1",
-        title: "Run command",
-        details: "echo test",
-        options: [{ id: "yes-42", name: "Run once" }],
-      },
-    ],
-  };
-  requests.mockResolvedValue(waiting);
-  render(() => <App />);
-  await userEvent.click(screen.getByRole("button", { name: "폴더 선택" }));
-  requests.mockResolvedValue({
-    ...waiting,
-    status: "cancelling",
-    revision: 5,
-    permissions: [],
-  });
-  await userEvent.click(screen.getByRole("button", { name: "현재 작업 중단" }));
-  expect(invoke).toHaveBeenCalledWith("cancel_turn", {
-    id: "draft-1",
-    turn: "turn-1",
-  });
-  expect(await screen.findByText("중단 중…")).toBeTruthy();
-  receive(waiting);
-  expect(screen.queryByRole("button", { name: "Run once" })).toBeNull();
-  receive({
-    ...waiting,
-    status: "sessionReady",
-    revision: 6,
-    permissions: [],
-    turns: [{ ...turn, stopReason: "cancelled" }],
-  });
-  expect(await screen.findByText("취소됨")).toBeTruthy();
-  await userEvent.type(screen.getByRole("textbox"), "continue");
-  expect(screen.getByRole("button", { name: "전송" })).toHaveProperty(
-    "disabled",
-    false,
-  );
-});
+it.each(["running", "waitingForApproval"])(
+  "can stop a %s turn and ignores a late snapshot",
+  async (status) => {
+    const turn = {
+      id: "turn-1",
+      message: "start",
+      response: "",
+      stopReason: null,
+    };
+    const waiting = {
+      id: "draft-1",
+      workingFolder: "/project",
+      agentId: "codex",
+      status,
+      revision: 4,
+      turns: [turn],
+      permissions:
+        status === "waitingForApproval"
+          ? [
+              {
+                id: "p1",
+                title: "Run command",
+                details: "echo test",
+                options: [{ id: "yes-42", name: "Run once" }],
+              },
+            ]
+          : [],
+    };
+    requests.mockResolvedValue(waiting);
+    render(() => <App />);
+    await userEvent.click(screen.getByRole("button", { name: "폴더 선택" }));
+    requests.mockResolvedValue({
+      ...waiting,
+      status: "cancelling",
+      revision: 5,
+      permissions: [],
+    });
+    await userEvent.click(
+      screen.getByRole("button", { name: "현재 작업 중단" }),
+    );
+    expect(invoke).toHaveBeenCalledWith("cancel_turn", {
+      id: "draft-1",
+      turn: "turn-1",
+    });
+    expect(await screen.findByText("중단 중…")).toBeTruthy();
+    expect(
+      screen.getByRole("button", { name: "현재 작업 중단" }),
+    ).toHaveProperty("disabled", true);
+    receive(waiting);
+    expect(screen.queryByRole("button", { name: "Run once" })).toBeNull();
+    receive({
+      ...waiting,
+      status: "sessionReady",
+      revision: 6,
+      permissions: [],
+      turns: [{ ...turn, stopReason: "cancelled" }],
+    });
+    expect(await screen.findByText("취소됨")).toBeTruthy();
+    await userEvent.type(screen.getByRole("textbox"), "continue");
+    expect(screen.getByRole("button", { name: "전송" })).toHaveProperty(
+      "disabled",
+      false,
+    );
+  },
+);

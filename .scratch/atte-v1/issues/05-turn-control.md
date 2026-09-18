@@ -50,10 +50,14 @@ macOS Apple Silicon, production Tauri 앱, 04에서 Registry로 설치한 `@agen
 
 자동 검증: frontend 22개, Rust 42개 통과(기존 opt-in Codex smoke 2개는 기본 suite에서 제외). Biome, FSD, TypeScript, nightly fmt, Cargo check/Clippy와 production macOS `.app` 빌드 통과. 처음 FSD 검사에서 sandbox의 파일 감시 한도 오류가 발생했으며 `CHOKIDAR_USEPOLLING=1 pnpm validate`로 전체 frontend 검사를 통과했다. 이후 커밋 훅의 일반 검사도 통과했다.
 
-Claude·Antigravity의 실제 계정 동작은 미검증으로 남긴다. 다중 대화 UI 통합과 대기열은 07, 앱 종료 정책은 08 범위다.
+당시 Claude·Antigravity의 실제 계정 동작은 미검증으로 남겼다. 이후 Antigravity 승인 화면의 사용자 확인은 아래 후속 기록을 참조한다. 다중 대화 UI 통합과 대기열은 07, 앱 종료 정책은 08 범위다.
 
 - 최종 production 앱에서 긴 승인 문구가 가로 넘침 없이 줄바꿈되고 작업 폴더와 같은 footer 행에 표시되는 것을 재확인했다. `final-cancelled.txt` 승인 대기에서도 중단 후 파일 미생성을 확인했다. 테스트 모드 앱은 종료했다. 구현·검증 완료.
 
 - 2026-09-18 최신 로컬 `main` (`dac3b22`) 통합: Registry 아이콘·삭제 확인, 삭제 시 연결 무효화와 프로세스 종료, SQLite v1 스키마 정책을 유지하면서 승인·취소 구현과 테스트를 병합했다. `origin/main`은 이전 커밋이므로 최신 로컬 `main`을 기준으로 사용했다.
 - 통합 회귀 테스트에서 승인 대기 중 에이전트를 삭제하면 승인 UI가 남는 문제를 재현했다. 삭제 시 미해결 승인과 snapshot을 함께 정리하도록 수정했다. 공개 대화 인터페이스에서 승인 제거, turn 취소, 늦은 승인 응답·재연결 거부와 구독 snapshot을 검증했다.
 - 병합 후 검증: frontend 25개·Rust 52개 테스트 통과(실제 Codex opt-in 2개 제외). Biome, FSD, TypeScript, nightly fmt, Cargo check/Clippy, `git diff --check`, production macOS `.app` 빌드 통과. 이번 통합에서는 실제 Codex 연결 시나리오를 재실행하지 않았으며 위 2026-09-17 기록과 구분한다.
+- 2026-09-18 UI 후속 수정: 대화 화면을 viewport 높이로 제한하고 대화 기록만 스크롤되도록 변경하여 입력창을 하단에 유지한다. 기존 전송 버튼은 실행·승인 대기 중 중단 버튼으로 전환하고, 중단 처리 중 비활성화한 뒤 완료 시 전송으로 복원한다. 승인 화면도 같은 입력 영역과 공통 버튼을 사용한다. frontend 26개 테스트, Biome/FSD/TypeScript 및 Vite production 빌드 통과. 파일 감시 한도 오류는 `CHOKIDAR_USEPOLLING=1`로 검사를 재실행하여 통과했다. 이번 UI 수정의 native 시각 검증은 아직 수행하지 않았다.
+- 자동 스크롤 후속 구현: 최하단에서는 내용 증가와 대화 영역 크기 변경을 따라간다. 사용자가 위로 스크롤하면 위치를 유지하며 입력창 위 중앙에 원형 아래 화살표 버튼을 표시한다. 버튼 클릭·수동 최하단 복귀·새 turn에서 따라가기를 재개한다. `ConversationHistory`에 스크롤 책임을 분리하고 ResizeObserver를 해제하도록 했다. geometry를 모의한 테스트로 스트리밍, 위치 유지, 버튼·수동 복귀, 새 turn, 영역 크기 변경 및 observer 정리를 검증했다. frontend 27개 테스트와 정적 검사·Vite 빌드 통과. native 시각 검증은 별도 확인이 필요하다.
+- 스트리밍 중 위로 스크롤해도 최하단으로 돌아가는 회귀 수정: 사용자 이동의 scroll 이벤트보다 ResizeObserver가 먼저 실행되면 위치 599가 최하단 700으로 덮어써지는 실패를 테스트로 재현했다. 위 방향 휠·키보드 입력 즉시 따라가기를 해제하고, 스크롤 방향으로 재개를 판단하여 지연된 자동 스크롤 이벤트나 2px 오차 범위가 사용자 의도를 덮어쓰지 않도록 했다. scroll 이벤트 전의 스크롤바 이동도 감지한다. 휠·키보드·스크롤바 각각에서 scroll/resize 순서를 바꾼 6개 회귀 사례와 버튼 재개를 검증했다. frontend 33개 테스트, 정적 검사, Vite 빌드 통과. 실제 macOS 트랙패드의 native 검증은 수행하지 않았다.
+- 사용자 후속 검증 완료: Antigravity 승인 화면이 정상 동작함을 확인했고 검증 종료를 선언했다. 파일 쓰기의 Allow/Deny 두 선택지는 설치된 Antigravity ACP 1.1.1의 정책이며 Atte의 제한이 아니다. 검증 중 발견한 Orca 전역 훅의 셸 명령과 Antigravity ACP 직접 실행 방식의 호환성 문제는 외부 환경 문제로 분리했다. 이 확인을 모든 에이전트·모든 시나리오의 실검증 완료로 확대하지 않는다.
