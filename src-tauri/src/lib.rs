@@ -4,6 +4,7 @@ pub mod agent_management;
 mod agent_runtime;
 pub mod conversation;
 mod installation_files;
+mod lifecycle;
 pub mod storage;
 
 use conversation::{
@@ -224,9 +225,11 @@ pub fn run() {
             let conversations = management.restore_conversations()?;
             app.manage(conversations);
             app.manage(management);
+            lifecycle::install(app.handle())?;
             Ok(())
         })
         .manage(Subscriptions::default())
+        .manage(lifecycle::Lifecycle::default())
         .on_window_event(|window, event| {
             if matches!(event, tauri::WindowEvent::Destroyed) {
                 if let Ok(mut entries) = window.state::<Subscriptions>().0.lock() {
@@ -256,11 +259,7 @@ pub fn run() {
         ])
         .build(tauri::generate_context!());
     match app {
-        Ok(app) => app.run(|handle, event| {
-            if let tauri::RunEvent::Exit = event {
-                tauri::async_runtime::block_on(handle.state::<Conversations>().shutdown());
-            }
-        }),
+        Ok(app) => app.run(lifecycle::on_event),
         Err(error) => {
             eprintln!("error while running Atte: {error}");
             std::process::exit(1);
@@ -283,16 +282,21 @@ async fn refresh_agent_catalog(
     conversations: State<'_, Conversations>,
     management: State<'_, agent_management::AgentManagement>,
     force: Option<bool>,
+    lifecycle: State<'_, lifecycle::Lifecycle>,
 ) -> Result<Vec<agent_management::ManagedAgent>, String> {
-    if force.unwrap_or(true) {
-        management.refresh().await
-    } else {
-        management.refresh_if_stale().await
-    }
-    .map_err(|error| error.to_string())?;
-    management
-        .catalog(&conversations)
-        .map_err(|error| error.to_string())
+    lifecycle
+        .operation(async {
+            if force.unwrap_or(true) {
+                management.refresh().await
+            } else {
+                management.refresh_if_stale().await
+            }
+            .map_err(|error| error.to_string())?;
+            management
+                .catalog(&conversations)
+                .map_err(|error| error.to_string())
+        })
+        .await
 }
 
 #[tauri::command]
@@ -301,18 +305,23 @@ async fn install_agent(
     channel: tauri::ipc::Channel<String>,
     management: State<'_, agent_management::AgentManagement>,
     conversations: State<'_, Conversations>,
+    lifecycle: State<'_, lifecycle::Lifecycle>,
 ) -> Result<(), String> {
-    management
-        .install(
-            &id,
-            &conversations,
-            &agent_management::installer::SystemInstaller::default(),
-            &|message| {
-                let _ = channel.send(message.to_owned());
-            },
-        )
+    lifecycle
+        .finish_before_exit(async {
+            management
+                .install(
+                    &id,
+                    &conversations,
+                    &agent_management::installer::SystemInstaller::default(),
+                    &|message| {
+                        let _ = channel.send(message.to_owned());
+                    },
+                )
+                .await
+                .map_err(|error| error.to_string())
+        })
         .await
-        .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -320,11 +329,16 @@ async fn uninstall_agent(
     id: String,
     management: State<'_, agent_management::AgentManagement>,
     conversations: State<'_, Conversations>,
+    lifecycle: State<'_, lifecycle::Lifecycle>,
 ) -> Result<(), String> {
-    management
-        .uninstall(&id, &conversations)
+    lifecycle
+        .finish_before_exit(async {
+            management
+                .uninstall(&id, &conversations)
+                .await
+                .map_err(|error| error.to_string())
+        })
         .await
-        .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -333,9 +347,14 @@ async fn authenticate_agent(
     id: String,
     method: Option<String>,
     management: State<'_, agent_management::AgentManagement>,
+    lifecycle: State<'_, lifecycle::Lifecycle>,
 ) -> Result<agent_management::authentication::Authentication, String> {
-    management
-        .authenticate(&id, method.as_deref(), &conversations)
+    lifecycle
+        .operation(async {
+            management
+                .authenticate(&id, method.as_deref(), &conversations)
+                .await
+                .map_err(|error| error.to_string())
+        })
         .await
-        .map_err(|error| error.to_string())
 }

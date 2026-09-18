@@ -1,4 +1,5 @@
 //! Shared ACP stdio connection with independent, session-scoped execution.
+mod process;
 mod replay;
 use crate::{
     agent::AgentDefinition,
@@ -20,6 +21,7 @@ use agent_client_protocol::{
     },
     Agent, ByteStreams, Client, ConnectionTo, ErrorCode,
 };
+pub(crate) use process::ProcessGroup;
 use std::{
     collections::HashMap,
     path::PathBuf,
@@ -200,9 +202,9 @@ pub(crate) async fn run(
             } else { Some(failure) }
         },
     };
+    drop(group);
     drop(protocol);
     sessions.close();
-    drop(group);
     let _ = child.kill().await;
     let _ = child.wait().await;
     let mut all = participants
@@ -437,18 +439,4 @@ fn failed(updates: &RuntimeUpdates, failure: ConnectionFailure) {
         }
         conversation.failure = Some(failure);
     });
-}
-
-pub(crate) struct ProcessGroup(pub(crate) Option<u32>);
-
-impl Drop for ProcessGroup {
-    fn drop(&mut self) {
-        #[cfg(unix)]
-        if let Some(id) = self.0 {
-            let _ = nix::sys::signal::killpg(
-                nix::unistd::Pid::from_raw(id as i32),
-                nix::sys::signal::Signal::SIGKILL,
-            );
-        }
-    }
 }

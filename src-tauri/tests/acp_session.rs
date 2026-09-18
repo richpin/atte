@@ -73,6 +73,98 @@ async fn list_subscription_tracks_background_conversation_status() {
 }
 
 #[tokio::test]
+async fn shutdown_stops_all_work_and_restores_queues_without_dispatch() {
+    let root = tempfile::tempdir().unwrap();
+    let store = std::sync::Arc::new(
+        atte_lib::storage::Store::open(&root.path().join("atte.sqlite")).unwrap(),
+    );
+    let mut agent = mock_agent();
+    agent.env.insert("FIXTURE_MODE".into(), "concurrent".into());
+    let conversations = Conversations::with_store(vec![agent.clone()], store.clone()).unwrap();
+    let mut ids = Vec::new();
+    for message in ["hold", "approval"] {
+        let draft = conversations.create(root.path()).unwrap();
+        conversations.connect(draft.id).unwrap();
+        settle(&conversations, draft.id).await;
+        conversations
+            .send_message(draft.id, message.into())
+            .unwrap();
+        let mut stream = subscribe(&conversations, draft.id);
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                let next = stream.recv().await.unwrap();
+                if (message == "hold" && !next.turns[0].response.is_empty())
+                    || next.status == ConversationStatus::WaitingForApproval
+                {
+                    break;
+                }
+            }
+        })
+        .await
+        .unwrap();
+        conversations
+            .send_message(draft.id, "queued".into())
+            .unwrap();
+        ids.push(draft.id);
+    }
+    tokio::time::timeout(Duration::from_secs(6), conversations.shutdown())
+        .await
+        .unwrap();
+    for id in &ids {
+        let stopped = conversations.get(*id).unwrap();
+        assert_eq!(stopped.status, ConversationStatus::Disconnected);
+        assert_eq!(stopped.turns[0].stop_reason.as_deref(), Some("cancelled"));
+        assert!(stopped.permissions.is_empty());
+        assert!(conversations.send_message(*id, "late".into()).is_err());
+    }
+    let restored = Conversations::with_store(vec![agent], store).unwrap();
+    assert_eq!(restored.list().unwrap().len(), 2);
+    for id in ids {
+        let saved = restored.get(id).unwrap();
+        assert!(saved.interrupted);
+        assert!(saved.turns.is_empty());
+        assert_eq!(saved.queued_messages[0].text, "queued");
+        restored.connect(id).unwrap();
+        let ready = settle(&restored, id).await;
+        assert_eq!(ready.status, ConversationStatus::SessionReady);
+        assert!(ready.turns.is_empty());
+        assert_eq!(ready.queued_messages, saved.queued_messages);
+    }
+    restored.shutdown().await;
+}
+
+#[tokio::test]
+async fn shutdown_delivers_turn_and_permission_cancellation_before_reaping() {
+    let folder = tempfile::tempdir().unwrap();
+    let receipt = folder.path().join("cancellation");
+    let mut agent = mock_agent();
+    agent
+        .env
+        .insert("FIXTURE_MODE".into(), "permission-cancel".into());
+    agent
+        .env
+        .insert("CANCELLATION_FILE".into(), receipt.to_string_lossy().into());
+    let conversations = Conversations::new(vec![agent]);
+    let draft = conversations.create(folder.path()).unwrap();
+    conversations.connect(draft.id).unwrap();
+    settle(&conversations, draft.id).await;
+    conversations
+        .send_message(draft.id, "permission".into())
+        .unwrap();
+    let mut stream = subscribe(&conversations, draft.id);
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while stream.recv().await.unwrap().status != ConversationStatus::WaitingForApproval {}
+    })
+    .await
+    .unwrap();
+    conversations.shutdown().await;
+    assert_eq!(
+        std::fs::read_to_string(receipt).unwrap(),
+        "turn and permissions cancelled"
+    );
+}
+
+#[tokio::test]
 async fn shared_connection_isolates_sessions_permissions_and_cancellation() {
     let folder = tempfile::tempdir().unwrap();
     let mut agent = mock_agent();
@@ -571,6 +663,9 @@ async fn restart_of_an_approval_wait_restores_only_metadata_without_replaying_th
     .await
     .unwrap();
     first.shutdown().await;
+    let stopped = first.get(draft.id).unwrap();
+    assert_eq!(stopped.turns[0].stop_reason.as_deref(), Some("cancelled"));
+    assert!(stopped.permissions.is_empty());
     let restored = Conversations::with_store(vec![agent], store).unwrap();
     let conversation = restored.get(draft.id).unwrap();
     assert!(conversation.interrupted);
@@ -964,6 +1059,43 @@ async fn shutdown_reaps_the_adapter_and_stops_its_descendants() {
     })
     .await
     .unwrap();
+}
+
+#[cfg(target_os = "macos")]
+#[tokio::test]
+async fn shutdown_reaps_descendants_that_create_their_own_process_group() {
+    use nix::{sys::signal::kill, unistd::Pid};
+    let folder = tempfile::tempdir().unwrap();
+    let mut agent = mock_agent();
+    let pid_file = folder.path().join("child-pid");
+    agent.env.insert("FIXTURE_MODE".into(), "tree".into());
+    agent.env.insert("DETACHED_CHILD".into(), "1".into());
+    agent
+        .env
+        .insert("CHILD_PID_FILE".into(), pid_file.to_string_lossy().into());
+    let conversations = Conversations::new(vec![agent]);
+    let draft = conversations.create(folder.path()).unwrap();
+    conversations.connect(draft.id).unwrap();
+    assert_eq!(
+        settle(&conversations, draft.id).await.status,
+        ConversationStatus::SessionReady
+    );
+    let pid = Pid::from_raw(std::fs::read_to_string(pid_file).unwrap().parse().unwrap());
+    conversations.shutdown().await;
+    let stopped = tokio::time::timeout(Duration::from_secs(3), async {
+        while kill(pid, None).is_ok() {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .is_ok();
+    if !stopped {
+        let _ = kill(pid, nix::sys::signal::Signal::SIGKILL);
+    }
+    assert!(
+        stopped,
+        "an agent descendant in another process group survived quit"
+    );
 }
 
 #[cfg(unix)]

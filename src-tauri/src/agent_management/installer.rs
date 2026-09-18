@@ -252,10 +252,11 @@ pub(crate) async fn run_command(
     #[cfg(unix)]
     command.process_group(0);
     let mut child = command.spawn().map_err(|_| ManagementError::Install)?;
-    let _group = crate::agent_runtime::ProcessGroup(child.id());
+    let group = crate::agent_runtime::ProcessGroup(child.id());
     match tokio::time::timeout(timeout, child.wait()).await {
         Ok(Ok(status)) if status.success() => Ok(()),
         _ => {
+            drop(group);
             let _ = child.kill().await;
             let _ = child.wait().await;
             Err(ManagementError::Install)

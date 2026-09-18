@@ -57,11 +57,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         fs::write(path, process::id().to_string())?;
     }
     let _descendant = if mode == "tree" {
-        let child = Descendant(
-            Command::new(env::current_exe()?)
-                .arg("--descendant")
-                .spawn()?,
-        );
+        let mut command = Command::new(env::current_exe()?);
+        command.arg("--descendant");
+        #[cfg(unix)]
+        if env::var_os("DETACHED_CHILD").is_some() {
+            use std::os::unix::process::CommandExt;
+            command.process_group(0);
+        }
+        let child = Descendant(command.spawn()?);
         fs::write(
             env::var_os("CHILD_PID_FILE").ok_or("missing child PID file")?,
             child.0.id().to_string(),
@@ -260,6 +263,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             &input.next().ok_or("missing late cancellation")??,
                         )?;
                         assert_eq!(response["result"]["outcome"]["outcome"], "cancelled");
+                        if let Some(path) = env::var_os("CANCELLATION_FILE") {
+                            fs::write(path, "turn and permissions cancelled")?;
+                        }
                         send(
                             &mut output,
                             json!({"jsonrpc":"2.0","id":request["id"],"result":{"stopReason":"cancelled"}}),
@@ -340,6 +346,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             thread::sleep(Duration::from_millis(200));
             process::exit(13);
         }
+    }
+    if env::var_os("DETACHED_CHILD").is_some() {
+        thread::sleep(Duration::from_secs(60));
     }
     Ok(())
 }

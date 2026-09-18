@@ -767,6 +767,52 @@ impl Conversations {
     /// Stops and reaps all owned processes before application exit.
     pub async fn shutdown(&self) {
         let _lifecycle = self.lifecycle.lock().await;
+        {
+            let Ok(mut state) = self.state.lock() else {
+                return;
+            };
+            state.closed = true;
+            for entry in state.entries.values() {
+                if let Ok(mut current) = entry.state.lock() {
+                    if matches!(
+                        current.conversation.status,
+                        ConversationStatus::Running
+                            | ConversationStatus::WaitingForApproval
+                            | ConversationStatus::Cancelling
+                    ) {
+                        current.conversation.interrupted = true;
+                        current.conversation.status = ConversationStatus::Cancelling;
+                        current.clear_permissions();
+                        if let (Some(runtime), Some(turn)) =
+                            (&entry.runtime, current.conversation.turns.last())
+                        {
+                            let _ = runtime.cancellations.send(turn.id);
+                        }
+                        current.publish();
+                    }
+                }
+            }
+        }
+        let mut updates = self.subscribe_list().ok();
+        // Keep polling ACP long enough for cancellation replies, but never depend
+        // on an unresponsive agent to let the application quit.
+        let _ = tokio::time::timeout(std::time::Duration::from_secs(1), async {
+            if let Some(updates) = &mut updates {
+                while let Some(entries) = updates.recv().await {
+                    if entries.iter().all(|entry| {
+                        !matches!(
+                            entry.status,
+                            ConversationStatus::Running
+                                | ConversationStatus::WaitingForApproval
+                                | ConversationStatus::Cancelling
+                        )
+                    }) {
+                        break;
+                    }
+                }
+            }
+        })
+        .await;
         let runtimes = {
             let Ok(mut state) = self.state.lock() else {
                 return;
@@ -782,6 +828,14 @@ impl Conversations {
                     );
                     current.conversation.status = ConversationStatus::Disconnected;
                     current.clear_permissions();
+                    if let Some(turn) = current
+                        .conversation
+                        .turns
+                        .last_mut()
+                        .filter(|turn| turn.stop_reason.is_none())
+                    {
+                        turn.stop_reason = Some("cancelled".into());
+                    }
                     current.publish();
                     current.generation += 1;
                 }
@@ -807,8 +861,13 @@ async fn stop_runtimes(runtimes: Vec<Runtime>) {
             tasks.push(task);
         }
     }
-    for task in tasks {
-        let _ = task.await;
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+    for mut task in tasks {
+        if tokio::time::timeout_at(deadline, &mut task).await.is_err() {
+            // Runtime guards kill only this app's process group on cancellation.
+            task.abort();
+            let _ = task.await;
+        }
     }
 }
 
