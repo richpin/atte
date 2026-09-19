@@ -2,7 +2,7 @@ import { useI18n } from "shared/i18n";
 import { For, Show } from "solid-js";
 import type { PermissionRequest } from "../model/types";
 
-export function PermissionPanel(props: {
+export function PermissionInput(props: {
   request: PermissionRequest;
   workingFolder: string;
   disabled: boolean;

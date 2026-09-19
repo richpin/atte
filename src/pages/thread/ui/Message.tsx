@@ -73,10 +73,10 @@ function UserMessage(props: { children: string }) {
   );
 }
 
-export function Transcript(props: { turns: Turn[] }) {
+export function Message(props: { turns: Turn[] }) {
   const { t } = useI18n();
   return (
-    <ol aria-label={t("thread.transcript")} class="flex flex-col gap-8">
+    <ol aria-label={t("thread.messages")} class="flex flex-col gap-8">
       <Index each={props.turns}>
         {(turn) => (
           <li class="flex min-w-0 flex-col gap-5">

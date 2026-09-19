@@ -88,9 +88,9 @@ export const ko = {
       running: "작업 중에도 다음 메시지를 입력할 수 있습니다.",
       ready: "연결된 스레드에 메시지를 보내세요.",
     },
-    history: "스레드 기록",
+    timeline: "스레드 타임라인",
     jumpToLatest: "최신 내용으로 이동",
-    transcript: "스레드 내용",
+    messages: "스레드 메시지",
     showMore: "더 보기",
     showLess: "간략히",
     completion: {

@@ -81,9 +81,9 @@ export const en = {
       running: "You can type the next message while this task runs.",
       ready: "Send a message to the connected thread.",
     },
-    history: "Thread history",
+    timeline: "Thread timeline",
     jumpToLatest: "Jump to latest",
-    transcript: "Thread conversation",
+    messages: "Thread messages",
     showMore: "Show more",
     showLess: "Show less",
     completion: {

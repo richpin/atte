@@ -2,7 +2,7 @@ import { cleanup, fireEvent, render, screen } from "@solidjs/testing-library";
 import { I18nProvider } from "shared/i18n";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { Turn } from "../model/types";
-import { Transcript } from "./Transcript";
+import { Message } from "./Message";
 
 let resize!: () => void;
 
@@ -35,10 +35,10 @@ function turn(message: string): Turn {
   };
 }
 
-function renderTranscript(message: string) {
+function renderMessage(message: string) {
   render(() => (
     <I18nProvider>
-      <Transcript turns={[turn(message)]} />
+      <Message turns={[turn(message)]} />
     </I18nProvider>
   ));
 }
@@ -55,14 +55,14 @@ function setMessageHeight(message: string, height: number) {
 }
 
 it("does not offer expansion when the user message fits within 20 lines", () => {
-  renderTranscript("Short prompt");
+  renderMessage("Short prompt");
   setMessageHeight("Short prompt", 400);
 
   expect(screen.queryByRole("button", { name: "Show more" })).toBeNull();
 });
 
 it("expands and collapses a user message taller than 20 lines", () => {
-  renderTranscript("Long prompt");
+  renderMessage("Long prompt");
   const content = setMessageHeight("Long prompt", 401);
   const clipping = content.parentElement;
 
@@ -94,7 +94,7 @@ it("expands and collapses a user message taller than 20 lines", () => {
 });
 
 it("updates folding when wrapping changes the rendered line count", () => {
-  renderTranscript("Responsive prompt");
+  renderMessage("Responsive prompt");
   const content = setMessageHeight("Responsive prompt", 401);
   expect(screen.getByRole("button", { name: "Show more" })).toBeTruthy();
 

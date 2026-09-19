@@ -1,7 +1,7 @@
 import { cleanup, fireEvent, render, screen } from "@solidjs/testing-library";
 import { createSignal } from "solid-js";
 import { afterEach, expect, it, vi } from "vitest";
-import { ThreadHistory } from "./ThreadHistory";
+import { ThreadTimeline } from "./ThreadTimeline";
 
 afterEach(() => {
   cleanup();
@@ -30,8 +30,8 @@ it.each([
         disconnect() {}
       },
     );
-    render(() => <ThreadHistory followKey="turn-1">Response</ThreadHistory>);
-    const viewport = screen.getByRole("region", { name: "스레드 기록" });
+    render(() => <ThreadTimeline followKey="turn-1">Response</ThreadTimeline>);
+    const viewport = screen.getByRole("region", { name: "스레드 타임라인" });
     let height = 1000;
     let top = 0;
     Object.defineProperties(viewport, {
@@ -83,8 +83,8 @@ it("follows growth, preserves reading position, and resumes from the latest butt
     },
   );
   const [key, setKey] = createSignal("thread:turn-1");
-  render(() => <ThreadHistory followKey={key()}>Response</ThreadHistory>);
-  const viewport = screen.getByRole("region", { name: "스레드 기록" });
+  render(() => <ThreadTimeline followKey={key()}>Response</ThreadTimeline>);
+  const viewport = screen.getByRole("region", { name: "스레드 타임라인" });
   let height = 1000;
   let visible = 400;
   let top = 0;

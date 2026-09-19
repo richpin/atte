@@ -1,9 +1,9 @@
 import { useI18n } from "shared/i18n";
 import { createMemo, createSignal, For, Show } from "solid-js";
-import type { QueuedMessage } from "../model/types";
+import type { QueuedMessage as QueuedMessageData } from "../model/types";
 
-export function QueuedMessages(props: {
-  messages: QueuedMessage[];
+export function QueuedMessage(props: {
+  messages: QueuedMessageData[];
   onDelete: (id: string) => Promise<void>;
 }) {
   const { t } = useI18n();

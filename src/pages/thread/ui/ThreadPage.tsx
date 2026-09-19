@@ -11,11 +11,10 @@ import {
 import { preparedAgents } from "../api/threads";
 import { createThreadModel } from "../model/thread";
 import type { ConnectionFailure, Thread } from "../model/types";
-import { PermissionPanel } from "./PermissionPanel";
-import { QueuedMessages } from "./QueuedMessages";
-import { ThreadHistory } from "./ThreadHistory";
+import { Message } from "./Message";
+import { ThreadComposer } from "./ThreadComposer";
 import { ThreadSidebar } from "./ThreadSidebar";
-import { Transcript } from "./Transcript";
+import { ThreadTimeline } from "./ThreadTimeline";
 
 export function ThreadPage(props: {
   active: boolean;
@@ -71,7 +70,6 @@ export function ThreadPage(props: {
     },
   );
   const [selectedAgent, setSelectedAgent] = createSignal("");
-  let messageInput: HTMLTextAreaElement | undefined;
   const agentId = () =>
     agents()?.some((agent) => agent.id === selectedAgent())
       ? selectedAgent()
@@ -101,15 +99,6 @@ export function ThreadPage(props: {
       () => [props.active, agents.loading, agentId(), pendingFolder()] as const,
       ([active, loading, agent, folder]) => {
         if (active && !loading && agent && folder) void createInFolder(folder);
-      },
-    ),
-  );
-
-  createEffect(
-    on(
-      () => [props.active, thread()?.id, thread()?.status] as const,
-      ([active, , status]) => {
-        if (active && status === "sessionReady") messageInput?.focus();
       },
     ),
   );
@@ -215,7 +204,7 @@ export function ThreadPage(props: {
               </section>
             }
           >
-            <ThreadHistory followKey={`${thread()?.id}:${activeTurn()}`}>
+            <ThreadTimeline followKey={`${thread()?.id}:${activeTurn()}`}>
               <Show when={thread()?.status === "connecting"}>
                 <p role="status">
                   {thread()?.remoteSessionId
@@ -310,7 +299,7 @@ export function ThreadPage(props: {
                   {t("thread.reconnect")}
                 </button>
               </Show>
-              <Transcript turns={thread()?.turns ?? []} />
+              <Message turns={thread()?.turns ?? []} />
               <Show when={thread()?.notice}>
                 {(notice) => (
                   <p role="status" class="text-sm text-muted">
@@ -318,113 +307,32 @@ export function ThreadPage(props: {
                   </p>
                 )}
               </Show>
-            </ThreadHistory>
-            <div class="mx-auto mb-6 w-full max-w-4xl shrink-0 px-6">
-              <QueuedMessages
-                messages={thread()?.queuedMessages ?? []}
-                onDelete={deleteQueued}
-              />
-              <form
-                class="max-h-[60dvh] overflow-y-auto rounded-2xl border border-line bg-panel p-4"
-                onSubmit={(event) => {
-                  event.preventDefault();
-                  void send();
-                }}
-              >
-                <Show
-                  when={thread()?.permissions?.[0]}
-                  fallback={
-                    <textarea
-                      ref={messageInput}
-                      aria-label={t("thread.message")}
-                      aria-describedby="connection-note"
-                      class="w-full resize-none bg-transparent text-sm outline-none disabled:cursor-not-allowed"
-                      disabled={
-                        sending() ||
-                        !["sessionReady", "running", "cancelling"].includes(
-                          thread()?.status ?? "",
-                        )
-                      }
-                      value={message()}
-                      onInput={(event) => setMessage(event.currentTarget.value)}
-                      onKeyDown={(event) => {
-                        if (
-                          event.key !== "Enter" ||
-                          event.shiftKey ||
-                          event.isComposing ||
-                          event.keyCode === 229
-                        )
-                          return;
-                        event.preventDefault();
-                        if (!event.repeat) void send();
-                      }}
-                      rows={2}
-                      placeholder={t("thread.messagePlaceholder")}
-                    />
+            </ThreadTimeline>
+            <Show when={thread()}>
+              {(currentThread) => (
+                <ThreadComposer
+                  active={props.active}
+                  thread={currentThread()}
+                  agentName={
+                    agents()?.find(
+                      (agent) => agent.id === currentThread().agentId,
+                    )?.name ?? currentThread().agentId
                   }
-                >
-                  {(request) => (
-                    <PermissionPanel
-                      request={request()}
-                      workingFolder={thread()?.workingFolder ?? ""}
-                      disabled={Boolean(answering()) || Boolean(cancelling())}
-                      onAnswer={answer}
-                    />
-                  )}
-                </Show>
-                <div class="mt-3 flex items-center justify-between text-xs text-muted">
-                  <span>
-                    {agents()?.find((agent) => agent.id === thread()?.agentId)
-                      ?.name ?? thread()?.agentId}
-                  </span>
-                  <button
-                    type={showStop() ? "button" : "submit"}
-                    aria-label={
-                      showStop() ? t("thread.stop") : t("thread.send")
-                    }
-                    class="grid size-8 shrink-0 place-items-center rounded-full bg-accent text-white focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-accent disabled:opacity-40"
-                    disabled={
-                      showStop() ? stopping() : !canSend() || !message().trim()
-                    }
-                    onClick={() => {
-                      if (showStop()) void cancel();
-                    }}
-                  >
-                    <Show
-                      when={showStop()}
-                      fallback={
-                        <svg
-                          aria-hidden="true"
-                          width="18"
-                          height="18"
-                          viewBox="0 0 24 24"
-                          fill="none"
-                          stroke="currentColor"
-                          stroke-width="2.25"
-                          stroke-linecap="round"
-                          stroke-linejoin="round"
-                        >
-                          <path d="M12 19V5m-7 7 7-7 7 7" />
-                        </svg>
-                      }
-                    >
-                      <span
-                        aria-hidden="true"
-                        class="size-3 rounded-[2px] bg-current"
-                      />
-                    </Show>
-                  </button>
-                </div>
-              </form>
-              <p
-                id="connection-note"
-                class="mt-2 text-center text-xs text-muted"
-              >
-                {thread()?.status === "running"
-                  ? t("thread.composer.running")
-                  : t("thread.composer.ready")}
-              </p>
-            </div>
+                  message={message()}
+                  sending={sending()}
+                  answering={Boolean(answering())}
+                  cancelling={Boolean(cancelling())}
+                  showStop={showStop()}
+                  stopping={stopping()}
+                  canSend={canSend()}
+                  onMessageChange={setMessage}
+                  onSend={() => void send()}
+                  onCancel={() => void cancel()}
+                  onAnswer={answer}
+                  onDeleteQueued={deleteQueued}
+                />
+              )}
+            </Show>
           </Show>
         </div>
       </div>
