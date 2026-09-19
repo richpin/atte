@@ -1,15 +1,15 @@
 mod archive;
 pub mod download;
 pub mod node_runtime;
-// Agent setup application boundary, independent of Tauri and conversation lifetimes.
+// Agent setup application boundary, independent of Tauri and thread lifetimes.
 pub mod authentication;
 pub mod installer;
 pub mod registry;
 mod removal;
 
 use crate::{
-    conversation::{AuthenticationStatus, Conversations},
     storage::{Installation, Store},
+    thread::{AuthenticationStatus, Threads},
 };
 use authentication::Authentication;
 use installer::Installer;
@@ -96,10 +96,10 @@ impl AgentManagement {
         })
     }
 
-    pub fn restore(&self, conversations: &Conversations) -> Result<(), ManagementError> {
+    pub fn restore(&self, threads: &Threads) -> Result<(), ManagementError> {
         for installation in self.store.installations()? {
             if usable(&installation) {
-                conversations
+                threads
                     .register_agent(installation.definition)
                     .map_err(|_| ManagementError::Install)?;
             }
@@ -108,10 +108,10 @@ impl AgentManagement {
     }
 
     /// Restores the local list before resolving any agent execution definitions.
-    pub fn restore_conversations(&self) -> Result<Conversations, ManagementError> {
-        let conversations = Conversations::with_store(Vec::new(), self.store.clone())?;
-        self.restore(&conversations)?;
-        Ok(conversations)
+    pub fn restore_threads(&self) -> Result<Threads, ManagementError> {
+        let threads = Threads::with_store(Vec::new(), self.store.clone())?;
+        self.restore(&threads)?;
+        Ok(threads)
     }
 
     pub fn set_registry(&self, registry: Registry) -> Result<(), ManagementError> {
@@ -173,10 +173,7 @@ impl AgentManagement {
         )?)
     }
 
-    pub fn catalog(
-        &self,
-        conversations: &Conversations,
-    ) -> Result<Vec<ManagedAgent>, ManagementError> {
+    pub fn catalog(&self, threads: &Threads) -> Result<Vec<ManagedAgent>, ManagementError> {
         let agents = self.store.agents()?;
         let authentication = self
             .authentication
@@ -210,7 +207,7 @@ impl AgentManagement {
                     installed: installation.is_some_and(usable),
                     authentication: {
                         let mut state = authentication.get(id).cloned().unwrap_or_default();
-                        if let Some(evidence) = conversations.authentication_status(id) {
+                        if let Some(evidence) = threads.authentication_status(id) {
                             if evidence != AuthenticationStatus::Unknown {
                                 state.connected = true;
                             }
@@ -227,7 +224,7 @@ impl AgentManagement {
     pub async fn install(
         &self,
         id: &str,
-        conversations: &Conversations,
+        threads: &Threads,
         installer: &impl Installer,
         progress: &(dyn Fn(&str) + Send + Sync),
     ) -> Result<(), ManagementError> {
@@ -239,7 +236,7 @@ impl AgentManagement {
             .find(|agent| agent.id == id)
             .ok_or(ManagementError::Registry)?;
         if let Some(existing) = stored.installation.as_ref().filter(|item| usable(item)) {
-            conversations
+            threads
                 .register_agent(existing.definition.clone())
                 .map_err(|_| ManagementError::Install)?;
             progress("기존 설치 사용");
@@ -251,7 +248,7 @@ impl AgentManagement {
             .ok_or(ManagementError::Unsupported)?;
         // A broken installation is retired before replacing its files or definition.
         if let Some(existing) = stored.installation {
-            conversations
+            threads
                 .unregister_agent(id)
                 .await
                 .map_err(|_| ManagementError::Connection)?;
@@ -280,7 +277,7 @@ impl AgentManagement {
             let _ = crate::installation_files::remove(&self.root, &installation.artifact);
             return Err(error.into());
         }
-        conversations
+        threads
             .register_agent(installation.definition)
             .map_err(|_| ManagementError::Install)?;
         self.authentication
@@ -295,7 +292,7 @@ impl AgentManagement {
         &self,
         id: &str,
         method: Option<&str>,
-        conversations: &Conversations,
+        threads: &Threads,
     ) -> Result<Authentication, ManagementError> {
         let _operation = self.begin(id)?;
         let installation = self
@@ -309,11 +306,11 @@ impl AgentManagement {
             .map_err(|_| ManagementError::Connection)?
             .remove(id);
         if method.is_some() {
-            conversations.record_authentication(id, AuthenticationStatus::Unknown);
+            threads.record_authentication(id, AuthenticationStatus::Unknown);
         }
         let state = authentication::inspect(&installation.definition, &self.root, method).await?;
         if state.authenticated {
-            conversations.record_authentication(id, AuthenticationStatus::Authenticated);
+            threads.record_authentication(id, AuthenticationStatus::Authenticated);
         }
         self.authentication
             .lock()

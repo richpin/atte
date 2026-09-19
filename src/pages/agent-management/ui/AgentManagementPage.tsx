@@ -90,7 +90,7 @@ export function AgentManagementPage(props: {
           id,
           "message",
           result.authenticated
-            ? "인증 완료. 대화로 돌아가 새 대화를 시작하거나 다시 연결하세요."
+            ? "인증 완료. 스레드로 돌아가 새 스레드를 시작하거나 다시 연결하세요."
             : "ACP 연결 확인. 인증 여부는 첫 메시지 또는 로그인으로 확인합니다.",
         );
       }
@@ -118,12 +118,12 @@ export function AgentManagementPage(props: {
           class="ml-auto rounded-lg border border-line px-3 py-1.5 text-xs focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-accent"
           onClick={props.onBack}
         >
-          대화로 돌아가기
+          스레드로 돌아가기
         </button>
       </header>
       <section class="mx-auto max-w-3xl space-y-5 px-6 py-8">
         <p class="text-sm text-muted">
-          에이전트를 설치하고 로그인한 뒤 작업 폴더에서 대화를 시작하세요.
+          에이전트를 설치하고 로그인한 뒤 작업 폴더에서 스레드를 시작하세요.
         </p>
         <div class="flex items-center justify-between text-xs text-muted">
           <span>공식 ACP Registry</span>
@@ -194,7 +194,7 @@ export function AgentManagementPage(props: {
                   </dd>
                 </div>
                 <div>
-                  <dt class="text-muted">대화 실행</dt>
+                  <dt class="text-muted">스레드 실행</dt>
                   <dd>
                     {agent.installed
                       ? agent.authentication.authenticated

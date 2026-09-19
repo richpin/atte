@@ -11,8 +11,8 @@ CREATE TABLE app_metadata (
     key TEXT PRIMARY KEY NOT NULL,
     value TEXT NOT NULL
 );
--- Unsent input belongs to the conversation; array order is FIFO.
-CREATE TABLE conversations (
+-- Unsent input belongs to the thread; array order is FIFO.
+CREATE TABLE threads (
     id TEXT PRIMARY KEY NOT NULL,
     metadata TEXT NOT NULL,
     queued_messages TEXT NOT NULL DEFAULT '[]'

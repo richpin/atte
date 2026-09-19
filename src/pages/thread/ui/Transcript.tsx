@@ -11,7 +11,7 @@ const completionLabels: Record<string, string> = {
 
 export function Transcript(props: { turns: Turn[] }) {
   return (
-    <ol aria-label="대화 내용" class="flex flex-col gap-8">
+    <ol aria-label="스레드 내용" class="flex flex-col gap-8">
       <Index each={props.turns}>
         {(turn) => (
           <li class="flex min-w-0 flex-col gap-5">

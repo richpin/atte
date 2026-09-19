@@ -22,7 +22,7 @@ export function UninstallAgentDialog(props: {
           </AlertDialog.Title>
           <AlertDialog.Description class="text-sm text-muted">
             이 에이전트의 모든 연결과 진행 중인 작업을 종료하고 설치 파일을
-            삭제합니다. 대화 내용, 작업 폴더와 로그인 정보는 유지됩니다.
+            삭제합니다. 스레드 내용, 작업 폴더와 로그인 정보는 유지됩니다.
           </AlertDialog.Description>
           <div class="flex justify-end gap-3 text-sm">
             <AlertDialog.CloseButton

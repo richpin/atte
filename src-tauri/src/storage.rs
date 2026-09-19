@@ -2,7 +2,7 @@
 use crate::{
     agent::AgentDefinition,
     agent_management::registry::{Registry, RegistryAgent},
-    conversation::{ConversationMetadata, QueuedMessage},
+    thread::{QueuedMessage, ThreadMetadata},
 };
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
@@ -57,9 +57,9 @@ impl Store {
         Ok(Self(Mutex::new(connection)))
     }
 
-    pub(crate) fn conversations(&self) -> Result<Vec<ConversationMetadata>, StorageError> {
+    pub(crate) fn threads(&self) -> Result<Vec<ThreadMetadata>, StorageError> {
         let connection = self.0.lock().map_err(|_| StorageError::Unavailable)?;
-        let mut statement = connection.prepare("SELECT metadata FROM conversations")?;
+        let mut statement = connection.prepare("SELECT metadata FROM threads")?;
         let rows = statement.query_map([], |row| row.get::<_, String>(0))?;
         rows.map(|row| Ok(serde_json::from_str(&row?)?)).collect()
     }
@@ -71,7 +71,7 @@ impl Store {
         let connection = self.0.lock().map_err(|_| StorageError::Unavailable)?;
         let json: Option<String> = connection
             .query_row(
-                "SELECT queued_messages FROM conversations WHERE id=?1",
+                "SELECT queued_messages FROM threads WHERE id=?1",
                 [id.to_string()],
                 |row| row.get(0),
             )
@@ -83,20 +83,17 @@ impl Store {
 
     pub(crate) fn save_queue(
         &self,
-        metadata: &ConversationMetadata,
+        metadata: &ThreadMetadata,
         messages: &[QueuedMessage],
     ) -> Result<(), StorageError> {
         let connection = self.0.lock().map_err(|_| StorageError::Unavailable)?;
-        connection.execute("INSERT INTO conversations (id, metadata, queued_messages) VALUES (?1, ?2, ?3) ON CONFLICT(id) DO UPDATE SET queued_messages=excluded.queued_messages", params![metadata.id.to_string(), serde_json::to_string(metadata)?, serde_json::to_string(messages)?])?;
+        connection.execute("INSERT INTO threads (id, metadata, queued_messages) VALUES (?1, ?2, ?3) ON CONFLICT(id) DO UPDATE SET queued_messages=excluded.queued_messages", params![metadata.id.to_string(), serde_json::to_string(metadata)?, serde_json::to_string(messages)?])?;
         Ok(())
     }
 
-    pub(crate) fn save_conversation(
-        &self,
-        metadata: &ConversationMetadata,
-    ) -> Result<(), StorageError> {
+    pub(crate) fn save_thread(&self, metadata: &ThreadMetadata) -> Result<(), StorageError> {
         self.0.lock().map_err(|_| StorageError::Unavailable)?.execute(
-            "INSERT INTO conversations (id, metadata) VALUES (?1, ?2) ON CONFLICT(id) DO UPDATE SET metadata=excluded.metadata",
+            "INSERT INTO threads (id, metadata) VALUES (?1, ?2) ON CONFLICT(id) DO UPDATE SET metadata=excluded.metadata",
             params![metadata.id.to_string(), serde_json::to_string(metadata)?],
         )?;
         Ok(())

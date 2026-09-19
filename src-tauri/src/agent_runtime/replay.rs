@@ -1,5 +1,5 @@
 //! A load response commits this buffer; failed/partial replay never replaces history.
-use crate::conversation::Turn;
+use crate::thread::Turn;
 use agent_client_protocol::schema::v1::{ContentBlock, SessionUpdate};
 use uuid::Uuid;
 

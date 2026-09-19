@@ -3,9 +3,7 @@ mod process;
 mod replay;
 use crate::{
     agent::AgentDefinition,
-    conversation::{
-        ConnectionFailure, PermissionOption, PermissionRequest, Prompt, RuntimeUpdates,
-    },
+    thread::{ConnectionFailure, PermissionOption, PermissionRequest, Prompt, RuntimeUpdates},
 };
 use agent_client_protocol::{
     schema::{

@@ -8,7 +8,7 @@ import {
   Show,
 } from "solid-js";
 
-export function ConversationHistory(props: {
+export function ThreadHistory(props: {
   followKey: string;
   children: JSX.Element;
 }) {
@@ -47,7 +47,7 @@ export function ConversationHistory(props: {
     <div class="relative min-h-0 w-full flex-1">
       <section
         ref={viewport}
-        aria-label="대화 기록"
+        aria-label="스레드 기록"
         // biome-ignore lint/a11y/noNoninteractiveTabindex: Scrollable history needs keyboard access.
         tabIndex={0}
         class="h-full overflow-y-auto overscroll-contain focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-accent [overflow-anchor:none]"

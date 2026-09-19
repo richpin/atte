@@ -52,7 +52,7 @@ fn initializes_an_empty_database_and_reopens_schema_one() {
         .unwrap()
         .collect::<Result<_, _>>()
         .unwrap();
-    assert_eq!(tables, ["agents", "app_metadata", "conversations"]);
+    assert_eq!(tables, ["agents", "app_metadata", "threads"]);
 }
 
 #[test]
@@ -73,7 +73,7 @@ use atte_lib::{
         registry::{Distribution, Registry, RegistryAgent},
         AgentManagement, ManagementError,
     },
-    conversation::Conversations,
+    thread::Threads,
 };
 use std::path::Path;
 
@@ -121,11 +121,11 @@ async fn failed_installation_can_retry_and_only_success_survives_restart() {
     let root = tempfile::tempdir().unwrap();
     let management = AgentManagement::open(root.path()).unwrap();
     management.set_registry(registry()).unwrap();
-    let conversations = Conversations::new(vec![]);
+    let threads = Threads::new(vec![]);
     assert!(management
         .install(
             "codex-acp",
-            &conversations,
+            &threads,
             &ControlledInstaller { fail: true },
             &|_| {}
         )
@@ -133,30 +133,30 @@ async fn failed_installation_can_retry_and_only_success_survives_restart() {
         .is_err());
     assert!(
         !management
-            .catalog(&conversations)
+            .catalog(&threads)
             .unwrap()
             .iter()
             .find(|agent| agent.id == "codex-acp")
             .unwrap()
             .installed
     );
-    assert!(conversations.prepared_agents().is_empty());
+    assert!(threads.prepared_agents().is_empty());
     management
         .install(
             "codex-acp",
-            &conversations,
+            &threads,
             &ControlledInstaller { fail: false },
             &|_| {},
         )
         .await
         .unwrap();
-    assert_eq!(conversations.prepared_agents()[0].id, "codex-acp");
+    assert_eq!(threads.prepared_agents()[0].id, "codex-acp");
     drop(management);
     let restored = AgentManagement::open(root.path()).unwrap();
-    let conversations = Conversations::new(vec![]);
-    restored.restore(&conversations).unwrap();
-    assert_eq!(conversations.prepared_agents()[0].id, "codex-acp");
-    let catalog = restored.catalog(&conversations).unwrap();
+    let threads = Threads::new(vec![]);
+    restored.restore(&threads).unwrap();
+    assert_eq!(threads.prepared_agents()[0].id, "codex-acp");
+    let catalog = restored.catalog(&threads).unwrap();
     let codex = catalog
         .iter()
         .find(|agent| agent.id == "codex-acp")
@@ -194,18 +194,18 @@ fn registry_selects_platform_binary_or_npm_and_excludes_other_agents() {
 async fn unknown_registry_agent_survives_offline_restart_and_registry_removal() {
     let root = tempfile::tempdir().unwrap();
     let management = AgentManagement::open(root.path()).unwrap();
-    let conversations = Conversations::new(vec![]);
+    let threads = Threads::new(vec![]);
     let mut registry = registry();
     let mut added = registry.agents[0].clone();
     added.id = "new-provider".into();
     added.name = "New provider".into();
     registry.agents.push(added);
     management.set_registry(registry).unwrap();
-    assert_eq!(management.catalog(&conversations).unwrap().len(), 4);
+    assert_eq!(management.catalog(&threads).unwrap().len(), 4);
     management
         .install(
             "new-provider",
-            &conversations,
+            &threads,
             &ControlledInstaller { fail: false },
             &|_| {},
         )
@@ -213,11 +213,11 @@ async fn unknown_registry_agent_survives_offline_restart_and_registry_removal() 
         .unwrap();
     drop(management);
     let management = AgentManagement::open(root.path()).unwrap();
-    assert_eq!(management.catalog(&conversations).unwrap().len(), 4);
+    assert_eq!(management.catalog(&threads).unwrap().len(), 4);
     management
         .set_registry(Registry::parse(r#"{"version":"1.0.0","agents":[]}"#).unwrap())
         .unwrap();
-    let catalog = management.catalog(&conversations).unwrap();
+    let catalog = management.catalog(&threads).unwrap();
     assert_eq!(catalog.len(), 1);
     assert_eq!(catalog[0].id, "new-provider");
     assert!(catalog[0].installed);
@@ -228,12 +228,12 @@ async fn unknown_registry_agent_survives_offline_restart_and_registry_removal() 
 async fn cached_catalog_survives_failed_refresh_and_reuses_a_good_installation() {
     let root = tempfile::tempdir().unwrap();
     let manager = AgentManagement::open(root.path()).unwrap();
-    let conversations = Conversations::new(vec![]);
+    let threads = Threads::new(vec![]);
     manager.set_registry(registry()).unwrap();
     manager
         .install(
             "codex-acp",
-            &conversations,
+            &threads,
             &ControlledInstaller { fail: false },
             &|_| {},
         )
@@ -243,11 +243,11 @@ async fn cached_catalog_survives_failed_refresh_and_reuses_a_good_installation()
         .refresh_from("http://127.0.0.1:1", true)
         .await
         .is_err());
-    assert_eq!(manager.catalog(&conversations).unwrap().len(), 3);
+    assert_eq!(manager.catalog(&threads).unwrap().len(), 3);
     manager
         .install(
             "codex-acp",
-            &conversations,
+            &threads,
             &ControlledInstaller { fail: true },
             &|_| {},
         )
@@ -275,8 +275,7 @@ fn catalog_preserves_optional_registry_icons_after_restart() {
     manager.set_registry(registry).unwrap();
     drop(manager);
     let manager = AgentManagement::open(root.path()).unwrap();
-    let catalog =
-        serde_json::to_value(manager.catalog(&Conversations::new(vec![])).unwrap()).unwrap();
+    let catalog = serde_json::to_value(manager.catalog(&Threads::new(vec![])).unwrap()).unwrap();
     assert_eq!(
         catalog[0]["icon"],
         "https://cdn.agentclientprotocol.com/registry/v1/latest/example.svg"
@@ -297,7 +296,7 @@ async fn already_installed_agent_is_reused_after_restart() {
     manager
         .install(
             "codex-acp",
-            &Conversations::new(vec![]),
+            &Threads::new(vec![]),
             &ControlledInstaller { fail: false },
             &|_| {},
         )
@@ -309,7 +308,7 @@ async fn already_installed_agent_is_reused_after_restart() {
         manager
             .install(
                 "codex-acp",
-                &Conversations::new(vec![]),
+                &Threads::new(vec![]),
                 &ControlledInstaller { fail: true },
                 &|_| {},
             )
@@ -324,15 +323,15 @@ async fn unsupported_binary_is_disabled_before_download_without_npm_fallback() {
     let manager = AgentManagement::open(root.path()).unwrap();
     let registry = Registry::parse(&serde_json::json!({"version":"1.0.0", "agents":[{"id":"new-agent", "name":"New", "version":"1", "distribution":{"binary":{atte_lib::agent_management::registry::platform():{"archive":"https://fixture/agent.dmg","cmd":"agent"}}, "npx":{"package":"fallback@1"}}}]}).to_string()).unwrap();
     manager.set_registry(registry).unwrap();
-    let conversations = Conversations::new(vec![]);
-    let catalog = manager.catalog(&conversations).unwrap();
+    let threads = Threads::new(vec![]);
+    let catalog = manager.catalog(&threads).unwrap();
     assert!(catalog[0].distribution.is_none());
     assert!(catalog[0].unavailable_reason.is_some());
     assert!(matches!(
         manager
             .install(
                 "new-agent",
-                &conversations,
+                &threads,
                 &ControlledInstaller { fail: false },
                 &|_| {}
             )
@@ -374,19 +373,19 @@ async fn duplicate_install_is_busy_and_aborted_request_can_retry() {
         task_manager
             .install(
                 "codex-acp",
-                &Conversations::new(vec![]),
+                &Threads::new(vec![]),
                 task_installer.as_ref(),
                 &|_| {},
             )
             .await
     });
     installer.started.notified().await;
-    let conversations = Conversations::new(vec![]);
+    let threads = Threads::new(vec![]);
     assert!(matches!(
         manager
             .install(
                 "codex-acp",
-                &conversations,
+                &threads,
                 &ControlledInstaller { fail: false },
                 &|_| {}
             )
@@ -395,11 +394,11 @@ async fn duplicate_install_is_busy_and_aborted_request_can_retry() {
     ));
     pending.abort();
     let _ = pending.await;
-    assert!(!manager.catalog(&conversations).unwrap()[1].installed);
+    assert!(!manager.catalog(&threads).unwrap()[1].installed);
     manager
         .install(
             "codex-acp",
-            &conversations,
+            &threads,
             &ControlledInstaller { fail: false },
             &|_| {},
         )
@@ -411,14 +410,14 @@ async fn duplicate_install_is_busy_and_aborted_request_can_retry() {
 async fn initially_offline_catalog_is_empty_and_can_be_recovered() {
     let root = tempfile::tempdir().unwrap();
     let manager = AgentManagement::open(root.path()).unwrap();
-    let conversations = Conversations::new(vec![]);
+    let threads = Threads::new(vec![]);
     assert!(manager
         .refresh_from("http://127.0.0.1:1", true)
         .await
         .is_err());
-    assert!(manager.catalog(&conversations).unwrap().is_empty());
+    assert!(manager.catalog(&threads).unwrap().is_empty());
     manager.set_registry(registry()).unwrap();
-    assert_eq!(manager.catalog(&conversations).unwrap().len(), 3);
+    assert_eq!(manager.catalog(&threads).unwrap().len(), 3);
 }
 
 #[tokio::test]
@@ -442,19 +441,16 @@ async fn uninstall_removes_selection_and_files_and_survives_restart() {
         })
         .unwrap();
     let manager = AgentManagement::open(root.path()).unwrap();
-    let conversations = Conversations::new(vec![]);
-    manager.restore(&conversations).unwrap();
-    manager
-        .uninstall("new-agent", &conversations)
-        .await
-        .unwrap();
-    assert!(conversations.prepared_agents().is_empty());
+    let threads = Threads::new(vec![]);
+    manager.restore(&threads).unwrap();
+    manager.uninstall("new-agent", &threads).await.unwrap();
+    assert!(threads.prepared_agents().is_empty());
     assert!(!artifact.exists());
-    assert!(manager.catalog(&conversations).unwrap().is_empty());
+    assert!(manager.catalog(&threads).unwrap().is_empty());
     let restored = AgentManagement::open(root.path()).unwrap();
-    let conversations = Conversations::new(vec![]);
-    restored.restore(&conversations).unwrap();
-    assert!(conversations.prepared_agents().is_empty());
+    let threads = Threads::new(vec![]);
+    restored.restore(&threads).unwrap();
+    assert!(threads.prepared_agents().is_empty());
 }
 
 #[tokio::test]
@@ -478,26 +474,19 @@ async fn uninstall_removes_files_and_retires_existing_drafts() {
         })
         .unwrap();
     let manager = AgentManagement::open(root.path()).unwrap();
-    let conversations = Conversations::new(vec![]);
-    manager.restore(&conversations).unwrap();
-    let draft = conversations
-        .create_for_agent(root.path(), "new-agent")
-        .unwrap();
-    manager
-        .uninstall("new-agent", &conversations)
-        .await
-        .unwrap();
+    let threads = Threads::new(vec![]);
+    manager.restore(&threads).unwrap();
+    let draft = threads.create_for_agent(root.path(), "new-agent").unwrap();
+    manager.uninstall("new-agent", &threads).await.unwrap();
     assert!(!artifact.exists());
-    assert!(conversations.prepared_agents().is_empty());
-    assert!(conversations
-        .create_for_agent(root.path(), "new-agent")
-        .is_err());
+    assert!(threads.prepared_agents().is_empty());
+    assert!(threads.create_for_agent(root.path(), "new-agent").is_err());
     assert_eq!(
-        conversations.get(draft.id).unwrap().failure,
-        Some(atte_lib::conversation::ConnectionFailure::AgentRemoved)
+        threads.get(draft.id).unwrap().failure,
+        Some(atte_lib::thread::ConnectionFailure::AgentRemoved)
     );
-    assert!(conversations.connect(draft.id).is_err());
-    drop(conversations);
+    assert!(threads.connect(draft.id).is_err());
+    drop(threads);
     drop(manager);
     AgentManagement::open(root.path()).unwrap();
     assert!(!artifact.exists());
@@ -509,7 +498,7 @@ async fn uninstall_rejects_external_paths_and_shared_runtime_but_handles_missing
     let external = tempfile::tempdir().unwrap();
     let manager = AgentManagement::open(root.path()).unwrap();
     let store = Store::open(&root.path().join("atte.sqlite")).unwrap();
-    let conversations = Conversations::new(vec![]);
+    let threads = Threads::new(vec![]);
     let runtime = root.path().join("agents/runtime");
     std::fs::create_dir_all(&runtime).unwrap();
     std::fs::write(runtime.join("keep"), "shared").unwrap();
@@ -527,10 +516,7 @@ async fn uninstall_rejects_external_paths_and_shared_runtime_but_handles_missing
                 artifact: artifact.clone(),
             })
             .unwrap();
-        assert!(manager
-            .uninstall("new-agent", &conversations)
-            .await
-            .is_err());
+        assert!(manager.uninstall("new-agent", &threads).await.is_err());
         assert!(artifact.exists());
         assert_eq!(store.installations().unwrap().len(), 1);
     }
@@ -538,10 +524,7 @@ async fn uninstall_rejects_external_paths_and_shared_runtime_but_handles_missing
     let mut installation = store.installations().unwrap().remove(0);
     installation.artifact = missing;
     store.save_installation(&installation).unwrap();
-    manager
-        .uninstall("new-agent", &conversations)
-        .await
-        .unwrap();
+    manager.uninstall("new-agent", &threads).await.unwrap();
     assert!(store.installations().unwrap().is_empty());
     assert_eq!(
         std::fs::read_to_string(runtime.join("keep")).unwrap(),
@@ -553,19 +536,19 @@ async fn uninstall_rejects_external_paths_and_shared_runtime_but_handles_missing
 async fn registry_refresh_preserves_installation_and_uninstall_preserves_catalog_entry() {
     let root = tempfile::tempdir().unwrap();
     let manager = AgentManagement::open(root.path()).unwrap();
-    let conversations = Conversations::new(vec![]);
+    let threads = Threads::new(vec![]);
     manager.set_registry(registry()).unwrap();
     manager
         .install(
             "codex-acp",
-            &conversations,
+            &threads,
             &ControlledInstaller { fail: false },
             &|_| {},
         )
         .await
         .unwrap();
     let original = manager
-        .catalog(&conversations)
+        .catalog(&threads)
         .unwrap()
         .into_iter()
         .find(|a| a.id == "codex-acp")
@@ -583,26 +566,23 @@ async fn registry_refresh_preserves_installation_and_uninstall_preserves_catalog
     manager
         .install(
             "codex-acp",
-            &conversations,
+            &threads,
             &ControlledInstaller { fail: true },
             &|_| {},
         )
         .await
         .unwrap();
     let current = manager
-        .catalog(&conversations)
+        .catalog(&threads)
         .unwrap()
         .into_iter()
         .find(|a| a.id == "codex-acp")
         .unwrap();
     assert_eq!(current.artifact, original);
     assert_eq!(current.name, "New name");
-    manager
-        .uninstall("codex-acp", &conversations)
-        .await
-        .unwrap();
+    manager.uninstall("codex-acp", &threads).await.unwrap();
     let current = manager
-        .catalog(&conversations)
+        .catalog(&threads)
         .unwrap()
         .into_iter()
         .find(|a| a.id == "codex-acp")
@@ -618,19 +598,19 @@ async fn failed_file_removal_keeps_installation_for_retry() {
     use std::os::unix::fs::PermissionsExt;
     let root = tempfile::tempdir().unwrap();
     let manager = AgentManagement::open(root.path()).unwrap();
-    let conversations = Conversations::new(vec![]);
+    let threads = Threads::new(vec![]);
     manager.set_registry(registry()).unwrap();
     manager
         .install(
             "codex-acp",
-            &conversations,
+            &threads,
             &ControlledInstaller { fail: false },
             &|_| {},
         )
         .await
         .unwrap();
     let artifact = manager
-        .catalog(&conversations)
+        .catalog(&threads)
         .unwrap()
         .into_iter()
         .find(|a| a.id == "codex-acp")
@@ -638,7 +618,7 @@ async fn failed_file_removal_keeps_installation_for_retry() {
         .artifact
         .unwrap();
     std::fs::set_permissions(&artifact, std::fs::Permissions::from_mode(0o500)).unwrap();
-    let result = manager.uninstall("codex-acp", &conversations).await;
+    let result = manager.uninstall("codex-acp", &threads).await;
     std::fs::set_permissions(&artifact, std::fs::Permissions::from_mode(0o700)).unwrap();
     assert!(result.is_err());
     assert!(artifact.exists());
@@ -650,11 +630,8 @@ async fn failed_file_removal_keeps_installation_for_retry() {
             .len(),
         1
     );
-    assert!(conversations.prepared_agents().is_empty());
-    manager
-        .uninstall("codex-acp", &conversations)
-        .await
-        .unwrap();
+    assert!(threads.prepared_agents().is_empty());
+    manager.uninstall("codex-acp", &threads).await.unwrap();
     assert!(!artifact.exists());
     assert!(Store::open(&root.path().join("atte.sqlite"))
         .unwrap()

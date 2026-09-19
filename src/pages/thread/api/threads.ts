@@ -1,64 +1,64 @@
 import { Channel, invoke } from "@tauri-apps/api/core";
 import type {
-  Conversation,
-  ConversationMetadata,
-  ConversationUpdate,
   PreparedAgent,
+  Thread,
+  ThreadMetadata,
+  ThreadUpdate,
 } from "../model/types";
 
-export function listConversations() {
-  return invoke<ConversationMetadata[]>("list_conversations");
+export function listThreads() {
+  return invoke<ThreadMetadata[]>("list_threads");
 }
 
 export function selectWorkingFolder(agentId: string) {
-  return invoke<Conversation | null>("select_working_folder", { agentId });
+  return invoke<Thread | null>("select_working_folder", { agentId });
 }
 
 export function preparedAgents() {
   return invoke<PreparedAgent[]>("prepared_agents");
 }
 
-export function connectConversation(id: string) {
-  return invoke<Conversation>("connect_conversation", { id });
+export function connectThread(id: string) {
+  return invoke<Thread>("connect_thread", { id });
 }
 
-export function getConversation(id: string) {
-  return invoke<Conversation>("get_conversation", { id });
+export function getThread(id: string) {
+  return invoke<Thread>("get_thread", { id });
 }
 
 export function sendMessage(id: string, text: string) {
-  return invoke<Conversation>("send_message", { id, text });
+  return invoke<Thread>("send_message", { id, text });
 }
 
 export function deleteQueuedMessage(id: string, message: string) {
-  return invoke<Conversation>("delete_queued_message", { id, message });
+  return invoke<Thread>("delete_queued_message", { id, message });
 }
 
-export function createConversation(folder: string, agentId: string) {
-  return invoke<Conversation>("create_conversation", { folder, agentId });
+export function createThread(folder: string, agentId: string) {
+  return invoke<Thread>("create_thread", { folder, agentId });
 }
 
 export function cancelTurn(id: string, turn: string) {
-  return invoke<Conversation>("cancel_turn", { id, turn });
+  return invoke<Thread>("cancel_turn", { id, turn });
 }
 
 export function answerPermission(id: string, request: string, option: string) {
-  return invoke<Conversation>("answer_permission", { id, request, option });
+  return invoke<Thread>("answer_permission", { id, request, option });
 }
 
-export function subscribeConversation(
+export function subscribeThread(
   id: string,
-  receive: (update: ConversationUpdate) => void,
+  receive: (update: ThreadUpdate) => void,
   failed: () => void,
 ): () => void {
-  return subscribe("subscribe_conversation", { id }, receive, failed);
+  return subscribe("subscribe_thread", { id }, receive, failed);
 }
 
-export function subscribeConversationList(
-  receive: (entries: ConversationMetadata[]) => void,
+export function subscribeThreadList(
+  receive: (entries: ThreadMetadata[]) => void,
   failed: () => void,
 ): () => void {
-  return subscribe("subscribe_conversation_list", {}, receive, failed);
+  return subscribe("subscribe_thread_list", {}, receive, failed);
 }
 
 function subscribe<T>(
@@ -74,7 +74,7 @@ function subscribe<T>(
     if (!disposed) receive(update);
   };
   const unsubscribe = (subscription: string) => {
-    void invoke("unsubscribe_conversation", { subscription }).catch(() => {
+    void invoke("unsubscribe_thread", { subscription }).catch(() => {
       if (!disposed) failed();
     });
   };

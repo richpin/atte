@@ -1,8 +1,8 @@
 import { createMemo, createSignal, For, Show } from "solid-js";
-import type { ConversationMetadata } from "../model/types";
+import type { ThreadMetadata } from "../model/types";
 
-export function ConversationSidebar(props: {
-  conversations: ConversationMetadata[];
+export function ThreadSidebar(props: {
+  threads: ThreadMetadata[];
   selected?: string;
   loading: boolean;
   failed: boolean;
@@ -14,11 +14,11 @@ export function ConversationSidebar(props: {
 }) {
   const [collapsed, setCollapsed] = createSignal(new Set<string>());
   const groups = createMemo(() => {
-    const folders = new Map<string, ConversationMetadata[]>();
-    for (const conversation of props.conversations) {
-      const entries = folders.get(conversation.workingFolder) ?? [];
-      entries.push(conversation);
-      folders.set(conversation.workingFolder, entries);
+    const folders = new Map<string, ThreadMetadata[]>();
+    for (const thread of props.threads) {
+      const entries = folders.get(thread.workingFolder) ?? [];
+      entries.push(thread);
+      folders.set(thread.workingFolder, entries);
     }
     return [...folders.keys()].sort().map((folder) => ({
       folder,
@@ -28,7 +28,7 @@ export function ConversationSidebar(props: {
   });
   return (
     <nav
-      aria-label="대화 목록"
+      aria-label="스레드 목록"
       class="flex w-60 shrink-0 flex-col border-r border-line bg-panel"
     >
       <div class="flex items-center justify-between p-3">
@@ -45,7 +45,7 @@ export function ConversationSidebar(props: {
       <div class="min-h-0 flex-1 overflow-y-auto px-2 pb-3">
         <Show when={props.failed}>
           <p role="alert" class="text-sm">
-            대화 목록을 불러올 수 없습니다.
+            스레드 목록을 불러올 수 없습니다.
           </p>
           <button
             type="button"
@@ -55,10 +55,8 @@ export function ConversationSidebar(props: {
             목록 다시 불러오기
           </button>
         </Show>
-        <Show
-          when={!props.loading && !props.conversations.length && !props.failed}
-        >
-          <p class="px-2 text-sm text-muted">저장된 대화가 없습니다.</p>
+        <Show when={!props.loading && !props.threads.length && !props.failed}>
+          <p class="px-2 text-sm text-muted">저장된 스레드가 없습니다.</p>
         </Show>
         <For each={groups()}>
           {(group) => (
@@ -85,7 +83,7 @@ export function ConversationSidebar(props: {
                 </button>
                 <button
                   type="button"
-                  aria-label={`${group.name}에 새 대화`}
+                  aria-label={`${group.name}에 새 스레드`}
                   disabled={props.creating}
                   class="shrink-0 rounded px-2 py-1 text-muted hover:bg-canvas focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-accent disabled:opacity-40"
                   onClick={() => props.onCreate(group.folder)}
@@ -105,7 +103,7 @@ export function ConversationSidebar(props: {
                       onClick={() => props.onSelect(entry.id)}
                     >
                       <span class="min-w-0 flex-1 truncate">
-                        {entry.title || "새 대화"}
+                        {entry.title || "새 스레드"}
                       </span>
                       <Show
                         when={

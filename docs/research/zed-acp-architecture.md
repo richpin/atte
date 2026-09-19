@@ -6,7 +6,7 @@
 
 ## 핵심 결론
 
-Zed는 공통 ACP 구현을 사용하면서, **같은 프로젝트의 AgentPanel 안에서 같은 에이전트의 여러 세션이 하나의 연결과 서버 프로세스를 재사용**한다. 연결을 대화마다 새로 만드는 구조가 아니다.
+Zed는 공통 ACP 구현을 사용하면서, **같은 프로젝트의 AgentPanel 안에서 같은 에이전트의 여러 세션이 하나의 연결과 서버 프로세스를 재사용**한다. 연결을 스레드마다 새로 만드는 구조가 아니다.
 
 `AgentPanel`이 자신의 `Project`를 전달해 `AgentConnectionStore`를 만들고, store는 `Agent`를 키로 연결을 캐시한다. 외부 에이전트의 키는 `Agent::Custom { id: AgentId }`다. 이는 앱 전체에 하나인 전역 연결과도 다르다.
 근거: [패널의 store 생성](https://github.com/zed-industries/zed/blob/739fdbef762f7e514d62e1fa650c1b7cac5bbff4/crates/agent_ui/src/agent_panel.rs#L1538), [연결 캐시](https://github.com/zed-industries/zed/blob/739fdbef762f7e514d62e1fa650c1b7cac5bbff4/crates/agent_ui/src/agent_connection_store.rs#L69-L82), [Agent 키](https://github.com/zed-industries/zed/blob/739fdbef762f7e514d62e1fa650c1b7cac5bbff4/crates/agent_ui/src/agent_ui.rs#L425-L448).
@@ -33,18 +33,18 @@ flowchart TD
 | `agent_servers/src/custom.rs` | 공통 외부 AgentServer 구현. 실행 설정과 일부 에이전트별 보정을 거쳐 연결 |
 | `agent_ui/src/agent_connection_store.rs` | 패널/프로젝트 범위의 연결 캐시, 동시 연결 요청 병합, 명시적 재연결 |
 | `agent_servers/src/acp.rs` | 프로세스·stdio·초기화, SDK 요청 처리, 세션 라우팅 |
-| `acp_thread/src/connection.rs` | UI와 대화 모델이 사용하는 `AgentConnection` 추상화 |
+| `acp_thread/src/connection.rs` | UI와 스레드 모델이 사용하는 `AgentConnection` 추상화 |
 | `acp_thread/src/acp_thread.rs` | 세션별 메시지·도구 호출·권한·turn·터미널·표시 상태 |
 | `agent_ui/src/thread_metadata_store.rs` | 사이드바에 표시할 영속 thread 식별자와 메타데이터 |
-| `agent_ui/src/conversation_view.rs` | 연결/인증/대화 복원 상태와 화면 구성 |
+| `agent_ui/src/conversation_view.rs` | 연결/인증/스레드 복원 상태와 화면 구성 |
 
 이들은 모두 위 커밋의 `crates/` 아래 경로다. 외부 에이전트는 `CustomAgentServer`로 들어가고, Zed 내장 에이전트는 별도 `NativeAgentServer`를 사용한다. 공통 UI 인터페이스를 사용한다고 해서 내장 에이전트까지 외부 stdio 프로세스로 실행하는 것은 아니다.
 근거: [Agent::server](https://github.com/zed-industries/zed/blob/739fdbef762f7e514d62e1fa650c1b7cac5bbff4/crates/agent_ui/src/agent_ui.rs#L483-L495), [AgentConnection trait](https://github.com/zed-industries/zed/blob/739fdbef762f7e514d62e1fa650c1b7cac5bbff4/crates/acp_thread/src/connection.rs#L91-L259).
 
 ## 1. 연결을 만들고 재사용하는 과정
 
-1. 대화 화면이 `AgentConnectionStore::request_connection`을 호출한다.
-2. 같은 키가 있으면 기존 entry를 반환한다. 아직 연결 중이면 `Shared<Task<…>>`를 기다리므로 동시에 대화를 열어도 연결 작업을 중복 시작하지 않는다.
+1. 스레드 화면이 `AgentConnectionStore::request_connection`을 호출한다.
+2. 같은 키가 있으면 기존 entry를 반환한다. 아직 연결 중이면 `Shared<Task<…>>`를 기다리므로 동시에 스레드를 열어도 연결 작업을 중복 시작하지 않는다.
 3. 새 연결이면 `CustomAgentServer::connect`가 실행할 명령을 가져와 `acp::connect → AcpConnection::stdio`로 전달한다.
 4. 초기 연결 성공 시 entry가 `Connected`로 바뀐다. 초기 연결 실패 시 오류를 전달하고 캐시에서 제거한다.
 
@@ -71,15 +71,15 @@ stdout을 줄 단위로 읽고 stdin에 줄바꿈을 붙여 쓰는 `Lines` trans
 
 ## 3. 연결 하나에서 여러 세션을 관리하는 과정
 
-연결은 `sessions: HashMap<SessionId, AcpSession>`를 가진다. 각 `AcpSession`은 대화 모델 `AcpThread`의 약한 참조와 해당 세션의 mode/config를 보관한다. 대화 모델은 공유 연결의 강한 참조를 가진다.
+연결은 `sessions: HashMap<SessionId, AcpSession>`를 가진다. 각 `AcpSession`은 스레드 모델 `AcpThread`의 약한 참조와 해당 세션의 mode/config를 보관한다. 스레드 모델은 공유 연결의 강한 참조를 가진다.
 
-새 세션은 작업 디렉터리와 프로젝트의 MCP 설정을 포함한 `session/new` 요청으로 만든다. 서버가 반환한 `sessionId`로 대화 모델을 생성하고 map에 등록한다. 추가 디렉터리는 서버 지원 여부에 따라 처리한다.
+새 세션은 작업 디렉터리와 프로젝트의 MCP 설정을 포함한 `session/new` 요청으로 만든다. 서버가 반환한 `sessionId`로 스레드 모델을 생성하고 map에 등록한다. 추가 디렉터리는 서버 지원 여부에 따라 처리한다.
 근거: [연결과 세션 구조](https://github.com/zed-industries/zed/blob/739fdbef762f7e514d62e1fa650c1b7cac5bbff4/crates/agent_servers/src/acp.rs#L396-L525), [new_session](https://github.com/zed-industries/zed/blob/739fdbef762f7e514d62e1fa650c1b7cac5bbff4/crates/agent_servers/src/acp.rs#L1617-L1723).
 
-사용자가 전송하면 `AcpThread`가 자신의 `sessionId`를 담아 prompt를 호출한다. 수신한 `session/update`는 ID로 대화를 찾아 메시지/도구/계획/설정 상태에 반영된다. 등록되지 않은 세션의 알림은 현재 구현에서 경고 후 버린다.
+사용자가 전송하면 `AcpThread`가 자신의 `sessionId`를 담아 prompt를 호출한다. 수신한 `session/update`는 ID로 스레드를 찾아 메시지/도구/계획/설정 상태에 반영된다. 등록되지 않은 세션의 알림은 현재 구현에서 경고 후 버린다.
 근거: [전송](https://github.com/zed-industries/zed/blob/739fdbef762f7e514d62e1fa650c1b7cac5bbff4/crates/acp_thread/src/acp_thread.rs#L3964-L4025), [알림 라우팅](https://github.com/zed-industries/zed/blob/739fdbef762f7e514d62e1fa650c1b7cac5bbff4/crates/agent_servers/src/acp.rs#L4797-L4847).
 
-세션마다 `running_turn`, entries, plan, terminals가 존재하므로 대화 상태는 분리된다. 하지만 이것이 서버 내부의 병렬 추론 처리나 파일 시스템 격리까지 보장하지는 않는다. 같은 연결의 모든 세션은 서버 프로세스 장애의 영향을 함께 받을 수 있다.
+세션마다 `running_turn`, entries, plan, terminals가 존재하므로 스레드 상태는 분리된다. 하지만 이것이 서버 내부의 병렬 추론 처리나 파일 시스템 격리까지 보장하지는 않는다. 같은 연결의 모든 세션은 서버 프로세스 장애의 영향을 함께 받을 수 있다.
 근거: [AcpThread 상태](https://github.com/zed-industries/zed/blob/739fdbef762f7e514d62e1fa650c1b7cac5bbff4/crates/acp_thread/src/acp_thread.rs#L2292-L2328), [프로세스 종료 알림](https://github.com/zed-industries/zed/blob/739fdbef762f7e514d62e1fa650c1b7cac5bbff4/crates/agent_servers/src/acp.rs#L1011-L1017). 마지막 두 문장은 해당 소유 구조에서 도출한 설계상 해석이다.
 
 같은 세션의 turn 처리는 기존 turn 취소 완료를 기다린 뒤 다음 실행을 시작한다. 증가하는 `turn_id`를 비교해 이전 요청의 늦은 완료가 새로운 실행 상태를 지우지 않도록 한다.
@@ -90,17 +90,17 @@ stdout을 줄 단위로 읽고 stdin에 줄바꿈을 붙여 쓰는 `Lines` trans
 `ConversationView`는 기존 session ID가 있으면 `load_session`을 우선 사용한다. 그것이 없고 `resume_session`을 지원하면 기록 재생 없이 이어가는 경로를 사용하며, 둘 다 없으면 복원 불가 오류를 표시한다.
 근거: [복원 분기](https://github.com/zed-industries/zed/blob/739fdbef762f7e514d62e1fa650c1b7cac5bbff4/crates/agent_ui/src/conversation_view.rs#L1138-L1172), [load/resume 의미](https://github.com/zed-industries/zed/blob/739fdbef762f7e514d62e1fa650c1b7cac5bbff4/crates/acp_thread/src/connection.rs#L107-L160).
 
-복원 과정에서 중요한 순서가 있다. `open_or_create_session`은 **load RPC를 기다리기 전에** 대화 모델을 map에 등록한다. 서버가 load 응답보다 먼저 보내는 과거 `session/update`를 즉시 받을 수 있게 하기 위해서다. 같은 세션의 동시 복원 요청은 `pending_sessions`의 shared task로 병합한다. 이미 메모리에 살아 있는 대화면 그 모델을 반환한다.
+복원 과정에서 중요한 순서가 있다. `open_or_create_session`은 **load RPC를 기다리기 전에** 스레드 모델을 map에 등록한다. 서버가 load 응답보다 먼저 보내는 과거 `session/update`를 즉시 받을 수 있게 하기 위해서다. 같은 세션의 동시 복원 요청은 `pending_sessions`의 shared task로 병합한다. 이미 메모리에 살아 있는 스레드면 그 모델을 반환한다.
 근거: [중복 복원 방지와 선등록](https://github.com/zed-industries/zed/blob/739fdbef762f7e514d62e1fa650c1b7cac5bbff4/crates/agent_servers/src/acp.rs#L1204-L1322).
 
-대화 모델이 최종 해제되면 해당 map entry를 제거하고 서버가 지원할 때 `session/close`를 보낸다. 서버 프로세스는 연결 객체가 최종 drop될 때 종료한다. 따라서 세션 하나를 닫는 것과 연결 전체를 종료하는 것은 별개다.
+스레드 모델이 최종 해제되면 해당 map entry를 제거하고 서버가 지원할 때 `session/close`를 보낸다. 서버 프로세스는 연결 객체가 최종 drop될 때 종료한다. 따라서 세션 하나를 닫는 것과 연결 전체를 종료하는 것은 별개다.
 근거: [세션 해제 hook](https://github.com/zed-industries/zed/blob/739fdbef762f7e514d62e1fa650c1b7cac5bbff4/crates/agent_servers/src/acp.rs#L1150-L1202), [연결 Drop](https://github.com/zed-industries/zed/blob/739fdbef762f7e514d62e1fa650c1b7cac5bbff4/crates/agent_servers/src/acp.rs#L1549-L1554).
 
 `session/cancel`은 특정 세션의 실행 중 turn을 중단하는 알림이며 연결 프로세스를 죽이지 않는다. `session/delete`는 기록 삭제를 요청하는 별도 기능이며 서버 지원 여부를 검사한다. 즉 cancel, close, delete, process termination을 각각 구분한다.
 근거: [취소](https://github.com/zed-industries/zed/blob/739fdbef762f7e514d62e1fa650c1b7cac5bbff4/crates/agent_servers/src/acp.rs#L1957-L1963), [삭제](https://github.com/zed-industries/zed/blob/739fdbef762f7e514d62e1fa650c1b7cac5bbff4/crates/agent_servers/src/acp.rs#L600-L621).
 
-대화 화면을 바꿔도 `AgentPanel.retained_threads`가 대화 view를 보유한다. 실제 thread가 있는 항목의 정리 조건은 Idle이고 다시 load할 수 있는 것이며, 오래된 것부터 상한에 맞춰 제거한다. 화면 전환과 작업 중단을 분리한 설계다.
-근거: [대화 보존과 정리](https://github.com/zed-industries/zed/blob/739fdbef762f7e514d62e1fa650c1b7cac5bbff4/crates/agent_ui/src/agent_panel.rs#L4202-L4257).
+스레드 화면을 바꿔도 `AgentPanel.retained_threads`가 스레드 view를 보유한다. 실제 thread가 있는 항목의 정리 조건은 Idle이고 다시 load할 수 있는 것이며, 오래된 것부터 상한에 맞춰 제거한다. 화면 전환과 작업 중단을 분리한 설계다.
+근거: [스레드 보존과 정리](https://github.com/zed-industries/zed/blob/739fdbef762f7e514d62e1fa650c1b7cac5bbff4/crates/agent_ui/src/agent_panel.rs#L4202-L4257).
 
 ## 5. 기록 저장과 UI 식별자
 
@@ -109,7 +109,7 @@ stdout을 줄 단위로 읽고 stdin에 줄바꿈을 붙여 쓰는 `Lines` trans
 외부 세션을 다시 여는 경로에서는 메시지 기록을 서버의 load로 복원한다. 확인한 메타데이터 DB가 외부 에이전트의 전체 transcript를 보관하고 재생하는 구조는 아니다. Zed 내장 에이전트의 자체 기록 저장과도 구분해야 한다.
 근거: [ThreadMetadata](https://github.com/zed-industries/zed/blob/739fdbef762f7e514d62e1fa650c1b7cac5bbff4/crates/agent_ui/src/thread_metadata_store.rs#L309-L333), [메타데이터 DB 스키마](https://github.com/zed-industries/zed/blob/739fdbef762f7e514d62e1fa650c1b7cac5bbff4/crates/agent_ui/src/thread_metadata_store.rs#L1424-L1464), [화면의 load/resume 분기](https://github.com/zed-industries/zed/blob/739fdbef762f7e514d62e1fa650c1b7cac5bbff4/crates/agent_ui/src/conversation_view.rs#L1138-L1172).
 
-초안 메타데이터의 `session_id: None`은 아직 `session/new`를 호출하지 않았다는 뜻은 아니다. 런타임에서는 이미 서버 session ID가 있어도 첫 메시지 전에는 그것을 디스크에 저장하지 않는다. 초안이 실제 대화로 전환될 때 metadata에 session ID를 기록하고 초기 초안 K/V를 삭제한다.
+초안 메타데이터의 `session_id: None`은 아직 `session/new`를 호출하지 않았다는 뜻은 아니다. 런타임에서는 이미 서버 session ID가 있어도 첫 메시지 전에는 그것을 디스크에 저장하지 않는다. 초안이 실제 스레드로 전환될 때 metadata에 session ID를 기록하고 초기 초안 K/V를 삭제한다.
 근거: [초안 ID와 저장 전환](https://github.com/zed-industries/zed/blob/739fdbef762f7e514d62e1fa650c1b7cac5bbff4/crates/agent_ui/src/thread_metadata_store.rs#L1282-L1355).
 
 초기 초안의 입력 내용은 `ThreadId`를 키로 별도의 `agent_draft_prompts` K/V namespace에 저장한다. 현재 debounce 저장 경로는 `is_draft_thread()` 조건이 있으므로, 모든 외부 세션의 전송 후 미전송 입력까지 동일하게 영속화한다고 단정하면 안 된다.
@@ -147,7 +147,7 @@ ACP는 단방향 채팅 출력만 전달하지 않는다. Zed는 파일 읽기/�
 
 ## 확인한 회귀 테스트
 
-해당 커밋에는 [마지막 대화 참조 해제](https://github.com/zed-industries/zed/blob/739fdbef762f7e514d62e1fa650c1b7cac5bbff4/crates/agent_servers/src/acp.rs#L4041), [load 응답 전 기록 재생](https://github.com/zed-industries/zed/blob/739fdbef762f7e514d62e1fa650c1b7cac5bbff4/crates/agent_servers/src/acp.rs#L4126), [진행 중 로더 해제](https://github.com/zed-industries/zed/blob/739fdbef762f7e514d62e1fa650c1b7cac5bbff4/crates/agent_servers/src/acp.rs#L4192), [동시 로더 하나 해제](https://github.com/zed-industries/zed/blob/739fdbef762f7e514d62e1fa650c1b7cac5bbff4/crates/agent_servers/src/acp.rs#L4278)를 다루는 테스트가 있다. 테스트의 존재와 내용을 확인했으며 실행 결과를 검증한 것은 아니다.
+해당 커밋에는 [마지막 스레드 참조 해제](https://github.com/zed-industries/zed/blob/739fdbef762f7e514d62e1fa650c1b7cac5bbff4/crates/agent_servers/src/acp.rs#L4041), [load 응답 전 기록 재생](https://github.com/zed-industries/zed/blob/739fdbef762f7e514d62e1fa650c1b7cac5bbff4/crates/agent_servers/src/acp.rs#L4126), [진행 중 로더 해제](https://github.com/zed-industries/zed/blob/739fdbef762f7e514d62e1fa650c1b7cac5bbff4/crates/agent_servers/src/acp.rs#L4192), [동시 로더 하나 해제](https://github.com/zed-industries/zed/blob/739fdbef762f7e514d62e1fa650c1b7cac5bbff4/crates/agent_servers/src/acp.rs#L4278)를 다루는 테스트가 있다. 테스트의 존재와 내용을 확인했으며 실행 결과를 검증한 것은 아니다.
 
 ## Atte에 적용할 때의 제안
 
@@ -158,7 +158,7 @@ ACP는 단방향 채팅 출력만 전달하지 않는다. Zed는 파일 읽기/�
 - **앱 ThreadId와 원격 session ID를 분리한다.** 초기 초안과 에이전트가 발급한 ID를 안정적으로 연결하고, 내부 식별에는 agent/environment까지 포함해 충돌을 피한다.
 - **기록 열람과 에이전트 재개를 별도 기능으로 본다.** Zed 방식처럼 서버 load에 의존할지, Atte가 표시용 기록을 저장해 오프라인에서도 읽게 할지는 명시적으로 결정한다. 표시용 기록이 있어도 원래 에이전트의 내부 상태를 재구성할 수 있다는 뜻은 아니다.
 - **복원 중 이벤트와 중복 요청을 설계 초기에 처리한다.** 선등록, 요청 병합, stale connection 방지, release 시 정리, session별 cancel은 첫 버전에서도 중요하다.
-- **연결 장애와 대화 종료를 구분한다.** 공유 프로세스 장애 시 관련 세션의 상태를 함께 갱신하고 재연결 후 지원되는 복원 경로를 사용한다.
+- **연결 장애와 스레드 종료를 구분한다.** 공유 프로세스 장애 시 관련 세션의 상태를 함께 갱신하고 재연결 후 지원되는 복원 경로를 사용한다.
 - **I/O와 화면 갱신을 분리한다.** Rust가 프로세스/연결/세션 상태를 소유하고 SolidJS는 필요한 화면 상태를 구독하도록 구성하는 것이 Atte 스택에 자연스럽다. Zed의 GPUI 타입을 그대로 모사할 필요는 없다.
 
-따라서 Atte의 원칙은 “공통 ACP client core + 명확한 실행 범위의 연결 재사용 + session ID 기반 분리”로 표현하는 편이 정확하다. “모든 대화마다 하나의 프로세스”나 “앱 전체에 하나의 연결”을 ACP 자체의 요구 사항으로 고정할 필요는 없다.
+따라서 Atte의 원칙은 “공통 ACP client core + 명확한 실행 범위의 연결 재사용 + session ID 기반 분리”로 표현하는 편이 정확하다. “모든 스레드마다 하나의 프로세스”나 “앱 전체에 하나의 연결”을 ACP 자체의 요구 사항으로 고정할 필요는 없다.

@@ -1,7 +1,7 @@
 import { cleanup, fireEvent, render, screen } from "@solidjs/testing-library";
 import { createSignal } from "solid-js";
 import { afterEach, expect, it, vi } from "vitest";
-import { ConversationHistory } from "./ConversationHistory";
+import { ThreadHistory } from "./ThreadHistory";
 
 afterEach(() => {
   cleanup();
@@ -29,10 +29,8 @@ it.each([
         disconnect() {}
       },
     );
-    render(() => (
-      <ConversationHistory followKey="turn-1">Response</ConversationHistory>
-    ));
-    const viewport = screen.getByRole("region", { name: "대화 기록" });
+    render(() => <ThreadHistory followKey="turn-1">Response</ThreadHistory>);
+    const viewport = screen.getByRole("region", { name: "스레드 기록" });
     let height = 1000;
     let top = 0;
     Object.defineProperties(viewport, {
@@ -82,11 +80,9 @@ it("follows growth, preserves reading position, and resumes from the latest butt
       disconnect = disconnect;
     },
   );
-  const [key, setKey] = createSignal("conversation:turn-1");
-  render(() => (
-    <ConversationHistory followKey={key()}>Response</ConversationHistory>
-  ));
-  const viewport = screen.getByRole("region", { name: "대화 기록" });
+  const [key, setKey] = createSignal("thread:turn-1");
+  render(() => <ThreadHistory followKey={key()}>Response</ThreadHistory>);
+  const viewport = screen.getByRole("region", { name: "스레드 기록" });
   let height = 1000;
   let visible = 400;
   let top = 0;
@@ -127,7 +123,7 @@ it("follows growth, preserves reading position, and resumes from the latest butt
   expect(top).toBe(1350);
   viewport.scrollTop = 100;
   fireEvent.scroll(viewport);
-  setKey("conversation:turn-2");
+  setKey("thread:turn-2");
   expect(top).toBe(1350);
   expect(latest()).toBeNull();
 

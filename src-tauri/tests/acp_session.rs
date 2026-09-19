@@ -1,6 +1,6 @@
 use atte_lib::{
     agent::AgentDefinition,
-    conversation::{ConversationStatus, Conversations},
+    thread::{ThreadStatus, Threads},
 };
 use std::{path::PathBuf, process::Command, sync::OnceLock, time::Duration};
 
@@ -49,19 +49,19 @@ fn mock_agent() -> AgentDefinition {
 }
 
 #[tokio::test]
-async fn list_subscription_tracks_background_conversation_status() {
+async fn list_subscription_tracks_background_thread_status() {
     let folder = tempfile::tempdir().unwrap();
-    let conversations = Conversations::new(vec![mock_agent()]);
-    let mut list = conversations.subscribe_list().unwrap();
+    let threads = Threads::new(vec![mock_agent()]);
+    let mut list = threads.subscribe_list().unwrap();
     assert!(list.recv().await.unwrap().is_empty());
-    let draft = conversations.create(folder.path()).unwrap();
+    let draft = threads.create(folder.path()).unwrap();
     assert_eq!(list.recv().await.unwrap()[0].id, draft.id);
-    conversations.connect(draft.id).unwrap();
-    settle(&conversations, draft.id).await;
+    threads.connect(draft.id).unwrap();
+    settle(&threads, draft.id).await;
     let ready = tokio::time::timeout(Duration::from_secs(5), async {
         loop {
             let entries = list.recv().await.unwrap();
-            if entries[0].status == ConversationStatus::SessionReady {
+            if entries[0].status == ThreadStatus::SessionReady {
                 break entries;
             }
         }
@@ -69,7 +69,7 @@ async fn list_subscription_tracks_background_conversation_status() {
     .await
     .unwrap();
     assert_eq!(ready[0].id, draft.id);
-    conversations.shutdown().await;
+    threads.shutdown().await;
 }
 
 #[tokio::test]
@@ -80,21 +80,19 @@ async fn shutdown_stops_all_work_and_restores_queues_without_dispatch() {
     );
     let mut agent = mock_agent();
     agent.env.insert("FIXTURE_MODE".into(), "concurrent".into());
-    let conversations = Conversations::with_store(vec![agent.clone()], store.clone()).unwrap();
+    let threads = Threads::with_store(vec![agent.clone()], store.clone()).unwrap();
     let mut ids = Vec::new();
     for message in ["hold", "approval"] {
-        let draft = conversations.create(root.path()).unwrap();
-        conversations.connect(draft.id).unwrap();
-        settle(&conversations, draft.id).await;
-        conversations
-            .send_message(draft.id, message.into())
-            .unwrap();
-        let mut stream = subscribe(&conversations, draft.id);
+        let draft = threads.create(root.path()).unwrap();
+        threads.connect(draft.id).unwrap();
+        settle(&threads, draft.id).await;
+        threads.send_message(draft.id, message.into()).unwrap();
+        let mut stream = subscribe(&threads, draft.id);
         tokio::time::timeout(Duration::from_secs(5), async {
             loop {
                 let next = stream.recv().await.unwrap();
                 if (message == "hold" && !next.turns[0].response.is_empty())
-                    || next.status == ConversationStatus::WaitingForApproval
+                    || next.status == ThreadStatus::WaitingForApproval
                 {
                     break;
                 }
@@ -102,22 +100,20 @@ async fn shutdown_stops_all_work_and_restores_queues_without_dispatch() {
         })
         .await
         .unwrap();
-        conversations
-            .send_message(draft.id, "queued".into())
-            .unwrap();
+        threads.send_message(draft.id, "queued".into()).unwrap();
         ids.push(draft.id);
     }
-    tokio::time::timeout(Duration::from_secs(6), conversations.shutdown())
+    tokio::time::timeout(Duration::from_secs(6), threads.shutdown())
         .await
         .unwrap();
     for id in &ids {
-        let stopped = conversations.get(*id).unwrap();
-        assert_eq!(stopped.status, ConversationStatus::Disconnected);
+        let stopped = threads.get(*id).unwrap();
+        assert_eq!(stopped.status, ThreadStatus::Disconnected);
         assert_eq!(stopped.turns[0].stop_reason.as_deref(), Some("cancelled"));
         assert!(stopped.permissions.is_empty());
-        assert!(conversations.send_message(*id, "late".into()).is_err());
+        assert!(threads.send_message(*id, "late".into()).is_err());
     }
-    let restored = Conversations::with_store(vec![agent], store).unwrap();
+    let restored = Threads::with_store(vec![agent], store).unwrap();
     assert_eq!(restored.list().unwrap().len(), 2);
     for id in ids {
         let saved = restored.get(id).unwrap();
@@ -126,7 +122,7 @@ async fn shutdown_stops_all_work_and_restores_queues_without_dispatch() {
         assert_eq!(saved.queued_messages[0].text, "queued");
         restored.connect(id).unwrap();
         let ready = settle(&restored, id).await;
-        assert_eq!(ready.status, ConversationStatus::SessionReady);
+        assert_eq!(ready.status, ThreadStatus::SessionReady);
         assert!(ready.turns.is_empty());
         assert_eq!(ready.queued_messages, saved.queued_messages);
     }
@@ -144,20 +140,18 @@ async fn shutdown_delivers_turn_and_permission_cancellation_before_reaping() {
     agent
         .env
         .insert("CANCELLATION_FILE".into(), receipt.to_string_lossy().into());
-    let conversations = Conversations::new(vec![agent]);
-    let draft = conversations.create(folder.path()).unwrap();
-    conversations.connect(draft.id).unwrap();
-    settle(&conversations, draft.id).await;
-    conversations
-        .send_message(draft.id, "permission".into())
-        .unwrap();
-    let mut stream = subscribe(&conversations, draft.id);
+    let threads = Threads::new(vec![agent]);
+    let draft = threads.create(folder.path()).unwrap();
+    threads.connect(draft.id).unwrap();
+    settle(&threads, draft.id).await;
+    threads.send_message(draft.id, "permission".into()).unwrap();
+    let mut stream = subscribe(&threads, draft.id);
     tokio::time::timeout(Duration::from_secs(5), async {
-        while stream.recv().await.unwrap().status != ConversationStatus::WaitingForApproval {}
+        while stream.recv().await.unwrap().status != ThreadStatus::WaitingForApproval {}
     })
     .await
     .unwrap();
-    conversations.shutdown().await;
+    threads.shutdown().await;
     assert_eq!(
         std::fs::read_to_string(receipt).unwrap(),
         "turn and permissions cancelled"
@@ -169,65 +163,59 @@ async fn shared_connection_isolates_sessions_permissions_and_cancellation() {
     let folder = tempfile::tempdir().unwrap();
     let mut agent = mock_agent();
     agent.env.insert("FIXTURE_MODE".into(), "concurrent".into());
-    let conversations = Conversations::new(vec![agent]);
-    let first = conversations.create(folder.path()).unwrap();
-    let second = conversations.create(folder.path()).unwrap();
-    conversations.connect(first.id).unwrap();
-    settle(&conversations, first.id).await;
-    conversations.connect(second.id).unwrap();
-    let ready = settle(&conversations, second.id).await;
+    let threads = Threads::new(vec![agent]);
+    let first = threads.create(folder.path()).unwrap();
+    let second = threads.create(folder.path()).unwrap();
+    threads.connect(first.id).unwrap();
+    settle(&threads, first.id).await;
+    threads.connect(second.id).unwrap();
+    let ready = settle(&threads, second.id).await;
     assert_eq!(ready.remote_session_id.as_deref(), Some("remote-2"));
-    conversations
-        .send_message(first.id, "approval".into())
-        .unwrap();
-    let mut stream = subscribe(&conversations, first.id);
+    threads.send_message(first.id, "approval".into()).unwrap();
+    let mut stream = subscribe(&threads, first.id);
     let waiting = tokio::time::timeout(Duration::from_secs(5), async {
         loop {
-            let conversation = stream.recv().await.unwrap();
-            if !conversation.permissions.is_empty() {
-                break conversation;
+            let thread = stream.recv().await.unwrap();
+            if !thread.permissions.is_empty() {
+                break thread;
             }
         }
     })
     .await
     .unwrap();
     drop(stream);
-    conversations
+    threads
         .send_message(second.id, "independent".into())
         .unwrap();
     assert_eq!(
-        settle(&conversations, second.id).await.turns[0].response,
+        settle(&threads, second.id).await.turns[0].response,
         "reply:independent"
     );
-    conversations
-        .send_message(second.id, "hold".into())
-        .unwrap();
-    conversations
-        .cancel_turn(first.id, waiting.turns[0].id)
-        .unwrap();
+    threads.send_message(second.id, "hold".into()).unwrap();
+    threads.cancel_turn(first.id, waiting.turns[0].id).unwrap();
     assert_eq!(
-        settle(&conversations, first.id).await.turns[0]
+        settle(&threads, first.id).await.turns[0]
             .stop_reason
             .as_deref(),
         Some("cancelled")
     );
     assert_eq!(
-        conversations.get(second.id).unwrap().status,
-        ConversationStatus::Running
+        threads.get(second.id).unwrap().status,
+        ThreadStatus::Running
     );
-    let second_turn = conversations.get(second.id).unwrap().turns[1].id;
-    conversations.cancel_turn(second.id, second_turn).unwrap();
-    settle(&conversations, second.id).await;
-    conversations.send_message(first.id, "exit".into()).unwrap();
+    let second_turn = threads.get(second.id).unwrap().turns[1].id;
+    threads.cancel_turn(second.id, second_turn).unwrap();
+    settle(&threads, second.id).await;
+    threads.send_message(first.id, "exit".into()).unwrap();
     assert_eq!(
-        settle(&conversations, first.id).await.status,
-        ConversationStatus::Failed
+        settle(&threads, first.id).await.status,
+        ThreadStatus::Failed
     );
     assert_eq!(
-        settle(&conversations, second.id).await.status,
-        ConversationStatus::Failed
+        settle(&threads, second.id).await.status,
+        ThreadStatus::Failed
     );
-    conversations.shutdown().await;
+    threads.shutdown().await;
 }
 
 #[tokio::test]
@@ -238,80 +226,73 @@ async fn real_codex_concurrent_sessions_keep_approval_and_queue_isolated() {
     agent
         .env
         .insert("INITIAL_AGENT_MODE".into(), "read-only".into());
-    let conversations = Conversations::new(vec![agent]);
-    let first = conversations.create(folder.path()).unwrap();
-    let second = conversations.create(folder.path()).unwrap();
-    conversations.connect(first.id).unwrap();
+    let threads = Threads::new(vec![agent]);
+    let first = threads.create(folder.path()).unwrap();
+    let second = threads.create(folder.path()).unwrap();
+    threads.connect(first.id).unwrap();
     assert_eq!(
-        settle(&conversations, first.id).await.status,
-        ConversationStatus::SessionReady
+        settle(&threads, first.id).await.status,
+        ThreadStatus::SessionReady
     );
-    conversations.connect(second.id).unwrap();
+    threads.connect(second.id).unwrap();
     assert_eq!(
-        settle(&conversations, second.id).await.status,
-        ConversationStatus::SessionReady
+        settle(&threads, second.id).await.status,
+        ThreadStatus::SessionReady
     );
-    conversations.send_message(first.id, "This is a permission UI acceptance test. Use exec_command with sandbox_permissions=require_escalated to run `printf ATTE-07 > cancelled.txt` in the working folder. Request approval and wait for it. Do not use an alternate tool or bypass approval.".into()).unwrap();
-    conversations
+    threads.send_message(first.id, "This is a permission UI acceptance test. Use exec_command with sandbox_permissions=require_escalated to run `printf ATTE-07 > cancelled.txt` in the working folder. Request approval and wait for it. Do not use an alternate tool or bypass approval.".into()).unwrap();
+    threads
         .send_message(
             first.id,
             "Do not execute this queued instruction after cancellation.".into(),
         )
         .unwrap();
-    let mut first_stream = subscribe(&conversations, first.id);
+    let mut first_stream = subscribe(&threads, first.id);
     let waiting = tokio::time::timeout(Duration::from_secs(120), async {
         loop {
-            let conversation = first_stream.recv().await.unwrap();
-            if conversation.status == ConversationStatus::WaitingForApproval {
-                break conversation;
+            let thread = first_stream.recv().await.unwrap();
+            if thread.status == ThreadStatus::WaitingForApproval {
+                break thread;
             }
             assert!(
-                matches!(conversation.status, ConversationStatus::Running),
-                "Expected permission: {conversation:?}"
+                matches!(thread.status, ThreadStatus::Running),
+                "Expected permission: {thread:?}"
             );
         }
     })
     .await
     .unwrap();
     drop(first_stream);
-    conversations
+    threads
         .send_message(
             second.id,
             "Do not use tools or read files. Reply with exactly ATTE-07-SECOND.".into(),
         )
         .unwrap();
-    let mut second_stream = subscribe(&conversations, second.id);
+    let mut second_stream = subscribe(&threads, second.id);
     let finished = tokio::time::timeout(Duration::from_secs(120), async {
         loop {
-            let conversation = second_stream.recv().await.unwrap();
-            if conversation.status == ConversationStatus::SessionReady
-                || conversation.status == ConversationStatus::Failed
+            let thread = second_stream.recv().await.unwrap();
+            if thread.status == ThreadStatus::SessionReady || thread.status == ThreadStatus::Failed
             {
-                break conversation;
+                break thread;
             }
         }
     })
     .await
     .unwrap();
-    assert_eq!(
-        finished.status,
-        ConversationStatus::SessionReady,
-        "{finished:?}"
-    );
+    assert_eq!(finished.status, ThreadStatus::SessionReady, "{finished:?}");
     assert!(finished.turns[0].response.contains("ATTE-07-SECOND"));
     assert_eq!(
-        conversations.get(first.id).unwrap().status,
-        ConversationStatus::WaitingForApproval
+        threads.get(first.id).unwrap().status,
+        ThreadStatus::WaitingForApproval
     );
-    conversations
-        .cancel_turn(first.id, waiting.turns[0].id)
-        .unwrap();
-    let stopped = settle(&conversations, first.id).await;
+    threads.cancel_turn(first.id, waiting.turns[0].id).unwrap();
+    let stopped = settle(&threads, first.id).await;
     assert_eq!(stopped.turns[0].stop_reason.as_deref(), Some("cancelled"));
     assert_eq!(stopped.queued_messages.len(), 1);
     assert!(!folder.path().join("cancelled.txt").exists());
-    assert_eq!(conversations.get(second.id).unwrap().turns, finished.turns);
-    conversations.shutdown().await;
+    assert_eq!(threads.get(second.id).unwrap().turns, finished.turns);
+    threads.shutdown().await;
 }
 
 #[tokio::test]
@@ -322,17 +303,17 @@ async fn queues_followups_and_dispatches_them_in_fifo_order_after_completion() {
     agent
         .env
         .insert("PROMPT_GATE".into(), gate.to_string_lossy().into());
-    let conversations = Conversations::new(vec![agent]);
-    let draft = conversations.create(folder.path()).unwrap();
-    conversations.connect(draft.id).unwrap();
-    settle(&conversations, draft.id).await;
+    let threads = Threads::new(vec![agent]);
+    let draft = threads.create(folder.path()).unwrap();
+    threads.connect(draft.id).unwrap();
+    settle(&threads, draft.id).await;
     for text in ["first", "second", "third"] {
-        conversations.send_message(draft.id, text.into()).unwrap();
+        threads.send_message(draft.id, text.into()).unwrap();
     }
-    let queued = conversations.get(draft.id).unwrap();
+    let queued = threads.get(draft.id).unwrap();
     assert_eq!(queued.turns.len(), 1);
     std::fs::write(gate, "continue").unwrap();
-    let finished = settle(&conversations, draft.id).await;
+    let finished = settle(&threads, draft.id).await;
     assert_eq!(
         finished
             .turns
@@ -345,7 +326,7 @@ async fn queues_followups_and_dispatches_them_in_fifo_order_after_completion() {
         .turns
         .iter()
         .all(|turn| turn.stop_reason.as_deref() == Some("end_turn")));
-    conversations.shutdown().await;
+    threads.shutdown().await;
 }
 
 #[tokio::test]
@@ -355,21 +336,19 @@ async fn cancellation_intent_prevents_queue_dispatch_even_when_completion_wins_o
     agent
         .env
         .insert("FIXTURE_MODE".into(), "cancel-race".into());
-    let conversations = Conversations::new(vec![agent]);
-    let draft = conversations.create(folder.path()).unwrap();
-    conversations.connect(draft.id).unwrap();
-    settle(&conversations, draft.id).await;
-    conversations
-        .send_message(draft.id, "first".into())
-        .unwrap();
-    conversations.send_message(draft.id, "keep".into()).unwrap();
-    let turn = conversations.get(draft.id).unwrap().turns[0].id;
-    conversations.cancel_turn(draft.id, turn).unwrap();
-    let stopped = settle(&conversations, draft.id).await;
+    let threads = Threads::new(vec![agent]);
+    let draft = threads.create(folder.path()).unwrap();
+    threads.connect(draft.id).unwrap();
+    settle(&threads, draft.id).await;
+    threads.send_message(draft.id, "first".into()).unwrap();
+    threads.send_message(draft.id, "keep".into()).unwrap();
+    let turn = threads.get(draft.id).unwrap().turns[0].id;
+    threads.cancel_turn(draft.id, turn).unwrap();
+    let stopped = settle(&threads, draft.id).await;
     assert!(stopped.interrupted);
     assert_eq!(stopped.turns.len(), 1);
     assert_eq!(stopped.queued_messages[0].text, "keep");
-    conversations.shutdown().await;
+    threads.shutdown().await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -379,14 +358,12 @@ async fn failed_queue_storage_does_not_acknowledge_or_send_input() {
     let store = std::sync::Arc::new(atte_lib::storage::Store::open(&path).unwrap());
     let mut agent = mock_agent();
     agent.env.insert("FIXTURE_MODE".into(), "cancel".into());
-    let conversations = Conversations::with_store(vec![agent], store).unwrap();
-    let draft = conversations.create(folder.path()).unwrap();
-    conversations.connect(draft.id).unwrap();
-    settle(&conversations, draft.id).await;
-    conversations
-        .send_message(draft.id, "first".into())
-        .unwrap();
-    let mut updates = subscribe(&conversations, draft.id);
+    let threads = Threads::with_store(vec![agent], store).unwrap();
+    let draft = threads.create(folder.path()).unwrap();
+    threads.connect(draft.id).unwrap();
+    settle(&threads, draft.id).await;
+    threads.send_message(draft.id, "first".into()).unwrap();
+    let mut updates = subscribe(&threads, draft.id);
     tokio::time::timeout(Duration::from_secs(5), async {
         while updates.recv().await.unwrap().turns[0].response.is_empty() {}
     })
@@ -395,17 +372,15 @@ async fn failed_queue_storage_does_not_acknowledge_or_send_input() {
     // Another SQLite client holds the storage boundary unavailable.
     let writer = rusqlite::Connection::open(&path).unwrap();
     writer.execute_batch("BEGIN EXCLUSIVE").unwrap();
-    assert!(conversations
+    assert!(threads
         .send_message(draft.id, "must not be acknowledged".into())
         .is_err());
     writer.execute_batch("ROLLBACK").unwrap();
-    let conversation = conversations.get(draft.id).unwrap();
-    assert!(conversation.queued_messages.is_empty());
-    conversations
-        .cancel_turn(draft.id, conversation.turns[0].id)
-        .unwrap();
-    assert_eq!(settle(&conversations, draft.id).await.turns.len(), 1);
-    conversations.shutdown().await;
+    let thread = threads.get(draft.id).unwrap();
+    assert!(thread.queued_messages.is_empty());
+    threads.cancel_turn(draft.id, thread.turns[0].id).unwrap();
+    assert_eq!(settle(&threads, draft.id).await.turns.len(), 1);
+    threads.shutdown().await;
 }
 
 #[tokio::test]
@@ -418,15 +393,13 @@ async fn failed_removal_storage_keeps_the_followup_without_dispatching_it() {
     agent
         .env
         .insert("PROMPT_GATE".into(), gate.to_string_lossy().into());
-    let conversations = Conversations::with_store(vec![agent.clone()], store.clone()).unwrap();
-    let draft = conversations.create(folder.path()).unwrap();
-    conversations.connect(draft.id).unwrap();
-    settle(&conversations, draft.id).await;
-    conversations
-        .send_message(draft.id, "first".into())
-        .unwrap();
-    conversations.send_message(draft.id, "keep".into()).unwrap();
-    let mut updates = subscribe(&conversations, draft.id);
+    let threads = Threads::with_store(vec![agent.clone()], store.clone()).unwrap();
+    let draft = threads.create(folder.path()).unwrap();
+    threads.connect(draft.id).unwrap();
+    settle(&threads, draft.id).await;
+    threads.send_message(draft.id, "first".into()).unwrap();
+    threads.send_message(draft.id, "keep".into()).unwrap();
+    let mut updates = subscribe(&threads, draft.id);
     tokio::time::timeout(Duration::from_secs(5), async {
         while updates.recv().await.unwrap().turns[0].response != "Hello" {}
     })
@@ -437,9 +410,9 @@ async fn failed_removal_storage_keeps_the_followup_without_dispatching_it() {
     std::fs::write(gate, "continue").unwrap();
     let completed = tokio::time::timeout(Duration::from_secs(20), async {
         loop {
-            let conversation = updates.recv().await.unwrap();
-            if conversation.status == ConversationStatus::SessionReady {
-                break conversation;
+            let thread = updates.recv().await.unwrap();
+            if thread.status == ThreadStatus::SessionReady {
+                break thread;
             }
         }
     })
@@ -450,8 +423,8 @@ async fn failed_removal_storage_keeps_the_followup_without_dispatching_it() {
     assert_eq!(completed.turns[0].stop_reason.as_deref(), Some("end_turn"));
     assert_eq!(completed.queued_messages[0].text, "keep");
     assert!(completed.notice.is_some());
-    conversations.shutdown().await;
-    let restored = Conversations::with_store(vec![agent], store).unwrap();
+    threads.shutdown().await;
+    let restored = Threads::with_store(vec![agent], store).unwrap();
     assert_eq!(
         restored.get(draft.id).unwrap().queued_messages,
         completed.queued_messages
@@ -466,25 +439,19 @@ async fn cancelled_queue_survives_restart_and_load_without_sending() {
     );
     let mut agent = mock_agent();
     agent.env.insert("FIXTURE_MODE".into(), "cancel".into());
-    let conversations = Conversations::with_store(vec![agent.clone()], store.clone()).unwrap();
-    let draft = conversations.create(folder.path()).unwrap();
-    conversations.connect(draft.id).unwrap();
-    settle(&conversations, draft.id).await;
-    conversations
-        .send_message(draft.id, "first".into())
-        .unwrap();
-    conversations.send_message(draft.id, "keep".into()).unwrap();
-    conversations
-        .send_message(draft.id, "delete".into())
-        .unwrap();
-    let queued = conversations.get(draft.id).unwrap();
-    conversations
+    let threads = Threads::with_store(vec![agent.clone()], store.clone()).unwrap();
+    let draft = threads.create(folder.path()).unwrap();
+    threads.connect(draft.id).unwrap();
+    settle(&threads, draft.id).await;
+    threads.send_message(draft.id, "first".into()).unwrap();
+    threads.send_message(draft.id, "keep".into()).unwrap();
+    threads.send_message(draft.id, "delete".into()).unwrap();
+    let queued = threads.get(draft.id).unwrap();
+    threads
         .delete_queued_message(draft.id, queued.queued_messages[1].id)
         .unwrap();
-    conversations
-        .cancel_turn(draft.id, queued.turns[0].id)
-        .unwrap();
-    let stopped = settle(&conversations, draft.id).await;
+    threads.cancel_turn(draft.id, queued.turns[0].id).unwrap();
+    let stopped = settle(&threads, draft.id).await;
     assert_eq!(stopped.turns.len(), 1);
     assert_eq!(
         stopped
@@ -494,9 +461,9 @@ async fn cancelled_queue_survives_restart_and_load_without_sending() {
             .collect::<Vec<_>>(),
         ["keep"]
     );
-    conversations.shutdown().await;
-    drop(conversations);
-    let restored = Conversations::with_store(vec![agent], store).unwrap();
+    threads.shutdown().await;
+    drop(threads);
+    let restored = Threads::with_store(vec![agent], store).unwrap();
     assert_eq!(
         restored.get(draft.id).unwrap().queued_messages,
         stopped.queued_messages
@@ -522,17 +489,17 @@ async fn restores_agent_history_after_restart_without_persisting_a_transcript() 
             .to_string_lossy()
             .into(),
     );
-    let conversations = Conversations::with_store(vec![agent.clone()], store.clone()).unwrap();
-    let draft = conversations.create(root.path()).unwrap();
-    conversations.connect(draft.id).unwrap();
-    settle(&conversations, draft.id).await;
-    conversations
+    let threads = Threads::with_store(vec![agent.clone()], store.clone()).unwrap();
+    let draft = threads.create(root.path()).unwrap();
+    threads.connect(draft.id).unwrap();
+    settle(&threads, draft.id).await;
+    threads
         .send_message(draft.id, "Remember my marker".into())
         .unwrap();
-    let original = settle(&conversations, draft.id).await;
-    conversations.shutdown().await;
-    drop(conversations);
-    let restored = Conversations::with_store(vec![agent], store).unwrap();
+    let original = settle(&threads, draft.id).await;
+    threads.shutdown().await;
+    drop(threads);
+    let restored = Threads::with_store(vec![agent], store).unwrap();
     assert!(restored.get(draft.id).unwrap().turns.is_empty());
     assert_eq!(
         restored.list().unwrap()[0].remote_session_id,
@@ -541,7 +508,7 @@ async fn restores_agent_history_after_restart_without_persisting_a_transcript() 
     restored.connect(draft.id).unwrap();
     restored.connect(draft.id).unwrap();
     let loaded = settle(&restored, draft.id).await;
-    assert_eq!(loaded.status, ConversationStatus::SessionReady);
+    assert_eq!(loaded.status, ThreadStatus::SessionReady);
     assert_eq!(loaded.turns.len(), 1);
     assert_eq!(loaded.turns[0].message, "Remember my marker");
     assert_eq!(loaded.turns[0].response, "Hello world");
@@ -567,15 +534,15 @@ async fn resume_only_restores_context_with_an_explicit_no_history_notice() {
     agent
         .env
         .insert("FIXTURE_MODE".into(), "resume-only".into());
-    let first = Conversations::with_store(vec![agent.clone()], store.clone()).unwrap();
+    let first = Threads::with_store(vec![agent.clone()], store.clone()).unwrap();
     let draft = first.create(root.path()).unwrap();
     first.connect(draft.id).unwrap();
     settle(&first, draft.id).await;
     first.shutdown().await;
-    let restored = Conversations::with_store(vec![agent], store).unwrap();
+    let restored = Threads::with_store(vec![agent], store).unwrap();
     restored.connect(draft.id).unwrap();
     let ready = settle(&restored, draft.id).await;
-    assert_eq!(ready.status, ConversationStatus::SessionReady);
+    assert_eq!(ready.status, ThreadStatus::SessionReady);
     assert!(ready
         .notice
         .as_deref()
@@ -589,7 +556,7 @@ async fn resume_only_restores_context_with_an_explicit_no_history_notice() {
 
 #[tokio::test]
 async fn failed_restoration_keeps_the_reference_and_never_exposes_partial_replay() {
-    use atte_lib::conversation::ConnectionFailure;
+    use atte_lib::thread::ConnectionFailure;
     for (mode, failure) in [
         ("no-resume", ConnectionFailure::ResumptionUnsupported),
         ("load-error", ConnectionFailure::SessionRestorationFailed),
@@ -605,7 +572,7 @@ async fn failed_restoration_keeps_the_reference_and_never_exposes_partial_replay
             "SESSION_FILE".into(),
             root.path().join("agent.json").to_string_lossy().into(),
         );
-        let first = Conversations::with_store(vec![agent.clone()], store.clone()).unwrap();
+        let first = Threads::with_store(vec![agent.clone()], store.clone()).unwrap();
         let draft = first.create(root.path()).unwrap();
         first.connect(draft.id).unwrap();
         settle(&first, draft.id).await;
@@ -613,7 +580,7 @@ async fn failed_restoration_keeps_the_reference_and_never_exposes_partial_replay
         settle(&first, draft.id).await;
         first.shutdown().await;
         agent.env.insert("FIXTURE_MODE".into(), mode.into());
-        let restored = Conversations::with_store(vec![agent.clone()], store).unwrap();
+        let restored = Threads::with_store(vec![agent.clone()], store).unwrap();
         restored.connect(draft.id).unwrap();
         let failed = settle(&restored, draft.id).await;
         assert_eq!(failed.failure, Some(failure), "{mode}");
@@ -622,13 +589,10 @@ async fn failed_restoration_keeps_the_reference_and_never_exposes_partial_replay
         assert!(failed.permissions.is_empty());
         agent.env.remove("FIXTURE_MODE");
         restored.register_agent(agent).unwrap();
-        assert_eq!(
-            restored.get(draft.id).unwrap().status,
-            ConversationStatus::Failed
-        );
+        assert_eq!(restored.get(draft.id).unwrap().status, ThreadStatus::Failed);
         restored.connect(draft.id).unwrap();
         let ready = settle(&restored, draft.id).await;
-        assert_eq!(ready.status, ConversationStatus::SessionReady);
+        assert_eq!(ready.status, ThreadStatus::SessionReady);
         assert_eq!(ready.turns.len(), 1);
         restored.shutdown().await;
     }
@@ -644,7 +608,7 @@ async fn restart_of_an_approval_wait_restores_only_metadata_without_replaying_th
     agent
         .env
         .insert("FIXTURE_MODE".into(), "prompt-permission".into());
-    let first = Conversations::with_store(vec![agent.clone()], store.clone()).unwrap();
+    let first = Threads::with_store(vec![agent.clone()], store.clone()).unwrap();
     let draft = first.create(root.path()).unwrap();
     first.connect(draft.id).unwrap();
     settle(&first, draft.id).await;
@@ -655,7 +619,7 @@ async fn restart_of_an_approval_wait_restores_only_metadata_without_replaying_th
     let permission = tokio::time::timeout(Duration::from_secs(5), async {
         loop {
             let next = stream.recv().await.unwrap();
-            if next.status == ConversationStatus::WaitingForApproval {
+            if next.status == ThreadStatus::WaitingForApproval {
                 break next.permissions[0].id;
             }
         }
@@ -666,20 +630,20 @@ async fn restart_of_an_approval_wait_restores_only_metadata_without_replaying_th
     let stopped = first.get(draft.id).unwrap();
     assert_eq!(stopped.turns[0].stop_reason.as_deref(), Some("cancelled"));
     assert!(stopped.permissions.is_empty());
-    let restored = Conversations::with_store(vec![agent], store).unwrap();
-    let conversation = restored.get(draft.id).unwrap();
-    assert!(conversation.interrupted);
-    assert!(conversation.permissions.is_empty());
-    assert!(conversation.turns.is_empty());
+    let restored = Threads::with_store(vec![agent], store).unwrap();
+    let thread = restored.get(draft.id).unwrap();
+    assert!(thread.interrupted);
+    assert!(thread.permissions.is_empty());
+    assert!(thread.turns.is_empty());
     assert!(restored
         .answer_permission(draft.id, permission, "arbitrary-allow".into())
         .is_err());
     restored.connect(draft.id).unwrap();
     let ready = settle(&restored, draft.id).await;
-    assert_eq!(ready.status, ConversationStatus::SessionReady);
+    assert_eq!(ready.status, ThreadStatus::SessionReady);
     assert!(ready.turns.is_empty());
     restored.shutdown().await;
-    let reopened = Conversations::with_store(
+    let reopened = Threads::with_store(
         vec![],
         std::sync::Arc::new(
             atte_lib::storage::Store::open(&root.path().join("atte.sqlite")).unwrap(),
@@ -691,30 +655,27 @@ async fn restart_of_an_approval_wait_restores_only_metadata_without_replaying_th
 
 #[tokio::test]
 async fn missing_agent_keeps_the_session_reference_and_can_be_reinstalled_for_explicit_retry() {
-    use atte_lib::conversation::ConnectionFailure;
+    use atte_lib::thread::ConnectionFailure;
     let root = tempfile::tempdir().unwrap();
     let store = std::sync::Arc::new(
         atte_lib::storage::Store::open(&root.path().join("atte.sqlite")).unwrap(),
     );
-    let first = Conversations::with_store(vec![mock_agent()], store.clone()).unwrap();
+    let first = Threads::with_store(vec![mock_agent()], store.clone()).unwrap();
     let draft = first.create(root.path()).unwrap();
     first.connect(draft.id).unwrap();
     settle(&first, draft.id).await;
     first.shutdown().await;
-    let restored = Conversations::with_store(vec![], store).unwrap();
+    let restored = Threads::with_store(vec![], store).unwrap();
     assert!(restored.connect(draft.id).is_err());
     assert_eq!(
         restored.get(draft.id).unwrap().failure,
         Some(ConnectionFailure::AgentRemoved)
     );
     restored.register_agent(mock_agent()).unwrap();
-    assert_eq!(
-        restored.get(draft.id).unwrap().status,
-        ConversationStatus::Failed
-    );
+    assert_eq!(restored.get(draft.id).unwrap().status, ThreadStatus::Failed);
     restored.connect(draft.id).unwrap();
     let ready = settle(&restored, draft.id).await;
-    assert_eq!(ready.status, ConversationStatus::SessionReady);
+    assert_eq!(ready.status, ThreadStatus::SessionReady);
     assert_eq!(ready.remote_session_id.as_deref(), Some("remote-1"));
     restored.shutdown().await;
 }
@@ -725,7 +686,7 @@ async fn replay_keeps_distinct_message_ids_even_when_the_text_is_identical() {
     let store = std::sync::Arc::new(
         atte_lib::storage::Store::open(&root.path().join("atte.sqlite")).unwrap(),
     );
-    let first = Conversations::with_store(vec![mock_agent()], store.clone()).unwrap();
+    let first = Threads::with_store(vec![mock_agent()], store.clone()).unwrap();
     let draft = first.create(root.path()).unwrap();
     first.connect(draft.id).unwrap();
     settle(&first, draft.id).await;
@@ -738,7 +699,7 @@ async fn replay_keeps_distinct_message_ids_even_when_the_text_is_identical() {
     agent
         .env
         .insert("REQUEST_LOG".into(), log.to_string_lossy().into());
-    let restored = Conversations::with_store(vec![agent], store).unwrap();
+    let restored = Threads::with_store(vec![agent], store).unwrap();
     restored.connect(draft.id).unwrap();
     restored.connect(draft.id).unwrap();
     let loaded = settle(&restored, draft.id).await;
@@ -767,47 +728,37 @@ async fn real_codex_restores_history_and_context_after_process_and_core_restart(
     );
     let marker = format!("ATTE-06-{}", uuid::Uuid::new_v4());
     let first =
-        Conversations::with_store(vec![atte_lib::agent::prepared_codex()], store.clone()).unwrap();
+        Threads::with_store(vec![atte_lib::agent::prepared_codex()], store.clone()).unwrap();
     let draft = first.create(root.path()).unwrap();
     first.connect(draft.id).unwrap();
     let connected = settle(&first, draft.id).await;
     assert_eq!(
         connected.status,
-        ConversationStatus::SessionReady,
+        ThreadStatus::SessionReady,
         "{connected:?}"
     );
-    first.send_message(draft.id, format!("Do not use tools or access any files. Remember this marker for our conversation: {marker}. Reply with only this marker.")).unwrap();
+    first.send_message(draft.id, format!("Do not use tools or access any files. Remember this marker for our thread: {marker}. Reply with only this marker.")).unwrap();
     let original = tokio::time::timeout(Duration::from_secs(120), async {
         let mut updates = subscribe(&first, draft.id);
         loop {
-            let conversation = updates.recv().await.unwrap();
-            if conversation.status == ConversationStatus::SessionReady
-                || conversation.status == ConversationStatus::Failed
+            let thread = updates.recv().await.unwrap();
+            if thread.status == ThreadStatus::SessionReady || thread.status == ThreadStatus::Failed
             {
-                break conversation;
+                break thread;
             }
         }
     })
     .await
     .unwrap();
-    assert_eq!(
-        original.status,
-        ConversationStatus::SessionReady,
-        "{original:?}"
-    );
+    assert_eq!(original.status, ThreadStatus::SessionReady, "{original:?}");
     assert!(original.turns[0].response.contains(&marker));
     first.shutdown().await;
     drop(first);
-    let restored =
-        Conversations::with_store(vec![atte_lib::agent::prepared_codex()], store).unwrap();
+    let restored = Threads::with_store(vec![atte_lib::agent::prepared_codex()], store).unwrap();
     assert!(restored.get(draft.id).unwrap().turns.is_empty());
     restored.connect(draft.id).unwrap();
     let loaded = settle(&restored, draft.id).await;
-    assert_eq!(
-        loaded.status,
-        ConversationStatus::SessionReady,
-        "{loaded:?}"
-    );
+    assert_eq!(loaded.status, ThreadStatus::SessionReady, "{loaded:?}");
     assert_eq!(loaded.remote_session_id, original.remote_session_id);
     assert!(loaded
         .turns
@@ -817,21 +768,16 @@ async fn real_codex_restores_history_and_context_after_process_and_core_restart(
     let answer = tokio::time::timeout(Duration::from_secs(120), async {
         let mut updates = subscribe(&restored, draft.id);
         loop {
-            let conversation = updates.recv().await.unwrap();
-            if conversation.status == ConversationStatus::SessionReady
-                || conversation.status == ConversationStatus::Failed
+            let thread = updates.recv().await.unwrap();
+            if thread.status == ThreadStatus::SessionReady || thread.status == ThreadStatus::Failed
             {
-                break conversation;
+                break thread;
             }
         }
     })
     .await
     .unwrap();
-    assert_eq!(
-        answer.status,
-        ConversationStatus::SessionReady,
-        "{answer:?}"
-    );
+    assert_eq!(answer.status, ThreadStatus::SessionReady, "{answer:?}");
     assert!(answer.turns.last().unwrap().response.contains(&marker));
     restored.shutdown().await;
 }
@@ -841,82 +787,73 @@ async fn cancels_only_the_active_turn_and_continues_the_same_session() {
     let folder = tempfile::tempdir().unwrap();
     let mut agent = mock_agent();
     agent.env.insert("FIXTURE_MODE".into(), "cancel".into());
-    let conversations = Conversations::new(vec![agent]);
-    let draft = conversations.create(folder.path()).unwrap();
-    conversations.connect(draft.id).unwrap();
-    settle(&conversations, draft.id).await;
-    let mut stream = subscribe(&conversations, draft.id);
-    conversations
-        .send_message(draft.id, "start".into())
-        .unwrap();
+    let threads = Threads::new(vec![agent]);
+    let draft = threads.create(folder.path()).unwrap();
+    threads.connect(draft.id).unwrap();
+    settle(&threads, draft.id).await;
+    let mut stream = subscribe(&threads, draft.id);
+    threads.send_message(draft.id, "start".into()).unwrap();
     let active = tokio::time::timeout(Duration::from_secs(5), async {
         loop {
-            let conversation = stream.recv().await.unwrap();
-            if conversation
+            let thread = stream.recv().await.unwrap();
+            if thread
                 .turns
                 .last()
                 .is_some_and(|turn| turn.response == "Started")
             {
-                break conversation;
+                break thread;
             }
         }
     })
     .await
     .unwrap();
     let turn = active.turns[0].id;
-    conversations.cancel_turn(draft.id, turn).unwrap();
-    conversations.cancel_turn(draft.id, turn).unwrap();
-    let cancelled = settle(&conversations, draft.id).await;
-    assert_eq!(cancelled.status, ConversationStatus::SessionReady);
+    threads.cancel_turn(draft.id, turn).unwrap();
+    threads.cancel_turn(draft.id, turn).unwrap();
+    let cancelled = settle(&threads, draft.id).await;
+    assert_eq!(cancelled.status, ThreadStatus::SessionReady);
     assert_eq!(cancelled.turns[0].stop_reason.as_deref(), Some("cancelled"));
     assert_eq!(cancelled.turns[0].response, "Started");
     assert!(cancelled.interrupted);
-    conversations
-        .send_message(draft.id, "continue".into())
-        .unwrap();
-    assert!(conversations.cancel_turn(draft.id, turn).is_err());
-    let completed = settle(&conversations, draft.id).await;
+    threads.send_message(draft.id, "continue".into()).unwrap();
+    assert!(threads.cancel_turn(draft.id, turn).is_err());
+    let completed = settle(&threads, draft.id).await;
     assert_eq!(completed.remote_session_id, active.remote_session_id);
     assert_eq!(completed.turns.len(), 2);
     assert_eq!(completed.turns[1].response, "Hello world");
-    conversations.shutdown().await;
+    threads.shutdown().await;
 }
 
 #[tokio::test]
 async fn connects_a_draft_without_replacing_its_identity_or_duplicating_sessions() {
     let folder = tempfile::tempdir().unwrap();
-    let conversations = Conversations::new(vec![mock_agent()]);
-    let draft = conversations
-        .create_for_agent(folder.path(), "fixture")
-        .unwrap();
+    let threads = Threads::new(vec![mock_agent()]);
+    let draft = threads.create_for_agent(folder.path(), "fixture").unwrap();
     assert_eq!(
-        conversations.connect(draft.id).unwrap().status,
-        ConversationStatus::Connecting
+        threads.connect(draft.id).unwrap().status,
+        ThreadStatus::Connecting
     );
-    conversations.connect(draft.id).unwrap();
-    let connected = settle(&conversations, draft.id).await;
-    assert_eq!(connected.status, ConversationStatus::SessionReady);
+    threads.connect(draft.id).unwrap();
+    let connected = settle(&threads, draft.id).await;
+    assert_eq!(connected.status, ThreadStatus::SessionReady);
     assert_eq!(connected.remote_session_id.as_deref(), Some("remote-1"));
     assert_eq!(connected.id, draft.id);
-    assert_eq!(conversations.connect(draft.id).unwrap(), connected);
-    conversations.shutdown().await;
+    assert_eq!(threads.connect(draft.id).unwrap(), connected);
+    threads.shutdown().await;
 }
 
-async fn settle(
-    conversations: &Conversations,
-    id: uuid::Uuid,
-) -> atte_lib::conversation::Conversation {
+async fn settle(threads: &Threads, id: uuid::Uuid) -> atte_lib::thread::Thread {
     tokio::time::timeout(Duration::from_secs(5), async {
         loop {
-            let conversation = conversations.get(id).unwrap();
+            let thread = threads.get(id).unwrap();
             if !matches!(
-                conversation.status,
-                ConversationStatus::Connecting
-                    | ConversationStatus::Running
-                    | ConversationStatus::WaitingForApproval
-                    | ConversationStatus::Cancelling
+                thread.status,
+                ThreadStatus::Connecting
+                    | ThreadStatus::Running
+                    | ThreadStatus::WaitingForApproval
+                    | ThreadStatus::Cancelling
             ) {
-                return conversation;
+                return thread;
             }
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
@@ -927,7 +864,7 @@ async fn settle(
 
 #[tokio::test]
 async fn distinguishes_connection_failures_and_keeps_the_draft_for_explicit_retry() {
-    use atte_lib::conversation::{AuthenticationStatus, ConnectionFailure};
+    use atte_lib::thread::{AuthenticationStatus, ConnectionFailure};
     for (mode, expected) in [
         ("init-error", ConnectionFailure::InitializationFailed),
         ("wrong-version", ConnectionFailure::InitializationFailed),
@@ -942,14 +879,12 @@ async fn distinguishes_connection_failures_and_keeps_the_draft_for_explicit_retr
         if mode == "missing" {
             agent.command = folder.path().join("missing-agent");
         }
-        let conversations = Conversations::new(vec![agent]);
-        let draft = conversations
-            .create_for_agent(folder.path(), "fixture")
-            .unwrap();
+        let threads = Threads::new(vec![agent]);
+        let draft = threads.create_for_agent(folder.path(), "fixture").unwrap();
         for _ in 0..2 {
-            conversations.connect(draft.id).unwrap();
-            let failed = settle(&conversations, draft.id).await;
-            assert_eq!(failed.status, ConversationStatus::Failed, "{mode}");
+            threads.connect(draft.id).unwrap();
+            let failed = settle(&threads, draft.id).await;
+            assert_eq!(failed.status, ThreadStatus::Failed, "{mode}");
             assert_eq!(failed.failure, Some(expected.clone()), "{mode}");
             assert_eq!(failed.remote_session_id, None);
             assert_eq!(
@@ -961,7 +896,7 @@ async fn distinguishes_connection_failures_and_keeps_the_draft_for_explicit_retr
                 }
             );
         }
-        conversations.shutdown().await;
+        threads.shutdown().await;
     }
 }
 
@@ -970,16 +905,14 @@ async fn unexpected_permission_requests_are_cancelled_without_blocking_setup() {
     let folder = tempfile::tempdir().unwrap();
     let mut agent = mock_agent();
     agent.env.insert("FIXTURE_MODE".into(), "permission".into());
-    let conversations = Conversations::new(vec![agent]);
-    let draft = conversations
-        .create_for_agent(folder.path(), "fixture")
-        .unwrap();
-    conversations.connect(draft.id).unwrap();
+    let threads = Threads::new(vec![agent]);
+    let draft = threads.create_for_agent(folder.path(), "fixture").unwrap();
+    threads.connect(draft.id).unwrap();
     assert_eq!(
-        settle(&conversations, draft.id).await.status,
-        ConversationStatus::SessionReady
+        settle(&threads, draft.id).await.status,
+        ThreadStatus::SessionReady
     );
-    conversations.shutdown().await;
+    threads.shutdown().await;
 }
 
 #[tokio::test]
@@ -987,22 +920,20 @@ async fn process_exit_after_session_creation_is_observable() {
     let folder = tempfile::tempdir().unwrap();
     let mut agent = mock_agent();
     agent.env.insert("FIXTURE_MODE".into(), "exit-ready".into());
-    let conversations = Conversations::new(vec![agent]);
-    let draft = conversations
-        .create_for_agent(folder.path(), "fixture")
-        .unwrap();
-    conversations.connect(draft.id).unwrap();
+    let threads = Threads::new(vec![agent]);
+    let draft = threads.create_for_agent(folder.path(), "fixture").unwrap();
+    threads.connect(draft.id).unwrap();
     assert_eq!(
-        settle(&conversations, draft.id).await.status,
-        ConversationStatus::SessionReady
+        settle(&threads, draft.id).await.status,
+        ThreadStatus::SessionReady
     );
     tokio::time::timeout(Duration::from_secs(5), async {
         loop {
-            let conversation = conversations.get(draft.id).unwrap();
-            if conversation.status == ConversationStatus::Failed {
+            let thread = threads.get(draft.id).unwrap();
+            if thread.status == ThreadStatus::Failed {
                 assert_eq!(
-                    conversation.failure,
-                    Some(atte_lib::conversation::ConnectionFailure::ProcessExited)
+                    thread.failure,
+                    Some(atte_lib::thread::ConnectionFailure::ProcessExited)
                 );
                 break;
             }
@@ -1011,7 +942,7 @@ async fn process_exit_after_session_creation_is_observable() {
     })
     .await
     .unwrap();
-    conversations.shutdown().await;
+    threads.shutdown().await;
 }
 
 #[cfg(unix)]
@@ -1030,14 +961,12 @@ async fn shutdown_reaps_the_adapter_and_stops_its_descendants() {
         "CHILD_PID_FILE".into(),
         child_pid_file.to_string_lossy().into(),
     );
-    let conversations = Conversations::new(vec![agent]);
-    let draft = conversations
-        .create_for_agent(folder.path(), "fixture")
-        .unwrap();
-    conversations.connect(draft.id).unwrap();
+    let threads = Threads::new(vec![agent]);
+    let draft = threads.create_for_agent(folder.path(), "fixture").unwrap();
+    threads.connect(draft.id).unwrap();
     assert_eq!(
-        settle(&conversations, draft.id).await.status,
-        ConversationStatus::SessionReady
+        settle(&threads, draft.id).await.status,
+        ThreadStatus::SessionReady
     );
     let pid = Pid::from_raw(std::fs::read_to_string(pid_file).unwrap().parse().unwrap());
     let child_pid = Pid::from_raw(
@@ -1046,12 +975,12 @@ async fn shutdown_reaps_the_adapter_and_stops_its_descendants() {
             .parse()
             .unwrap(),
     );
-    conversations.shutdown().await;
+    threads.shutdown().await;
     assert_eq!(
-        conversations.get(draft.id).unwrap().status,
-        ConversationStatus::Disconnected
+        threads.get(draft.id).unwrap().status,
+        ThreadStatus::Disconnected
     );
-    assert!(conversations.connect(draft.id).is_err());
+    assert!(threads.connect(draft.id).is_err());
     tokio::time::timeout(Duration::from_secs(5), async {
         while kill(pid, None).is_ok() || kill(child_pid, None).is_ok() {
             tokio::time::sleep(Duration::from_millis(10)).await;
@@ -1073,15 +1002,15 @@ async fn shutdown_reaps_descendants_that_create_their_own_process_group() {
     agent
         .env
         .insert("CHILD_PID_FILE".into(), pid_file.to_string_lossy().into());
-    let conversations = Conversations::new(vec![agent]);
-    let draft = conversations.create(folder.path()).unwrap();
-    conversations.connect(draft.id).unwrap();
+    let threads = Threads::new(vec![agent]);
+    let draft = threads.create(folder.path()).unwrap();
+    threads.connect(draft.id).unwrap();
     assert_eq!(
-        settle(&conversations, draft.id).await.status,
-        ConversationStatus::SessionReady
+        settle(&threads, draft.id).await.status,
+        ThreadStatus::SessionReady
     );
     let pid = Pid::from_raw(std::fs::read_to_string(pid_file).unwrap().parse().unwrap());
-    conversations.shutdown().await;
+    threads.shutdown().await;
     let stopped = tokio::time::timeout(Duration::from_secs(3), async {
         while kill(pid, None).is_ok() {
             tokio::time::sleep(Duration::from_millis(10)).await;
@@ -1110,18 +1039,16 @@ async fn failed_setup_reaps_the_agent_before_retry_is_available() {
     agent
         .env
         .insert("PID_FILE".into(), pid_file.to_string_lossy().into());
-    let conversations = Conversations::new(vec![agent]);
-    let draft = conversations
-        .create_for_agent(folder.path(), "fixture")
-        .unwrap();
-    conversations.connect(draft.id).unwrap();
+    let threads = Threads::new(vec![agent]);
+    let draft = threads.create_for_agent(folder.path(), "fixture").unwrap();
+    threads.connect(draft.id).unwrap();
     assert_eq!(
-        settle(&conversations, draft.id).await.status,
-        ConversationStatus::Failed
+        settle(&threads, draft.id).await.status,
+        ThreadStatus::Failed
     );
     let pid = std::fs::read_to_string(pid_file).unwrap().parse().unwrap();
     assert!(nix::sys::signal::kill(nix::unistd::Pid::from_raw(pid), None).is_err());
-    conversations.shutdown().await;
+    threads.shutdown().await;
 }
 
 /// Opt in with ATTE_CODEX_ACP pointing at a prepared adapter executable.
@@ -1129,44 +1056,44 @@ async fn failed_setup_reaps_the_agent_before_retry_is_available() {
 #[ignore = "requires the user's prepared Codex adapter and login"]
 async fn real_codex_initializes_and_creates_a_session() {
     let folder = tempfile::tempdir().unwrap();
-    let conversations = Conversations::default();
-    let draft = conversations.create(folder.path()).unwrap();
-    conversations.connect(draft.id).unwrap();
+    let threads = Threads::default();
+    let draft = threads.create(folder.path()).unwrap();
+    threads.connect(draft.id).unwrap();
     let connected = tokio::time::timeout(Duration::from_secs(35), async {
         loop {
-            let conversation = conversations.get(draft.id).unwrap();
+            let thread = threads.get(draft.id).unwrap();
             if !matches!(
-                conversation.status,
-                ConversationStatus::Connecting | ConversationStatus::Running
+                thread.status,
+                ThreadStatus::Connecting | ThreadStatus::Running
             ) {
-                break conversation;
+                break thread;
             }
             tokio::time::sleep(Duration::from_millis(50)).await;
         }
     })
     .await
     .unwrap();
-    conversations.shutdown().await;
+    threads.shutdown().await;
     assert_eq!(
         connected.status,
-        ConversationStatus::SessionReady,
+        ThreadStatus::SessionReady,
         "{connected:?}"
     );
     assert!(connected.remote_session_id.is_some());
     assert_eq!(
         connected.authentication,
-        atte_lib::conversation::AuthenticationStatus::Unknown
+        atte_lib::thread::AuthenticationStatus::Unknown
     );
 }
 
 #[tokio::test]
-async fn rejects_unknown_agents_and_connecting_unknown_conversations() {
+async fn rejects_unknown_agents_and_connecting_unknown_threads() {
     let folder = tempfile::tempdir().unwrap();
-    let conversations = Conversations::new(vec![mock_agent()]);
-    assert!(conversations
+    let threads = Threads::new(vec![mock_agent()]);
+    assert!(threads
         .create_for_agent(folder.path(), "unprepared")
         .is_err());
-    assert!(conversations.connect(uuid::Uuid::new_v4()).is_err());
+    assert!(threads.connect(uuid::Uuid::new_v4()).is_err());
 }
 
 #[tokio::test]
@@ -1174,31 +1101,29 @@ async fn connecting_a_draft_revalidates_a_removed_working_folder() {
     let root = tempfile::tempdir().unwrap();
     let folder = root.path().join("project");
     std::fs::create_dir(&folder).unwrap();
-    let conversations = Conversations::new(vec![mock_agent()]);
-    let draft = conversations.create_for_agent(&folder, "fixture").unwrap();
+    let threads = Threads::new(vec![mock_agent()]);
+    let draft = threads.create_for_agent(&folder, "fixture").unwrap();
     std::fs::remove_dir(&folder).unwrap();
     assert!(matches!(
-        conversations.connect(draft.id),
-        Err(atte_lib::conversation::ConversationError::InvalidWorkingFolder(_))
+        threads.connect(draft.id),
+        Err(atte_lib::thread::ThreadError::InvalidWorkingFolder(_))
     ));
     assert_eq!(
-        conversations.get(draft.id).unwrap().status,
-        ConversationStatus::Disconnected
+        threads.get(draft.id).unwrap().status,
+        ThreadStatus::Disconnected
     );
 }
 
 #[tokio::test]
 async fn streams_ordered_turns_and_sends_followups_in_the_same_session() {
     let folder = tempfile::tempdir().unwrap();
-    let conversations = Conversations::new(vec![mock_agent()]);
-    let draft = conversations.create(folder.path()).unwrap();
-    conversations.connect(draft.id).unwrap();
-    settle(&conversations, draft.id).await;
-    let mut stream = subscribe(&conversations, draft.id);
+    let threads = Threads::new(vec![mock_agent()]);
+    let draft = threads.create(folder.path()).unwrap();
+    threads.connect(draft.id).unwrap();
+    settle(&threads, draft.id).await;
+    let mut stream = subscribe(&threads, draft.id);
     let initial = stream.recv().await.unwrap();
-    conversations
-        .send_message(draft.id, "hello".into())
-        .unwrap();
+    threads.send_message(draft.id, "hello".into()).unwrap();
     let mut revision = initial.revision;
     let mut texts = Vec::new();
     loop {
@@ -1209,20 +1134,18 @@ async fn streams_ordered_turns_and_sends_followups_in_the_same_session() {
         assert_eq!(next.revision, revision + 1);
         revision = next.revision;
         texts.push(next.turns[0].response.clone());
-        if next.status == ConversationStatus::SessionReady {
+        if next.status == ThreadStatus::SessionReady {
             break;
         }
     }
     assert_eq!(texts, ["", "Hello", "Hello world", "Hello world"]);
-    conversations
-        .send_message(draft.id, "again".into())
-        .unwrap();
+    threads.send_message(draft.id, "again".into()).unwrap();
     loop {
         let next = tokio::time::timeout(Duration::from_secs(5), stream.recv())
             .await
             .unwrap()
             .unwrap();
-        if next.status == ConversationStatus::SessionReady {
+        if next.status == ThreadStatus::SessionReady {
             assert_eq!(next.remote_session_id.as_deref(), Some("remote-1"));
             assert_eq!(next.turns.len(), 2);
             assert_eq!(next.turns[1].response, "Hello world");
@@ -1230,7 +1153,7 @@ async fn streams_ordered_turns_and_sends_followups_in_the_same_session() {
             break;
         }
     }
-    conversations.shutdown().await;
+    threads.shutdown().await;
 }
 
 #[tokio::test]
@@ -1241,15 +1164,13 @@ async fn resubscription_is_coherent_and_detaching_does_not_stop_a_turn() {
     agent
         .env
         .insert("PROMPT_GATE".into(), gate.to_string_lossy().into());
-    let conversations = Conversations::new(vec![agent]);
-    let draft = conversations.create(folder.path()).unwrap();
-    conversations.connect(draft.id).unwrap();
-    settle(&conversations, draft.id).await;
-    assert!(conversations.send_message(draft.id, "  ".into()).is_err());
-    conversations
-        .send_message(draft.id, "hello".into())
-        .unwrap();
-    let mut stream = subscribe(&conversations, draft.id);
+    let threads = Threads::new(vec![agent]);
+    let draft = threads.create(folder.path()).unwrap();
+    threads.connect(draft.id).unwrap();
+    settle(&threads, draft.id).await;
+    assert!(threads.send_message(draft.id, "  ".into()).is_err());
+    threads.send_message(draft.id, "hello".into()).unwrap();
+    let mut stream = subscribe(&threads, draft.id);
     let first = tokio::time::timeout(Duration::from_secs(5), async {
         loop {
             let next = stream.recv().await.unwrap();
@@ -1261,26 +1182,26 @@ async fn resubscription_is_coherent_and_detaching_does_not_stop_a_turn() {
     .await
     .unwrap();
     drop(stream);
-    let mut resumed = subscribe(&conversations, draft.id);
+    let mut resumed = subscribe(&threads, draft.id);
     assert_eq!(resumed.recv().await.unwrap(), first);
     drop(resumed);
     std::fs::write(gate, "continue").unwrap();
     let completed = tokio::time::timeout(Duration::from_secs(5), async {
         loop {
-            let conversation = conversations.get(draft.id).unwrap();
-            if conversation.status == ConversationStatus::SessionReady {
-                break conversation;
+            let thread = threads.get(draft.id).unwrap();
+            if thread.status == ThreadStatus::SessionReady {
+                break thread;
             }
             tokio::task::yield_now().await;
         }
     })
     .await
     .unwrap();
-    let mut resumed = subscribe(&conversations, draft.id);
+    let mut resumed = subscribe(&threads, draft.id);
     assert_eq!(resumed.recv().await.unwrap(), completed);
     assert_eq!(completed.turns[0].response, "Hello world");
     assert_eq!(completed.revision, first.revision + 2);
-    conversations.shutdown().await;
+    threads.shutdown().await;
 }
 
 #[tokio::test]
@@ -1300,25 +1221,23 @@ async fn unsuccessful_turns_preserve_the_queue_without_dispatching() {
         agent
             .env
             .insert("PROMPT_GATE".into(), gate.to_string_lossy().into());
-        let conversations = Conversations::new(vec![agent]);
-        let draft = conversations.create(folder.path()).unwrap();
-        conversations.connect(draft.id).unwrap();
-        settle(&conversations, draft.id).await;
-        conversations
-            .send_message(draft.id, "first".into())
-            .unwrap();
-        conversations.send_message(draft.id, "keep".into()).unwrap();
+        let threads = Threads::new(vec![agent]);
+        let draft = threads.create(folder.path()).unwrap();
+        threads.connect(draft.id).unwrap();
+        settle(&threads, draft.id).await;
+        threads.send_message(draft.id, "first".into()).unwrap();
+        threads.send_message(draft.id, "keep".into()).unwrap();
         std::fs::write(gate, "continue").unwrap();
-        let finished = settle(&conversations, draft.id).await;
+        let finished = settle(&threads, draft.id).await;
         assert_eq!(finished.turns.len(), 1, "{mode}");
         assert_eq!(finished.queued_messages[0].text, "keep", "{mode}");
-        conversations.shutdown().await;
+        threads.shutdown().await;
     }
 }
 
 #[tokio::test]
 async fn prompt_failures_preserve_partial_output_and_reject_stale_updates() {
-    use atte_lib::conversation::ConnectionFailure;
+    use atte_lib::thread::ConnectionFailure;
     for (mode, failure) in [
         ("prompt-auth", ConnectionFailure::AuthenticationRequired),
         (
@@ -1339,18 +1258,16 @@ async fn prompt_failures_preserve_partial_output_and_reject_stale_updates() {
                 .into(),
         );
         agent.env.insert("FIXTURE_MODE".into(), mode.into());
-        let conversations = Conversations::new(vec![agent]);
-        let draft = conversations.create(folder.path()).unwrap();
-        conversations.connect(draft.id).unwrap();
-        settle(&conversations, draft.id).await;
-        let mut stream = subscribe(&conversations, draft.id);
-        conversations
-            .send_message(draft.id, "hello".into())
-            .unwrap();
+        let threads = Threads::new(vec![agent]);
+        let draft = threads.create(folder.path()).unwrap();
+        threads.connect(draft.id).unwrap();
+        settle(&threads, draft.id).await;
+        let mut stream = subscribe(&threads, draft.id);
+        threads.send_message(draft.id, "hello".into()).unwrap();
         let failed = tokio::time::timeout(Duration::from_secs(5), async {
             loop {
                 let next = stream.recv().await.unwrap();
-                if next.status == ConversationStatus::Failed {
+                if next.status == ThreadStatus::Failed {
                     break next;
                 }
             }
@@ -1359,14 +1276,12 @@ async fn prompt_failures_preserve_partial_output_and_reject_stale_updates() {
         .unwrap();
         assert_eq!(failed.failure, Some(failure), "{mode}");
         assert_eq!(failed.turns[0].response, "Hello world");
-        assert!(conversations
-            .send_message(draft.id, "retry".into())
-            .is_err());
-        conversations.connect(draft.id).unwrap();
-        let reconnected = settle(&conversations, draft.id).await;
-        assert_eq!(reconnected.status, ConversationStatus::SessionReady);
+        assert!(threads.send_message(draft.id, "retry".into()).is_err());
+        threads.connect(draft.id).unwrap();
+        let reconnected = settle(&threads, draft.id).await;
+        assert_eq!(reconnected.status, ThreadStatus::SessionReady);
         assert_eq!(reconnected.turns[0].response, "Hello world");
-        conversations.shutdown().await;
+        threads.shutdown().await;
     }
 }
 
@@ -1380,18 +1295,16 @@ async fn permission_preserves_agent_choices_and_answers_exactly_once() {
         let folder = tempfile::tempdir().unwrap();
         let mut agent = mock_agent();
         agent.env.insert("FIXTURE_MODE".into(), mode.into());
-        let conversations = Conversations::new(vec![agent]);
-        let draft = conversations.create(folder.path()).unwrap();
-        conversations.connect(draft.id).unwrap();
-        settle(&conversations, draft.id).await;
-        let mut stream = subscribe(&conversations, draft.id);
-        conversations
-            .send_message(draft.id, "hello".into())
-            .unwrap();
+        let threads = Threads::new(vec![agent]);
+        let draft = threads.create(folder.path()).unwrap();
+        threads.connect(draft.id).unwrap();
+        settle(&threads, draft.id).await;
+        let mut stream = subscribe(&threads, draft.id);
+        threads.send_message(draft.id, "hello".into()).unwrap();
         let waiting = tokio::time::timeout(Duration::from_secs(5), async {
             loop {
                 let next = stream.recv().await.unwrap();
-                if next.status == ConversationStatus::WaitingForApproval {
+                if next.status == ThreadStatus::WaitingForApproval {
                     break next;
                 }
             }
@@ -1412,28 +1325,28 @@ async fn permission_preserves_agent_choices_and_answers_exactly_once() {
                 ("arbitrary-allow", "Write once")
             ]
         );
-        assert!(conversations
+        assert!(threads
             .answer_permission(draft.id, permission.id, "unknown".into())
             .is_err());
-        conversations
+        threads
             .answer_permission(draft.id, permission.id, option.into())
             .unwrap();
-        assert!(conversations
+        assert!(threads
             .answer_permission(draft.id, permission.id, option.into())
             .is_err());
-        let completed = settle(&conversations, draft.id).await;
+        let completed = settle(&threads, draft.id).await;
         assert!(completed.permissions.is_empty());
         assert_eq!(
             completed.turns[0].response,
             format!("selected:{option}Hello world")
         );
-        conversations.shutdown().await;
+        threads.shutdown().await;
     }
 }
 
 #[tokio::test]
 async fn process_exit_during_approval_clears_permissions_and_preserves_the_queue() {
-    use atte_lib::conversation::ConnectionFailure;
+    use atte_lib::thread::ConnectionFailure;
     use nix::{
         sys::signal::{kill, Signal},
         unistd::Pid,
@@ -1447,31 +1360,31 @@ async fn process_exit_during_approval_clears_permissions_and_preserves_the_queue
     agent
         .env
         .insert("PID_FILE".into(), pid_file.to_string_lossy().into());
-    let conversations = Conversations::new(vec![agent]);
-    let draft = conversations.create(folder.path()).unwrap();
-    conversations.connect(draft.id).unwrap();
-    settle(&conversations, draft.id).await;
-    let mut stream = subscribe(&conversations, draft.id);
-    conversations
+    let threads = Threads::new(vec![agent]);
+    let draft = threads.create(folder.path()).unwrap();
+    threads.connect(draft.id).unwrap();
+    settle(&threads, draft.id).await;
+    let mut stream = subscribe(&threads, draft.id);
+    threads
         .send_message(draft.id, "ask permission".into())
         .unwrap();
     let waiting = tokio::time::timeout(Duration::from_secs(5), async {
         loop {
             let next = stream.recv().await.unwrap();
-            if next.status == ConversationStatus::WaitingForApproval {
+            if next.status == ThreadStatus::WaitingForApproval {
                 break next;
             }
         }
     })
     .await
     .unwrap();
-    conversations
+    threads
         .send_message(draft.id, "keep for later".into())
         .unwrap();
     let pid = Pid::from_raw(std::fs::read_to_string(pid_file).unwrap().parse().unwrap());
     kill(pid, Signal::SIGKILL).unwrap();
-    let failed = settle(&conversations, draft.id).await;
-    assert_eq!(failed.status, ConversationStatus::Failed);
+    let failed = settle(&threads, draft.id).await;
+    assert_eq!(failed.status, ThreadStatus::Failed);
     assert_eq!(failed.failure, Some(ConnectionFailure::ProcessExited));
     assert!(failed.interrupted);
     assert!(failed.permissions.is_empty());
@@ -1479,14 +1392,14 @@ async fn process_exit_during_approval_clears_permissions_and_preserves_the_queue
     assert_eq!(failed.turns, waiting.turns);
     assert_eq!(failed.queued_messages.len(), 1);
     assert_eq!(failed.queued_messages[0].text, "keep for later");
-    assert!(conversations
+    assert!(threads
         .answer_permission(
             draft.id,
             waiting.permissions[0].id,
             "arbitrary-allow".into()
         )
         .is_err());
-    conversations.shutdown().await;
+    threads.shutdown().await;
 }
 
 #[tokio::test]
@@ -1496,75 +1409,71 @@ async fn cancelling_permission_resolves_pending_and_late_requests_without_execut
     agent
         .env
         .insert("FIXTURE_MODE".into(), "permission-cancel".into());
-    let conversations = Conversations::new(vec![agent]);
-    let draft = conversations.create(folder.path()).unwrap();
-    conversations.connect(draft.id).unwrap();
-    settle(&conversations, draft.id).await;
-    let mut stream = subscribe(&conversations, draft.id);
-    conversations
+    let threads = Threads::new(vec![agent]);
+    let draft = threads.create(folder.path()).unwrap();
+    threads.connect(draft.id).unwrap();
+    settle(&threads, draft.id).await;
+    let mut stream = subscribe(&threads, draft.id);
+    threads
         .send_message(draft.id, "ask permission".into())
         .unwrap();
     let waiting = tokio::time::timeout(Duration::from_secs(5), async {
         loop {
             let next = stream.recv().await.unwrap();
-            if next.status == ConversationStatus::WaitingForApproval {
+            if next.status == ThreadStatus::WaitingForApproval {
                 break next;
             }
         }
     })
     .await
     .unwrap();
-    conversations
-        .cancel_turn(draft.id, waiting.turns[0].id)
-        .unwrap();
-    assert!(conversations
+    threads.cancel_turn(draft.id, waiting.turns[0].id).unwrap();
+    assert!(threads
         .answer_permission(
             draft.id,
             waiting.permissions[0].id,
             "arbitrary-allow".into()
         )
         .is_err());
-    let cancelled = settle(&conversations, draft.id).await;
-    assert_eq!(cancelled.status, ConversationStatus::SessionReady);
+    let cancelled = settle(&threads, draft.id).await;
+    assert_eq!(cancelled.status, ThreadStatus::SessionReady);
     assert!(cancelled.permissions.is_empty());
     assert_eq!(cancelled.turns[0].stop_reason.as_deref(), Some("cancelled"));
     assert_eq!(cancelled.turns[0].response, "");
-    conversations
-        .send_message(draft.id, "follow up".into())
-        .unwrap();
-    let completed = settle(&conversations, draft.id).await;
+    threads.send_message(draft.id, "follow up".into()).unwrap();
+    let completed = settle(&threads, draft.id).await;
     assert_eq!(completed.turns[1].response, "Hello world");
     assert_eq!(completed.remote_session_id, waiting.remote_session_id);
-    conversations.shutdown().await;
+    threads.shutdown().await;
 }
 
 #[tokio::test]
 #[ignore = "requires the user's prepared Codex adapter and login"]
 async fn real_codex_streams_and_continues_without_file_changes() {
     let folder = tempfile::tempdir().unwrap();
-    let conversations = Conversations::default();
-    let draft = conversations.create(folder.path()).unwrap();
+    let threads = Threads::default();
+    let draft = threads.create(folder.path()).unwrap();
     let result = tokio::time::timeout(Duration::from_secs(120), async {
-        let mut stream = subscribe(&conversations, draft.id);
-        conversations.connect(draft.id).unwrap();
+        let mut stream = subscribe(&threads, draft.id);
+        threads.connect(draft.id).unwrap();
         loop {
             let next = stream.recv().await.unwrap();
-            if next.status == ConversationStatus::Failed { return Err(format!("{next:?}")); }
-            if next.status == ConversationStatus::SessionReady { break; }
+            if next.status == ThreadStatus::Failed { return Err(format!("{next:?}")); }
+            if next.status == ThreadStatus::SessionReady { break; }
         }
-        let session = conversations.get(draft.id).unwrap().remote_session_id;
+        let session = threads.get(draft.id).unwrap().remote_session_id;
         for message in [
-            "Do not use tools or read or modify any files. Remember the token cobalt-73 for this conversation. Reply with exactly: Remembered cobalt-73.",
+            "Do not use tools or read or modify any files. Remember the token cobalt-73 for this thread. Reply with exactly: Remembered cobalt-73.",
             "Do not use tools or read or modify any files. What token did I ask you to remember? Reply with the token only.",
         ] {
-            conversations.send_message(draft.id, message.into()).unwrap();
+            threads.send_message(draft.id, message.into()).unwrap();
             let mut streamed = 0;
             loop {
                 let next = stream.recv().await.unwrap();
-                if next.status == ConversationStatus::Failed { return Err(format!("{next:?}")); }
+                if next.status == ThreadStatus::Failed { return Err(format!("{next:?}")); }
                 if let Some(turn) = next.turns.last() {
-                    if next.status == ConversationStatus::Running && !turn.response.is_empty() { streamed += 1; }
-                    if next.status == ConversationStatus::SessionReady {
+                    if next.status == ThreadStatus::Running && !turn.response.is_empty() { streamed += 1; }
+                    if next.status == ThreadStatus::SessionReady {
                         assert_eq!(next.remote_session_id, session);
                         assert_eq!(turn.stop_reason.as_deref(), Some("end_turn"));
                         assert!(turn.response.contains("cobalt-73"), "{}", turn.response);
@@ -1578,54 +1487,52 @@ async fn real_codex_streams_and_continues_without_file_changes() {
         assert_eq!(std::fs::read_dir(folder.path()).unwrap().count(), 0);
         Ok::<_, String>(())
     }).await;
-    conversations.shutdown().await;
+    threads.shutdown().await;
     result.unwrap().unwrap();
 }
 
 struct TranscriptSubscription {
-    receiver: tokio::sync::mpsc::UnboundedReceiver<atte_lib::conversation::ConversationUpdate>,
-    conversation: Option<atte_lib::conversation::Conversation>,
+    receiver: tokio::sync::mpsc::UnboundedReceiver<atte_lib::thread::ThreadUpdate>,
+    thread: Option<atte_lib::thread::Thread>,
 }
 
-fn subscribe(conversations: &Conversations, id: uuid::Uuid) -> TranscriptSubscription {
+fn subscribe(threads: &Threads, id: uuid::Uuid) -> TranscriptSubscription {
     TranscriptSubscription {
-        receiver: conversations.subscribe(id).unwrap(),
-        conversation: None,
+        receiver: threads.subscribe(id).unwrap(),
+        thread: None,
     }
 }
 
 impl TranscriptSubscription {
-    async fn recv(&mut self) -> Option<atte_lib::conversation::Conversation> {
-        use atte_lib::conversation::ConversationUpdate;
+    async fn recv(&mut self) -> Option<atte_lib::thread::Thread> {
+        use atte_lib::thread::ThreadUpdate;
         match self.receiver.recv().await? {
-            ConversationUpdate::Conversation { conversation } => {
-                self.conversation = Some(*conversation)
-            }
-            ConversationUpdate::TextDelta {
-                conversation_id,
+            ThreadUpdate::Thread { thread } => self.thread = Some(*thread),
+            ThreadUpdate::TextDelta {
+                thread_id,
                 revision,
                 turn_id,
                 text,
             } => {
-                let conversation = self
-                    .conversation
+                let thread = self
+                    .thread
                     .as_mut()
-                    .expect("initial conversation precedes deltas");
-                assert_eq!(conversation_id, conversation.id);
-                assert_eq!(revision, conversation.revision + 1);
-                let turn = conversation.turns.last_mut().unwrap();
+                    .expect("initial thread precedes deltas");
+                assert_eq!(thread_id, thread.id);
+                assert_eq!(revision, thread.revision + 1);
+                let turn = thread.turns.last_mut().unwrap();
                 assert_eq!(turn_id, turn.id);
                 turn.response.push_str(&text);
-                conversation.revision = revision;
+                thread.revision = revision;
             }
         }
-        self.conversation.clone()
+        self.thread.clone()
     }
 }
 
 #[tokio::test]
 async fn preserves_authentication_error_when_process_exit_races_with_buffered_output() {
-    use atte_lib::conversation::{AuthenticationStatus, ConnectionFailure};
+    use atte_lib::thread::{AuthenticationStatus, ConnectionFailure};
     let folder = tempfile::tempdir().unwrap();
     let gate = folder.path().join("continue");
     let mut agent = mock_agent();
@@ -1635,14 +1542,12 @@ async fn preserves_authentication_error_when_process_exit_races_with_buffered_ou
     agent
         .env
         .insert("PROMPT_GATE".into(), gate.to_string_lossy().into());
-    let conversations = Conversations::new(vec![agent]);
-    let draft = conversations.create(folder.path()).unwrap();
-    conversations.connect(draft.id).unwrap();
-    settle(&conversations, draft.id).await;
-    let mut stream = subscribe(&conversations, draft.id);
-    conversations
-        .send_message(draft.id, "hello".into())
-        .unwrap();
+    let threads = Threads::new(vec![agent]);
+    let draft = threads.create(folder.path()).unwrap();
+    threads.connect(draft.id).unwrap();
+    settle(&threads, draft.id).await;
+    let mut stream = subscribe(&threads, draft.id);
+    threads.send_message(draft.id, "hello".into()).unwrap();
     tokio::time::timeout(Duration::from_secs(5), async {
         loop {
             let next = stream.recv().await.unwrap();
@@ -1664,14 +1569,14 @@ async fn preserves_authentication_error_when_process_exit_races_with_buffered_ou
     let failed = tokio::time::timeout(Duration::from_secs(5), async {
         loop {
             let next = stream.recv().await.unwrap();
-            if next.status == ConversationStatus::Failed {
+            if next.status == ThreadStatus::Failed {
                 break next;
             }
         }
     })
     .await
     .unwrap();
-    conversations.shutdown().await;
+    threads.shutdown().await;
     assert_eq!(
         failed.failure,
         Some(ConnectionFailure::AuthenticationRequired)
@@ -1683,30 +1588,28 @@ async fn preserves_authentication_error_when_process_exit_races_with_buffered_ou
 #[tokio::test]
 async fn installing_an_agent_preserves_the_existing_connection_and_subscription() {
     let folder = tempfile::tempdir().unwrap();
-    let conversations = Conversations::new(vec![mock_agent()]);
-    let draft = conversations.create(folder.path()).unwrap();
-    conversations.connect(draft.id).unwrap();
-    settle(&conversations, draft.id).await;
-    let mut updates = conversations.subscribe(draft.id).unwrap();
+    let threads = Threads::new(vec![mock_agent()]);
+    let draft = threads.create(folder.path()).unwrap();
+    threads.connect(draft.id).unwrap();
+    settle(&threads, draft.id).await;
+    let mut updates = threads.subscribe(draft.id).unwrap();
     updates.recv().await.unwrap();
     let mut installed = mock_agent();
     installed.id = "installed".into();
-    conversations.register_agent(installed).unwrap();
-    assert_eq!(conversations.prepared_agents().len(), 2);
-    conversations
-        .send_message(draft.id, "hello".into())
-        .unwrap();
-    let ready = settle(&conversations, draft.id).await;
+    threads.register_agent(installed).unwrap();
+    assert_eq!(threads.prepared_agents().len(), 2);
+    threads.send_message(draft.id, "hello".into()).unwrap();
+    let ready = settle(&threads, draft.id).await;
     assert_eq!(ready.agent_id, "fixture");
     assert_eq!(ready.turns[0].response, "Hello world");
     assert!(updates.recv().await.is_some());
-    conversations.shutdown().await;
+    threads.shutdown().await;
 }
 
 #[tokio::test]
-async fn all_targets_authenticate_then_retry_the_same_conversation_after_expiry() {
+async fn all_targets_authenticate_then_retry_the_same_thread_after_expiry() {
     use atte_lib::agent_management::authentication::inspect;
-    use atte_lib::conversation::{AuthenticationStatus, ConnectionFailure};
+    use atte_lib::thread::{AuthenticationStatus, ConnectionFailure};
     for id in ["claude", "codex", "antigravity"] {
         let root = tempfile::tempdir().unwrap();
         let login = root.path().join("login");
@@ -1732,11 +1635,11 @@ async fn all_targets_authenticate_then_retry_the_same_conversation_after_expiry(
         assert!(inspect(&agent, root.path(), Some("fixture-denied"))
             .await
             .is_err());
-        let conversations = Conversations::new(vec![agent.clone()]);
-        let draft = conversations.create(root.path()).unwrap();
-        conversations.connect(draft.id).unwrap();
+        let threads = Threads::new(vec![agent.clone()]);
+        let draft = threads.create(root.path()).unwrap();
+        threads.connect(draft.id).unwrap();
         assert_eq!(
-            settle(&conversations, draft.id).await.failure,
+            settle(&threads, draft.id).await.failure,
             Some(ConnectionFailure::AuthenticationRequired)
         );
         assert!(
@@ -1745,65 +1648,59 @@ async fn all_targets_authenticate_then_retry_the_same_conversation_after_expiry(
                 .unwrap()
                 .authenticated
         );
-        conversations.connect(draft.id).unwrap();
-        settle(&conversations, draft.id).await;
-        conversations
-            .send_message(draft.id, "hello".into())
-            .unwrap();
+        threads.connect(draft.id).unwrap();
+        settle(&threads, draft.id).await;
+        threads.send_message(draft.id, "hello".into()).unwrap();
         assert_eq!(
-            settle(&conversations, draft.id).await.authentication,
+            settle(&threads, draft.id).await.authentication,
             AuthenticationStatus::Authenticated
         );
         std::fs::remove_file(&login).unwrap();
-        conversations
-            .send_message(draft.id, "expired".into())
-            .unwrap();
+        threads.send_message(draft.id, "expired".into()).unwrap();
         assert_eq!(
-            settle(&conversations, draft.id).await.authentication,
+            settle(&threads, draft.id).await.authentication,
             AuthenticationStatus::Required
         );
         inspect(&agent, root.path(), Some("fixture-login"))
             .await
             .unwrap();
-        conversations.connect(draft.id).unwrap();
-        settle(&conversations, draft.id).await;
-        conversations
-            .send_message(draft.id, "retry".into())
-            .unwrap();
-        let ready = settle(&conversations, draft.id).await;
+        threads.connect(draft.id).unwrap();
+        settle(&threads, draft.id).await;
+        threads.send_message(draft.id, "retry".into()).unwrap();
+        let ready = settle(&threads, draft.id).await;
         assert_eq!(ready.id, draft.id);
         assert_eq!(ready.agent_id, id);
         assert_eq!(ready.turns.len(), 3);
-        conversations.shutdown().await;
+        threads.shutdown().await;
     }
 }
 
 #[tokio::test]
 async fn replacing_a_definition_preserves_live_connections_and_applies_to_new_connections() {
     let folder = tempfile::tempdir().unwrap();
-    let conversations = Conversations::new(vec![mock_agent()]);
-    let original = conversations.create(folder.path()).unwrap();
-    conversations.connect(original.id).unwrap();
-    settle(&conversations, original.id).await;
+    let threads = Threads::new(vec![mock_agent()]);
+    let original = threads.create(folder.path()).unwrap();
+    threads.connect(original.id).unwrap();
+    settle(&threads, original.id).await;
     let mut replacement = mock_agent();
     replacement.command = folder.path().join("missing-agent");
-    conversations.register_agent(replacement).unwrap();
-    conversations.connect(original.id).unwrap();
+    threads.register_agent(replacement).unwrap();
+    threads.connect(original.id).unwrap();
     assert_eq!(
-        settle(&conversations, original.id).await.status,
-        ConversationStatus::SessionReady
+        settle(&threads, original.id).await.status,
+        ThreadStatus::SessionReady
     );
-    let new = conversations.create(folder.path()).unwrap();
-    conversations.connect(new.id).unwrap();
+    let new = threads.create(folder.path()).unwrap();
+    threads.connect(new.id).unwrap();
     assert_eq!(
-        settle(&conversations, new.id).await.failure,
-        Some(atte_lib::conversation::ConnectionFailure::ExecutableNotFound)
+        settle(&threads, new.id).await.failure,
+        Some(atte_lib::thread::ConnectionFailure::ExecutableNotFound)
     );
-    conversations.shutdown().await;
+    threads.shutdown().await;
 }
 
 #[tokio::test]
-async fn management_observes_expiry_and_login_without_restarting_the_failed_conversation() {
+async fn management_observes_expiry_and_login_without_restarting_the_failed_thread() {
     use atte_lib::{
         agent_management::AgentManagement,
         storage::{Installation, Store},
@@ -1824,40 +1721,35 @@ async fn management_observes_expiry_and_login_without_restarting_the_failed_conv
         })
         .unwrap();
     let management = AgentManagement::open(root.path()).unwrap();
-    let conversations = Conversations::new(vec![]);
-    management.restore(&conversations).unwrap();
+    let threads = Threads::new(vec![]);
+    management.restore(&threads).unwrap();
     management
-        .authenticate("codex", Some("fixture-login"), &conversations)
+        .authenticate("codex", Some("fixture-login"), &threads)
         .await
         .unwrap();
     assert!(
-        management.catalog(&conversations).unwrap()[0]
+        management.catalog(&threads).unwrap()[0]
             .authentication
             .authenticated
     );
-    let draft = conversations.create(root.path()).unwrap();
-    conversations.connect(draft.id).unwrap();
-    settle(&conversations, draft.id).await;
+    let draft = threads.create(root.path()).unwrap();
+    threads.connect(draft.id).unwrap();
+    settle(&threads, draft.id).await;
     std::fs::remove_file(login).unwrap();
-    conversations
-        .send_message(draft.id, "expired".into())
-        .unwrap();
-    settle(&conversations, draft.id).await;
-    let state = &management.catalog(&conversations).unwrap()[0].authentication;
+    threads.send_message(draft.id, "expired".into()).unwrap();
+    settle(&threads, draft.id).await;
+    let state = &management.catalog(&threads).unwrap()[0].authentication;
     assert!(state.required);
     assert!(!state.authenticated);
     management
-        .authenticate("codex", Some("fixture-login"), &conversations)
+        .authenticate("codex", Some("fixture-login"), &threads)
         .await
         .unwrap();
-    let state = &management.catalog(&conversations).unwrap()[0].authentication;
+    let state = &management.catalog(&threads).unwrap()[0].authentication;
     assert!(!state.required);
     assert!(state.authenticated);
-    assert_eq!(
-        conversations.get(draft.id).unwrap().status,
-        ConversationStatus::Failed
-    );
-    conversations.shutdown().await;
+    assert_eq!(threads.get(draft.id).unwrap().status, ThreadStatus::Failed);
+    threads.shutdown().await;
 }
 
 #[tokio::test]
@@ -1898,38 +1790,34 @@ async fn every_successful_prompt_refreshes_shared_authentication_evidence() {
         })
         .unwrap();
     let management = AgentManagement::open(root.path()).unwrap();
-    let conversations = Conversations::new(vec![]);
-    management.restore(&conversations).unwrap();
+    let threads = Threads::new(vec![]);
+    management.restore(&threads).unwrap();
     management
-        .authenticate("codex", Some("fixture-login"), &conversations)
+        .authenticate("codex", Some("fixture-login"), &threads)
         .await
         .unwrap();
-    let draft = conversations.create(root.path()).unwrap();
-    conversations.connect(draft.id).unwrap();
-    settle(&conversations, draft.id).await;
-    conversations
-        .send_message(draft.id, "first".into())
-        .unwrap();
-    settle(&conversations, draft.id).await;
+    let draft = threads.create(root.path()).unwrap();
+    threads.connect(draft.id).unwrap();
+    settle(&threads, draft.id).await;
+    threads.send_message(draft.id, "first".into()).unwrap();
+    settle(&threads, draft.id).await;
     assert!(management
-        .authenticate("codex", Some("fixture-denied"), &conversations)
+        .authenticate("codex", Some("fixture-denied"), &threads)
         .await
         .is_err());
     assert!(
-        !management.catalog(&conversations).unwrap()[0]
+        !management.catalog(&threads).unwrap()[0]
             .authentication
             .authenticated
     );
-    conversations
-        .send_message(draft.id, "second".into())
-        .unwrap();
-    settle(&conversations, draft.id).await;
+    threads.send_message(draft.id, "second".into()).unwrap();
+    settle(&threads, draft.id).await;
     assert!(
-        management.catalog(&conversations).unwrap()[0]
+        management.catalog(&threads).unwrap()[0]
             .authentication
             .authenticated
     );
-    conversations.shutdown().await;
+    threads.shutdown().await;
 }
 
 #[tokio::test]
@@ -1952,7 +1840,7 @@ async fn unknown_authentication_type_is_not_treated_as_agent_login() {
 #[cfg(unix)]
 #[tokio::test]
 async fn removing_one_agent_stops_its_running_turn_and_preserves_other_agents() {
-    use atte_lib::conversation::ConnectionFailure;
+    use atte_lib::thread::ConnectionFailure;
     use nix::{sys::signal::kill, unistd::Pid};
     let folder = tempfile::tempdir().unwrap();
     let mut agent = mock_agent();
@@ -1966,51 +1854,47 @@ async fn removing_one_agent_stops_its_running_turn_and_preserves_other_agents() 
         .insert("PROMPT_GATE".into(), gate.to_string_lossy().into());
     let mut other = mock_agent();
     other.id = "other".into();
-    let conversations = Conversations::new(vec![agent, other]);
-    let draft = conversations
-        .create_for_agent(folder.path(), "fixture")
-        .unwrap();
-    let other = conversations
-        .create_for_agent(folder.path(), "other")
-        .unwrap();
-    conversations.connect(draft.id).unwrap();
-    conversations.connect(other.id).unwrap();
+    let threads = Threads::new(vec![agent, other]);
+    let draft = threads.create_for_agent(folder.path(), "fixture").unwrap();
+    let other = threads.create_for_agent(folder.path(), "other").unwrap();
+    threads.connect(draft.id).unwrap();
+    threads.connect(other.id).unwrap();
     assert_eq!(
-        settle(&conversations, draft.id).await.status,
-        ConversationStatus::SessionReady
+        settle(&threads, draft.id).await.status,
+        ThreadStatus::SessionReady
     );
     assert_eq!(
-        settle(&conversations, other.id).await.status,
-        ConversationStatus::SessionReady
+        settle(&threads, other.id).await.status,
+        ThreadStatus::SessionReady
     );
-    conversations
+    threads
         .send_message(draft.id, "blocked response".into())
         .unwrap();
     tokio::time::timeout(Duration::from_secs(5), async {
-        while conversations.get(draft.id).unwrap().turns[0].response != "Hello" {
+        while threads.get(draft.id).unwrap().turns[0].response != "Hello" {
             tokio::time::sleep(Duration::from_millis(5)).await;
         }
     })
     .await
     .unwrap();
     let pid = Pid::from_raw(std::fs::read_to_string(pid_file).unwrap().parse().unwrap());
-    conversations.unregister_agent("fixture").await.unwrap();
+    threads.unregister_agent("fixture").await.unwrap();
     assert!(kill(pid, None).is_err());
-    let removed = conversations.get(draft.id).unwrap();
+    let removed = threads.get(draft.id).unwrap();
     assert_eq!(removed.failure, Some(ConnectionFailure::AgentRemoved));
     assert_eq!(removed.turns[0].response, "Hello");
     assert_eq!(removed.turns[0].stop_reason.as_deref(), Some("cancelled"));
-    assert!(conversations.connect(draft.id).is_err());
-    assert_eq!(conversations.prepared_agents()[0].id, "other");
-    conversations
+    assert!(threads.connect(draft.id).is_err());
+    assert_eq!(threads.prepared_agents()[0].id, "other");
+    threads
         .send_message(other.id, "still connected".into())
         .unwrap();
     assert_eq!(
-        settle(&conversations, other.id).await.turns[0].response,
+        settle(&threads, other.id).await.turns[0].response,
         "Hello world"
     );
-    assert_eq!(conversations.get(draft.id).unwrap(), removed);
-    conversations.shutdown().await;
+    assert_eq!(threads.get(draft.id).unwrap(), removed);
+    threads.shutdown().await;
 }
 
 #[cfg(unix)]
@@ -2023,18 +1907,16 @@ async fn shutdown_waits_for_processes_being_removed() {
     agent
         .env
         .insert("PID_FILE".into(), pid_file.to_string_lossy().into());
-    let conversations = Conversations::new(vec![agent]);
-    let draft = conversations
-        .create_for_agent(folder.path(), "fixture")
-        .unwrap();
-    conversations.connect(draft.id).unwrap();
+    let threads = Threads::new(vec![agent]);
+    let draft = threads.create_for_agent(folder.path(), "fixture").unwrap();
+    threads.connect(draft.id).unwrap();
     assert_eq!(
-        settle(&conversations, draft.id).await.status,
-        ConversationStatus::SessionReady
+        settle(&threads, draft.id).await.status,
+        ThreadStatus::SessionReady
     );
     let pid = Pid::from_raw(std::fs::read_to_string(pid_file).unwrap().parse().unwrap());
-    let (removed, ()) = tokio::join!(conversations.unregister_agent("fixture"), async {
-        conversations.shutdown().await;
+    let (removed, ()) = tokio::join!(threads.unregister_agent("fixture"), async {
+        threads.shutdown().await;
         assert!(
             kill(pid, None).is_err(),
             "shutdown must await the uninstall-owned process"
@@ -2045,46 +1927,46 @@ async fn shutdown_waits_for_processes_being_removed() {
 
 #[tokio::test]
 async fn removing_an_agent_clears_pending_permissions_and_rejects_late_decisions() {
-    use atte_lib::conversation::ConnectionFailure;
+    use atte_lib::thread::ConnectionFailure;
     let folder = tempfile::tempdir().unwrap();
     let mut agent = mock_agent();
     agent
         .env
         .insert("FIXTURE_MODE".into(), "prompt-permission".into());
-    let conversations = Conversations::new(vec![agent]);
-    let draft = conversations.create(folder.path()).unwrap();
-    conversations.connect(draft.id).unwrap();
-    settle(&conversations, draft.id).await;
-    let mut stream = subscribe(&conversations, draft.id);
-    conversations
+    let threads = Threads::new(vec![agent]);
+    let draft = threads.create(folder.path()).unwrap();
+    threads.connect(draft.id).unwrap();
+    settle(&threads, draft.id).await;
+    let mut stream = subscribe(&threads, draft.id);
+    threads
         .send_message(draft.id, "request permission".into())
         .unwrap();
     let waiting = tokio::time::timeout(Duration::from_secs(5), async {
         loop {
             let next = stream.recv().await.unwrap();
-            if next.status == ConversationStatus::WaitingForApproval {
+            if next.status == ThreadStatus::WaitingForApproval {
                 break next;
             }
         }
     })
     .await
     .unwrap();
-    conversations.unregister_agent("fixture").await.unwrap();
-    let removed = conversations.get(draft.id).unwrap();
+    threads.unregister_agent("fixture").await.unwrap();
+    let removed = threads.get(draft.id).unwrap();
     assert_eq!(removed.failure, Some(ConnectionFailure::AgentRemoved));
     assert!(
         removed.permissions.is_empty(),
         "removed agents must not leave approval controls visible"
     );
     assert_eq!(removed.turns[0].stop_reason.as_deref(), Some("cancelled"));
-    assert!(conversations
+    assert!(threads
         .answer_permission(
             draft.id,
             waiting.permissions[0].id,
             "arbitrary-allow".into()
         )
         .is_err());
-    assert!(conversations.connect(draft.id).is_err());
+    assert!(threads.connect(draft.id).is_err());
     assert_eq!(stream.recv().await.unwrap(), removed);
-    conversations.shutdown().await;
+    threads.shutdown().await;
 }

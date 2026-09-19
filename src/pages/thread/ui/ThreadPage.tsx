@@ -6,23 +6,23 @@ import {
   on,
   Show,
 } from "solid-js";
-import { preparedAgents } from "../api/conversations";
-import { createConversationModel } from "../model/conversation";
+import { preparedAgents } from "../api/threads";
+import { createThreadModel } from "../model/thread";
 import { failureMessages, statusLabels } from "../model/types";
-import { ConversationHistory } from "./ConversationHistory";
-import { ConversationSidebar } from "./ConversationSidebar";
 import { PermissionPanel } from "./PermissionPanel";
 import { QueuedMessages } from "./QueuedMessages";
+import { ThreadHistory } from "./ThreadHistory";
+import { ThreadSidebar } from "./ThreadSidebar";
 import { Transcript } from "./Transcript";
 
-export function ConversationPage(props: {
+export function ThreadPage(props: {
   active: boolean;
   agentsRevision: number;
   onManage: () => void;
 }) {
-  const model = createConversationModel();
+  const model = createThreadModel();
   const {
-    conversation,
+    thread,
     selecting,
     history,
     listError,
@@ -39,7 +39,7 @@ export function ConversationPage(props: {
     stopping,
     streamError,
     canSend,
-    openConversation,
+    openThread,
     send,
     deleteQueued,
     answer,
@@ -114,11 +114,11 @@ export function ConversationPage(props: {
           </button>
         </Show>
         <span class="font-semibold tracking-tight">atte</span>
-        <Show when={conversation()}>
+        <Show when={thread()}>
           {(draft) => (
             <>
               <h1 class="max-w-64 truncate text-sm font-medium">
-                {draft().title || "새 대화"}
+                {draft().title || "새 스레드"}
               </h1>
               <span
                 class="min-w-0 flex-1 truncate text-xs text-muted"
@@ -133,9 +133,9 @@ export function ConversationPage(props: {
           )}
         </Show>
         <label class="text-xs text-muted">
-          새 대화 에이전트
+          새 스레드 에이전트
           <select
-            aria-label="새 대화 에이전트"
+            aria-label="새 스레드 에이전트"
             class="ml-2 rounded border border-line bg-panel p-1 focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-accent"
             value={agentId()}
             onChange={(event) => setSelectedAgent(event.currentTarget.value)}
@@ -165,14 +165,14 @@ export function ConversationPage(props: {
       </header>
       <div class="flex min-h-0 flex-1">
         <Show when={sidebarOpen()}>
-          <ConversationSidebar
-            conversations={history() ?? []}
-            selected={conversation()?.id}
+          <ThreadSidebar
+            threads={history() ?? []}
+            selected={thread()?.id}
             loading={history.loading}
             failed={listError()}
             creating={selecting() || agents.loading || agentsFailed()}
             onRetry={() => void reloadList()}
-            onSelect={(id) => void openConversation(id)}
+            onSelect={(id) => void openThread(id)}
             onCreate={(folder) => void createInFolder(folder)}
             onClose={() => setSidebarOpen(false)}
           />
@@ -189,51 +189,49 @@ export function ConversationPage(props: {
             )}
           </Show>
           <Show
-            when={conversation()}
+            when={thread()}
             fallback={
               <section class="flex flex-1 flex-col items-center justify-center gap-3 px-6 text-center">
                 <h1 class="text-xl font-medium">어디에서 작업할까요?</h1>
                 <p class="text-sm text-muted">
-                  폴더를 선택해 새 대화를 준비하세요.
+                  폴더를 선택해 새 스레드를 준비하세요.
                 </p>
               </section>
             }
           >
-            <ConversationHistory
-              followKey={`${conversation()?.id}:${activeTurn()}`}
-            >
-              <Show when={conversation()?.status === "connecting"}>
+            <ThreadHistory followKey={`${thread()?.id}:${activeTurn()}`}>
+              <Show when={thread()?.status === "connecting"}>
                 <p role="status">
-                  {conversation()?.remoteSessionId
-                    ? "이전 대화를 불러오는 중…"
+                  {thread()?.remoteSessionId
+                    ? "이전 스레드를 불러오는 중…"
                     : "에이전트에 연결 중…"}
                 </p>
               </Show>
-              <Show when={conversation()?.interrupted}>
+              <Show when={thread()?.interrupted}>
                 <p role="status">
                   이전 작업이 중단되었습니다. 새 메시지를 보내 계속할 수
                   있습니다.
                 </p>
               </Show>
-              <Show when={conversation()?.storageError}>
+              <Show when={thread()?.storageError}>
                 {(message) => <p role="alert">{message()}</p>}
               </Show>
               <Show
                 when={
-                  !conversation()?.turns?.length &&
-                  conversation()?.status === "sessionReady" &&
-                  !conversation()?.notice
+                  !thread()?.turns?.length &&
+                  thread()?.status === "sessionReady" &&
+                  !thread()?.notice
                 }
               >
-                <h2 class="text-lg font-medium">대화가 준비되었습니다</h2>
-                <Show when={conversation()?.status === "disconnected"}>
+                <h2 class="text-lg font-medium">스레드가 준비되었습니다</h2>
+                <Show when={thread()?.status === "disconnected"}>
                   <p class="text-sm text-muted">
                     아직 에이전트에 연결되지 않았습니다.
                   </p>
                 </Show>
               </Show>
               <Show when={streamError()}>
-                <p role="alert">대화 상태를 구독할 수 없습니다.</p>
+                <p role="alert">스레드 상태를 구독할 수 없습니다.</p>
                 <button
                   type="button"
                   class="focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-accent"
@@ -242,14 +240,14 @@ export function ConversationPage(props: {
                   상태 다시 불러오기
                 </button>
               </Show>
-              <Show when={conversation()?.failure}>
+              <Show when={thread()?.failure}>
                 {(failure) => (
                   <p role="alert" class="text-sm">
                     {failureMessages[failure()]}
                   </p>
                 )}
               </Show>
-              <Show when={conversation()?.failure === "authenticationRequired"}>
+              <Show when={thread()?.failure === "authenticationRequired"}>
                 <button
                   type="button"
                   class="focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-accent"
@@ -260,13 +258,11 @@ export function ConversationPage(props: {
               </Show>
               <Show
                 when={
-                  conversation() &&
+                  thread() &&
                   (["agentRemoved", "executableNotFound"].includes(
-                    conversation()?.failure ?? "",
+                    thread()?.failure ?? "",
                   ) ||
-                    !agents()?.some(
-                      (agent) => agent.id === conversation()?.agentId,
-                    ))
+                    !agents()?.some((agent) => agent.id === thread()?.agentId))
                 }
               >
                 <button
@@ -279,9 +275,9 @@ export function ConversationPage(props: {
               </Show>
               <Show
                 when={
-                  conversation()?.authentication === "unknown" &&
-                  conversation()?.status === "sessionReady" &&
-                  !conversation()?.turns?.length
+                  thread()?.authentication === "unknown" &&
+                  thread()?.status === "sessionReady" &&
+                  !thread()?.turns?.length
                 }
               >
                 <p class="text-sm text-muted">
@@ -291,32 +287,30 @@ export function ConversationPage(props: {
               <Show
                 when={
                   !connecting() &&
-                  (conversation()?.status === "failed" || connectionRejected())
+                  (thread()?.status === "failed" || connectionRejected())
                 }
               >
                 <button
                   type="button"
                   class="rounded-lg bg-accent px-4 py-2 text-sm text-white focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-accent disabled:opacity-50"
-                  disabled={
-                    connecting() || conversation()?.status === "connecting"
-                  }
+                  disabled={connecting() || thread()?.status === "connecting"}
                   onClick={connect}
                 >
                   다시 연결
                 </button>
               </Show>
-              <Transcript turns={conversation()?.turns ?? []} />
-              <Show when={conversation()?.notice}>
+              <Transcript turns={thread()?.turns ?? []} />
+              <Show when={thread()?.notice}>
                 {(notice) => (
                   <p role="status" class="text-sm text-muted">
                     {notice()}
                   </p>
                 )}
               </Show>
-            </ConversationHistory>
+            </ThreadHistory>
             <div class="mx-auto mb-6 w-full max-w-4xl shrink-0 px-6">
               <QueuedMessages
-                messages={conversation()?.queuedMessages ?? []}
+                messages={thread()?.queuedMessages ?? []}
                 onDelete={deleteQueued}
               />
               <form
@@ -327,7 +321,7 @@ export function ConversationPage(props: {
                 }}
               >
                 <Show
-                  when={conversation()?.permissions?.[0]}
+                  when={thread()?.permissions?.[0]}
                   fallback={
                     <textarea
                       aria-label="메시지"
@@ -336,7 +330,7 @@ export function ConversationPage(props: {
                       disabled={
                         sending() ||
                         !["sessionReady", "running", "cancelling"].includes(
-                          conversation()?.status ?? "",
+                          thread()?.status ?? "",
                         )
                       }
                       value={message()}
@@ -360,7 +354,7 @@ export function ConversationPage(props: {
                   {(request) => (
                     <PermissionPanel
                       request={request()}
-                      workingFolder={conversation()?.workingFolder ?? ""}
+                      workingFolder={thread()?.workingFolder ?? ""}
                       disabled={Boolean(answering()) || Boolean(cancelling())}
                       onAnswer={answer}
                     />
@@ -368,9 +362,8 @@ export function ConversationPage(props: {
                 </Show>
                 <div class="mt-3 flex items-center justify-between text-xs text-muted">
                   <span>
-                    {agents()?.find(
-                      (agent) => agent.id === conversation()?.agentId,
-                    )?.name ?? conversation()?.agentId}
+                    {agents()?.find((agent) => agent.id === thread()?.agentId)
+                      ?.name ?? thread()?.agentId}
                   </span>
                   <button
                     type={showStop() ? "button" : "submit"}
@@ -413,9 +406,9 @@ export function ConversationPage(props: {
                 id="connection-note"
                 class="mt-2 text-center text-xs text-muted"
               >
-                {conversation()?.status === "running"
+                {thread()?.status === "running"
                   ? "작업 중에도 다음 메시지를 입력할 수 있습니다."
-                  : "연결된 대화에 메시지를 보내세요."}
+                  : "연결된 스레드에 메시지를 보내세요."}
               </p>
             </div>
           </Show>

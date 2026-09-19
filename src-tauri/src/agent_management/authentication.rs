@@ -56,7 +56,7 @@ pub struct LoginMethod {
     pub supported: bool,
 }
 
-/// Initializes a separate setup connection. It never reuses or replaces conversations.
+/// Initializes a separate setup connection. It never reuses or replaces threads.
 pub async fn inspect(
     agent: &AgentDefinition,
     folder: &Path,

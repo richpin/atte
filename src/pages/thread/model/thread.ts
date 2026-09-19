@@ -10,25 +10,21 @@ import {
 import {
   answerPermission,
   cancelTurn,
-  connectConversation,
-  createConversation,
+  connectThread,
+  createThread,
   deleteQueuedMessage,
-  getConversation,
-  listConversations,
+  getThread,
+  listThreads,
   selectWorkingFolder,
   sendMessage,
-  subscribeConversation,
-  subscribeConversationList,
-} from "../api/conversations";
-import type {
-  Conversation,
-  ConversationMetadata,
-  ConversationUpdate,
-} from "./types";
+  subscribeThread,
+  subscribeThreadList,
+} from "../api/threads";
+import type { Thread, ThreadMetadata, ThreadUpdate } from "./types";
 
-/** Owns synchronization for one conversation view; call inside a Solid owner. */
-export function createConversationModel() {
-  const [conversation, setConversation] = createSignal<Conversation>();
+/** Owns synchronization for one thread view; call inside a Solid owner. */
+export function createThreadModel() {
+  const [thread, setThread] = createSignal<Thread>();
   const [error, setError] = createSignal<string>();
   const [selecting, setSelecting] = createSignal(false);
   const [listError, setListError] = createSignal(false);
@@ -42,11 +38,11 @@ export function createConversationModel() {
   });
   let listVersion = 0;
   const [history, { refetch: reloadList, mutate: updateList }] = createResource(
-    async (): Promise<ConversationMetadata[]> => {
+    async (): Promise<ThreadMetadata[]> => {
       const version = listVersion;
       try {
         setListError(false);
-        const entries = await listConversations();
+        const entries = await listThreads();
         return version === listVersion ? entries : (history() ?? entries);
       } catch {
         if (version !== listVersion || disposed) return history() ?? [];
@@ -57,7 +53,7 @@ export function createConversationModel() {
   );
   onMount(() => {
     onCleanup(
-      subscribeConversationList(
+      subscribeThreadList(
         (entries) => {
           listVersion++;
           updateList(entries);
@@ -70,39 +66,39 @@ export function createConversationModel() {
 
   const [connectingId, setConnectingId] = createSignal<string>();
   const connecting = () =>
-    Boolean(connectingId()) && connectingId() === conversation()?.id;
+    Boolean(connectingId()) && connectingId() === thread()?.id;
   const [connectionRejected, setConnectionRejected] = createSignal(false);
   const [message, setMessage] = createSignal("");
   const [sending, setSending] = createSignal(false);
   const [answering, setAnswering] = createSignal<string>();
   const [cancelling, setCancelling] = createSignal<string>();
-  const activeTurn = () => conversation()?.turns?.at(-1)?.id;
+  const activeTurn = () => thread()?.turns?.at(-1)?.id;
   const canCancel = () =>
-    ["running", "waitingForApproval"].includes(conversation()?.status ?? "");
-  const showStop = () => canCancel() || conversation()?.status === "cancelling";
+    ["running", "waitingForApproval"].includes(thread()?.status ?? "");
+  const showStop = () => canCancel() || thread()?.status === "cancelling";
   const stopping = () =>
-    Boolean(cancelling()) || conversation()?.status === "cancelling";
+    Boolean(cancelling()) || thread()?.status === "cancelling";
   const [streamError, setStreamError] = createSignal(false);
   const [subscriptionAttempt, setSubscriptionAttempt] = createSignal(0);
   const canSend = () =>
     ["sessionReady", "running", "cancelling"].includes(
-      conversation()?.status ?? "",
+      thread()?.status ?? "",
     ) &&
     !sending() &&
     !streamError();
 
-  function applyConversation(updatedConversation: Conversation) {
-    const current = conversation();
+  function applyThread(updatedThread: Thread) {
+    const current = thread();
     if (
-      current?.id === updatedConversation.id &&
-      updatedConversation.revision >= current.revision
+      current?.id === updatedThread.id &&
+      updatedThread.revision >= current.revision
     ) {
-      remember(updatedConversation);
-      setConversation(updatedConversation);
+      remember(updatedThread);
+      setThread(updatedThread);
     }
   }
 
-  function remember(updatedConversation: Conversation) {
+  function remember(updatedThread: Thread) {
     listVersion++;
     const {
       id,
@@ -115,7 +111,7 @@ export function createConversationModel() {
       updatedAt,
       failure,
       interrupted,
-    } = updatedConversation;
+    } = updatedThread;
     const metadata = {
       id,
       title,
@@ -134,13 +130,13 @@ export function createConversationModel() {
     ]);
   }
 
-  // A command belongs to the displayed view, even when the same conversation
+  // A command belongs to the displayed view, even when the same thread
   // is opened again later. Its completion must not mutate that newer view.
   function isCurrent(expectedView: number) {
     return !disposed && view === expectedView;
   }
 
-  function display(updatedConversation: Conversation) {
+  function display(updatedThread: Thread) {
     view++;
     setError(undefined);
     setSending(false);
@@ -149,33 +145,33 @@ export function createConversationModel() {
     setConnectingId(undefined);
     setMessage("");
     setConnectionRejected(false);
-    setConversation(updatedConversation);
-    if (updatedConversation.status === "disconnected") void connect();
+    setThread(updatedThread);
+    if (updatedThread.status === "disconnected") void connect();
   }
 
-  async function openConversation(id: string) {
+  async function openThread(id: string) {
     const attempt = ++selection;
-    if (conversation()?.id === id || disposed) return;
+    if (thread()?.id === id || disposed) return;
     setError(undefined);
     try {
-      const updatedConversation = await getConversation(id);
+      const updatedThread = await getThread(id);
       if (attempt !== selection) return;
-      display(updatedConversation);
+      display(updatedThread);
     } catch (cause) {
       if (attempt === selection)
-        setError(errorMessage(cause, "대화를 열 수 없습니다."));
+        setError(errorMessage(cause, "스레드를 열 수 없습니다."));
     }
   }
 
-  function applyUpdate(update: ConversationUpdate) {
-    if (update.kind === "conversation") {
-      applyConversation(update.conversation);
+  function applyUpdate(update: ThreadUpdate) {
+    if (update.kind === "thread") {
+      applyThread(update.thread);
       return;
     }
-    const current = conversation();
+    const current = thread();
     if (
       !current ||
-      update.conversationId !== current.id ||
+      update.threadId !== current.id ||
       update.revision <= current.revision
     )
       return;
@@ -186,7 +182,7 @@ export function createConversationModel() {
       setStreamError(true);
       return;
     }
-    setConversation({
+    setThread({
       ...current,
       revision: update.revision,
       turns: current.turns.map((turn) =>
@@ -197,30 +193,28 @@ export function createConversationModel() {
     });
   }
 
-  const conversationId = createMemo(() => conversation()?.id);
+  const threadId = createMemo(() => thread()?.id);
   createEffect(
     on(
-      () => [conversationId(), subscriptionAttempt()] as const,
+      () => [threadId(), subscriptionAttempt()] as const,
       ([id]) => {
         if (!id) return;
         setStreamError(false);
-        onCleanup(
-          subscribeConversation(id, applyUpdate, () => setStreamError(true)),
-        );
+        onCleanup(subscribeThread(id, applyUpdate, () => setStreamError(true)));
       },
     ),
   );
 
   async function send() {
     const expectedView = view;
-    const current = conversation();
+    const current = thread();
     if (!current || !canSend() || !message().trim()) return;
     setSending(true);
     setError(undefined);
     try {
-      const updatedConversation = await sendMessage(current.id, message());
+      const updatedThread = await sendMessage(current.id, message());
       if (isCurrent(expectedView)) {
-        applyConversation(updatedConversation);
+        applyThread(updatedThread);
         setMessage("");
       }
     } catch (cause) {
@@ -233,11 +227,11 @@ export function createConversationModel() {
 
   async function deleteQueued(id: string) {
     const expectedView = view;
-    const current = conversation();
+    const current = thread();
     if (!current) return;
     try {
-      const updatedConversation = await deleteQueuedMessage(current.id, id);
-      if (isCurrent(expectedView)) applyConversation(updatedConversation);
+      const updatedThread = await deleteQueuedMessage(current.id, id);
+      if (isCurrent(expectedView)) applyThread(updatedThread);
     } catch (cause) {
       if (isCurrent(expectedView))
         setError(errorMessage(cause, "대기 메시지를 삭제할 수 없습니다."));
@@ -246,13 +240,13 @@ export function createConversationModel() {
 
   async function answer(request: string, option: string) {
     const expectedView = view;
-    const current = conversation();
+    const current = thread();
     if (!current || answering() || cancelling()) return;
     setAnswering(request);
     setError(undefined);
     try {
       const updated = await answerPermission(current.id, request, option);
-      if (isCurrent(expectedView)) applyConversation(updated);
+      if (isCurrent(expectedView)) applyThread(updated);
     } catch (cause) {
       if (isCurrent(expectedView))
         setError(errorMessage(cause, "승인 응답을 전달할 수 없습니다."));
@@ -263,14 +257,14 @@ export function createConversationModel() {
 
   async function cancel() {
     const expectedView = view;
-    const current = conversation();
+    const current = thread();
     const turn = activeTurn();
     if (!current || !turn || !canCancel() || cancelling()) return;
     setCancelling(turn);
     setError(undefined);
     try {
       const updated = await cancelTurn(current.id, turn);
-      if (isCurrent(expectedView)) applyConversation(updated);
+      if (isCurrent(expectedView)) applyThread(updated);
     } catch (cause) {
       if (isCurrent(expectedView))
         setError(errorMessage(cause, "작업을 중단할 수 없습니다."));
@@ -281,14 +275,14 @@ export function createConversationModel() {
 
   async function connect() {
     const expectedView = view;
-    const draft = conversation();
+    const draft = thread();
     if (!draft || connecting()) return;
     setConnectingId(draft.id);
     setConnectionRejected(false);
     setError(undefined);
     try {
-      const updatedConversation = await connectConversation(draft.id);
-      if (isCurrent(expectedView)) applyConversation(updatedConversation);
+      const updatedThread = await connectThread(draft.id);
+      if (isCurrent(expectedView)) applyThread(updatedThread);
     } catch (cause) {
       if (isCurrent(expectedView)) {
         setConnectionRejected(true);
@@ -332,21 +326,21 @@ export function createConversationModel() {
     setError(undefined);
     const attempt = ++selection;
     try {
-      const draft = await createConversation(folder, agentId);
+      const draft = await createThread(folder, agentId);
       if (disposed) return;
       remember(draft);
       if (attempt !== selection) return;
       display(draft);
     } catch (cause) {
       if (attempt === selection)
-        setError(errorMessage(cause, "새 대화를 만들 수 없습니다."));
+        setError(errorMessage(cause, "새 스레드를 만들 수 없습니다."));
     } finally {
       setSelecting(false);
     }
   }
 
   return {
-    conversation,
+    thread,
     error,
     selecting,
     history,
@@ -364,7 +358,7 @@ export function createConversationModel() {
     stopping,
     streamError,
     canSend,
-    openConversation,
+    openThread,
     send,
     deleteQueued,
     answer,

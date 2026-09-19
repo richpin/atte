@@ -1,12 +1,8 @@
 use super::{AgentManagement, ManagementError};
-use crate::conversation::{AuthenticationStatus, Conversations};
+use crate::thread::{AuthenticationStatus, Threads};
 
 impl AgentManagement {
-    pub async fn uninstall(
-        &self,
-        id: &str,
-        conversations: &Conversations,
-    ) -> Result<(), ManagementError> {
+    pub async fn uninstall(&self, id: &str, threads: &Threads) -> Result<(), ManagementError> {
         let _operation = self.begin(id)?;
         let installation = self
             .store
@@ -16,7 +12,7 @@ impl AgentManagement {
             .ok_or(ManagementError::Removal)?;
         crate::installation_files::validate(&self.root, &installation.artifact)
             .map_err(|_| ManagementError::Removal)?;
-        conversations
+        threads
             .unregister_agent(id)
             .await
             .map_err(|_| ManagementError::Connection)?;
@@ -24,7 +20,7 @@ impl AgentManagement {
             .lock()
             .map_err(|_| ManagementError::Connection)?
             .remove(id);
-        conversations.record_authentication(id, AuthenticationStatus::Unknown);
+        threads.record_authentication(id, AuthenticationStatus::Unknown);
         let root = self.root.clone();
         let artifact = installation.artifact;
         tokio::task::spawn_blocking(move || crate::installation_files::remove(&root, &artifact))

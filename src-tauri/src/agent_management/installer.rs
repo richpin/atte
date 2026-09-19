@@ -52,7 +52,7 @@ impl<D: Downloader> Installer for SystemInstaller<D> {
         progress: &'a (dyn Fn(&str) + Send + Sync),
     ) -> InstallFuture<'a> {
         Box::pin(async move {
-            // Unique immutable directories keep old conversations on their original artifacts.
+            // Unique immutable directories keep old threads on their original artifacts.
             if !super::registry::valid_id(id) {
                 return Err(ManagementError::Registry);
             }

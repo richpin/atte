@@ -17,8 +17,8 @@ vi.mock("@tauri-apps/api/core", () => ({
   },
 }));
 let receiveUpdate: (update: Record<string, unknown>) => void;
-const receive = (conversation: Record<string, unknown>) =>
-  receiveUpdate({ kind: "conversation", conversation });
+const receive = (thread: Record<string, unknown>) =>
+  receiveUpdate({ kind: "thread", thread });
 afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
@@ -87,22 +87,22 @@ beforeEach(() => {
   );
   vi.resetAllMocks();
   vi.mocked(invoke).mockImplementation((command, args) => {
-    if (command === "subscribe_conversation_list")
+    if (command === "subscribe_thread_list")
       return Promise.resolve("list-subscription");
-    if (command === "list_conversations") return Promise.resolve([]);
+    if (command === "list_threads") return Promise.resolve([]);
     if (command === "prepared_agents")
       return Promise.resolve([{ id: "codex", name: "Codex" }]);
-    if (command === "subscribe_conversation") {
+    if (command === "subscribe_thread") {
       receiveUpdate = (args as { channel: { onmessage: typeof receiveUpdate } })
         .channel.onmessage;
       return Promise.resolve("subscription-1");
     }
-    if (command === "unsubscribe_conversation") return Promise.resolve();
+    if (command === "unsubscribe_thread") return Promise.resolve();
     return requests(command, args);
   });
 });
 
-it("groups conversations by folder, collapses projects and creates within the selected folder", async () => {
+it("groups threads by folder, collapses projects and creates within the selected folder", async () => {
   const saved = {
     id: "one",
     title: "First project task",
@@ -117,17 +117,22 @@ it("groups conversations by folder, collapses projects and creates within the se
   const original = vi.mocked(invoke).getMockImplementation();
   let receiveList!: (entries: unknown[]) => void;
   vi.mocked(invoke).mockImplementation(async (command, args) => {
-    if (command === "list_conversations")
+    if (command === "list_threads")
       return [saved, { ...saved, id: "two", title: "Second project task" }];
-    if (command === "subscribe_conversation_list") {
+    if (command === "subscribe_thread_list") {
       receiveList = (args as { channel: { onmessage: typeof receiveList } })
         .channel.onmessage;
       return "list";
     }
-    if (command === "create_conversation")
-      return { ...saved, id: "new", title: "새 대화", status: "disconnected" };
-    if (command === "connect_conversation")
-      return { ...saved, id: "new", title: "새 대화", revision: 1 };
+    if (command === "create_thread")
+      return {
+        ...saved,
+        id: "new",
+        title: "새 스레드",
+        status: "disconnected",
+      };
+    if (command === "connect_thread")
+      return { ...saved, id: "new", title: "새 스레드", revision: 1 };
     return original?.(command, args);
   });
   render(() => <App />);
@@ -135,7 +140,7 @@ it("groups conversations by folder, collapses projects and creates within the se
     name: "프로젝트 project",
   });
   expect(
-    screen.getAllByRole("button", { name: "project에 새 대화" }),
+    screen.getAllByRole("button", { name: "project에 새 스레드" }),
   ).toHaveLength(1);
   await userEvent.click(project);
   expect(
@@ -152,16 +157,16 @@ it("groups conversations by folder, collapses projects and creates within the se
     }),
   ).toBeTruthy();
   await userEvent.click(screen.getByRole("button", { name: "사이드바 닫기" }));
-  expect(screen.queryByRole("navigation", { name: "대화 목록" })).toBeNull();
+  expect(screen.queryByRole("navigation", { name: "스레드 목록" })).toBeNull();
   await userEvent.click(screen.getByRole("button", { name: "사이드바 열기" }));
   await userEvent.click(
-    screen.getByRole("button", { name: "project에 새 대화" }),
+    screen.getByRole("button", { name: "project에 새 스레드" }),
   );
-  expect(invoke).toHaveBeenCalledWith("create_conversation", {
+  expect(invoke).toHaveBeenCalledWith("create_thread", {
     folder: "/work/project",
     agentId: "codex",
   });
-  expect(invoke).toHaveBeenCalledWith("connect_conversation", { id: "new" });
+  expect(invoke).toHaveBeenCalledWith("connect_thread", { id: "new" });
 });
 
 it("keeps the saved list accessible without agents and restores on selection only", async () => {
@@ -179,16 +184,16 @@ it("keeps the saved list accessible without agents and restores on selection onl
   };
   vi.mocked(invoke).mockImplementation(async (command, args) => {
     if (command === "prepared_agents" || command === "agent_catalog") return [];
-    if (command === "list_conversations") return [saved];
-    if (command === "get_conversation") return saved;
-    if (command === "connect_conversation")
+    if (command === "list_threads") return [saved];
+    if (command === "get_thread") return saved;
+    if (command === "connect_thread")
       return {
         ...saved,
         status: "failed",
         failure: "agentRemoved",
         revision: 1,
       };
-    if (command === "subscribe_conversation") {
+    if (command === "subscribe_thread") {
       receiveUpdate = (args as { channel: { onmessage: typeof receiveUpdate } })
         .channel.onmessage;
       return "subscription";
@@ -200,7 +205,7 @@ it("keeps the saved list accessible without agents and restores on selection onl
   expect(
     vi
       .mocked(invoke)
-      .mock.calls.some(([command]) => command === "connect_conversation"),
+      .mock.calls.some(([command]) => command === "connect_thread"),
   ).toBe(false);
   await userEvent.click(screen.getByRole("button", { name: /지난 작업/ }));
   await screen.findByText(/에이전트를 설치한 뒤/);
@@ -215,7 +220,7 @@ it("keeps the saved list accessible without agents and restores on selection onl
   ).toBe(false);
 });
 
-it("loads selected history once and keeps newer list metadata when an older conversation arrives", async () => {
+it("loads selected history once and keeps newer list metadata when an older thread arrives", async () => {
   const saved = {
     id: "saved-1",
     title: "저장된 제목",
@@ -230,9 +235,9 @@ it("loads selected history once and keeps newer list metadata when an older conv
   };
   const original = vi.mocked(invoke).getMockImplementation();
   vi.mocked(invoke).mockImplementation((command, args) => {
-    if (command === "list_conversations") return Promise.resolve([saved]);
-    if (command === "get_conversation") return Promise.resolve(saved);
-    if (command === "connect_conversation")
+    if (command === "list_threads") return Promise.resolve([saved]);
+    if (command === "get_thread") return Promise.resolve(saved);
+    if (command === "connect_thread")
       return Promise.resolve({ ...saved, status: "connecting", revision: 1 });
     return original?.(command, args) ?? Promise.resolve();
   });
@@ -240,7 +245,7 @@ it("loads selected history once and keeps newer list metadata when an older conv
   await userEvent.click(
     await screen.findByRole("button", { name: /저장된 제목/ }),
   );
-  await screen.findByText("이전 대화를 불러오는 중…");
+  await screen.findByText("이전 스레드를 불러오는 중…");
   expect(screen.getByRole("button", { name: "전송" })).toHaveProperty(
     "disabled",
     true,
@@ -269,12 +274,12 @@ it("loads selected history once and keeps newer list metadata when an older conv
   expect(
     vi
       .mocked(invoke)
-      .mock.calls.filter(([command]) => command === "get_conversation"),
+      .mock.calls.filter(([command]) => command === "get_thread"),
   ).toHaveLength(1);
   expect(
     vi
       .mocked(invoke)
-      .mock.calls.filter(([command]) => command === "connect_conversation"),
+      .mock.calls.filter(([command]) => command === "connect_thread"),
   ).toHaveLength(1);
   expect(
     vi
@@ -283,7 +288,7 @@ it("loads selected history once and keeps newer list metadata when an older conv
   ).toBe(false);
 });
 
-it("returns from setup to the same conversation and resumes only after an explicit retry", async () => {
+it("returns from setup to the same thread and resumes only after an explicit retry", async () => {
   const saved = {
     id: "saved-auth",
     title: "인증이 필요한 작업",
@@ -299,11 +304,11 @@ it("returns from setup to the same conversation and resumes only after an explic
   let attempts = 0;
   const original = vi.mocked(invoke).getMockImplementation();
   vi.mocked(invoke).mockImplementation((command, args) => {
-    if (command === "list_conversations") return Promise.resolve([saved]);
-    if (command === "get_conversation") return Promise.resolve(saved);
+    if (command === "list_threads") return Promise.resolve([saved]);
+    if (command === "get_thread") return Promise.resolve(saved);
     if (command === "agent_catalog" || command === "refresh_agent_catalog")
       return Promise.resolve([]);
-    if (command === "connect_conversation") {
+    if (command === "connect_thread") {
       expect(args).toEqual({ id: saved.id });
       attempts++;
       return Promise.resolve(
@@ -333,7 +338,7 @@ it("returns from setup to the same conversation and resumes only after an explic
     await screen.findByRole("button", { name: "로그인 안내 열기" }),
   );
   await userEvent.click(
-    screen.getByRole("button", { name: "대화로 돌아가기" }),
+    screen.getByRole("button", { name: "스레드로 돌아가기" }),
   );
   expect(screen.getByRole("heading", { name: saved.title })).toBeTruthy();
   expect(attempts).toBe(1);
@@ -349,7 +354,7 @@ it("returns from setup to the same conversation and resumes only after an explic
   ).toBe(false);
 });
 
-it("automatically connects a new conversation and disables sending while connecting", async () => {
+it("automatically connects a new thread and disables sending while connecting", async () => {
   const draft = {
     revision: 0,
     turns: [],
@@ -365,9 +370,9 @@ it("automatically connects a new conversation and disables sending while connect
   render(() => <App />);
   await userEvent.click(screen.getByRole("button", { name: "폴더 선택" }));
   expect(await screen.findByTitle("/Users/test/작업")).toBeTruthy();
-  expect(screen.getByRole("heading", { name: "새 대화" })).toBeTruthy();
+  expect(screen.getByRole("heading", { name: "새 스레드" })).toBeTruthy();
   expect(screen.getByText("연결 중…")).toBeTruthy();
-  expect(invoke).toHaveBeenCalledWith("connect_conversation", {
+  expect(invoke).toHaveBeenCalledWith("connect_thread", {
     id: "draft-1",
   });
   expect(screen.queryByRole("button", { name: "에이전트 연결" })).toBeNull();
@@ -389,10 +394,7 @@ it("keeps the initial screen when folder selection is cancelled", async () => {
     screen.getByRole("heading", { name: "어디에서 작업할까요?" }),
   ).toBeTruthy();
   expect(screen.queryByRole("textbox")).toBeNull();
-  expect(invoke).not.toHaveBeenCalledWith(
-    "connect_conversation",
-    expect.anything(),
-  );
+  expect(invoke).not.toHaveBeenCalledWith("connect_thread", expect.anything());
 });
 
 it("shows folder errors and lets the user retry", async () => {
@@ -411,7 +413,7 @@ it("shows folder errors and lets the user retry", async () => {
   ).toBe(false);
 });
 
-it("keeps the current conversation when another folder selection is cancelled", async () => {
+it("keeps the current thread when another folder selection is cancelled", async () => {
   requests
     .mockResolvedValueOnce({
       id: "draft-1",
@@ -471,7 +473,7 @@ it("connects the fixed agent and displays backend readiness separately from auth
         agentId: "codex",
         status: "disconnected",
       };
-    if (command === "connect_conversation")
+    if (command === "connect_thread")
       return {
         revision: 0,
         turns: [],
@@ -507,7 +509,7 @@ it("connects the fixed agent and displays backend readiness separately from auth
   expect(
     screen.getByText("인증 상태는 아직 확인되지 않았습니다."),
   ).toBeTruthy();
-  expect(vi.mocked(invoke)).toHaveBeenCalledWith("connect_conversation", {
+  expect(vi.mocked(invoke)).toHaveBeenCalledWith("connect_thread", {
     id: "draft-1",
   });
 });
@@ -522,19 +524,19 @@ it("shows authentication failures and retries only when requested", async () => 
     agentId: "codex",
     status: "disconnected",
   };
-  let conversation = draft;
+  let thread = draft;
   requests.mockImplementation(async (command) => {
     if (command === "select_working_folder") return draft;
-    if (command === "connect_conversation") {
-      conversation = { ...draft, status: "failed" };
+    if (command === "connect_thread") {
+      thread = { ...draft, status: "failed" };
       return {
-        ...conversation,
+        ...thread,
         authentication: "required",
         failure: "authenticationRequired",
       };
     }
     return {
-      ...conversation,
+      ...thread,
       authentication: "required",
       failure: "authenticationRequired",
     };
@@ -548,15 +550,11 @@ it("shows authentication failures and retries only when requested", async () => 
     screen.queryByText("인증 상태는 아직 확인되지 않았습니다."),
   ).toBeNull();
   expect(
-    requests.mock.calls.filter(
-      ([command]) => command === "connect_conversation",
-    ),
+    requests.mock.calls.filter(([command]) => command === "connect_thread"),
   ).toHaveLength(1);
   await userEvent.click(screen.getByRole("button", { name: "다시 연결" }));
   expect(
-    requests.mock.calls.filter(
-      ([command]) => command === "connect_conversation",
-    ),
+    requests.mock.calls.filter(([command]) => command === "connect_thread"),
   ).toHaveLength(2);
 });
 
@@ -572,7 +570,7 @@ it("shows process exit after readiness without reconnecting automatically", asyn
   };
   requests.mockImplementation(async (command) => {
     if (command === "select_working_folder") return draft;
-    if (command === "connect_conversation")
+    if (command === "connect_thread")
       return { ...draft, status: "sessionReady" };
     return { ...draft, status: "failed", failure: "processExited" };
   });
@@ -592,15 +590,13 @@ it("shows process exit after readiness without reconnecting automatically", asyn
     "프로세스가 종료",
   );
   expect(
-    requests.mock.calls.filter(
-      ([command]) => command === "connect_conversation",
-    ),
+    requests.mock.calls.filter(([command]) => command === "connect_thread"),
   ).toHaveLength(1);
 });
 
-it("keeps the existing conversation's agent fixed when selecting a target for the next one", async () => {
+it("keeps the existing thread's agent fixed when selecting a target for the next one", async () => {
   vi.mocked(invoke).mockImplementation((command, args) =>
-    command === "list_conversations"
+    command === "list_threads"
       ? Promise.resolve([])
       : command === "prepared_agents"
         ? Promise.resolve([
@@ -626,7 +622,7 @@ it("keeps the existing conversation's agent fixed when selecting a target for th
     agentId: "fixture",
   });
   await userEvent.selectOptions(screen.getByRole("combobox"), "codex");
-  expect(invoke).toHaveBeenCalledWith("connect_conversation", {
+  expect(invoke).toHaveBeenCalledWith("connect_thread", {
     id: "draft-1",
   });
   expect(screen.getAllByText("Fixture")).toHaveLength(2);
@@ -634,7 +630,7 @@ it("keeps the existing conversation's agent fixed when selecting a target for th
 
 it("reports prepared-agent loading failure without crashing the page", async () => {
   vi.mocked(invoke).mockImplementation(async (command) => {
-    if (command === "list_conversations") return [];
+    if (command === "list_threads") return [];
     throw new Error("offline");
   });
   render(() => <App />);
@@ -649,7 +645,7 @@ it("reports prepared-agent loading failure without crashing the page", async () 
 
 it("shows a removed working folder error from the connection command", async () => {
   requests.mockImplementation(async (command) => {
-    if (command === "connect_conversation")
+    if (command === "connect_thread")
       throw {
         code: "invalidWorkingFolder",
         message: "작업 폴더를 찾을 수 없습니다. 폴더를 다시 선택해주세요.",
@@ -668,9 +664,7 @@ it("shows a removed working folder error from the connection command", async () 
   );
   expect(screen.getByRole("button", { name: "다시 연결" })).toBeTruthy();
   expect(
-    requests.mock.calls.filter(
-      ([command]) => command === "connect_conversation",
-    ),
+    requests.mock.calls.filter(([command]) => command === "connect_thread"),
   ).toHaveLength(1);
 });
 
@@ -863,7 +857,7 @@ it("keeps the message on send failure and displays permission cancellation", asy
   };
   requests.mockImplementation(async (command) => {
     if (command === "send_message")
-      throw { message: "응답이 완료된 연결된 대화에서 전송해주세요." };
+      throw { message: "응답이 완료된 연결된 스레드에서 전송해주세요." };
     return ready;
   });
   render(() => <App />);
@@ -895,12 +889,11 @@ it("ignores updates after unmount and unsubscribes even when registration finish
   };
   let register!: (token: string) => void;
   vi.mocked(invoke).mockImplementation((command, args) => {
-    if (command === "list_conversations") return Promise.resolve([]);
-    if (command === "subscribe_conversation_list")
-      return Promise.resolve("list");
+    if (command === "list_threads") return Promise.resolve([]);
+    if (command === "subscribe_thread_list") return Promise.resolve("list");
     if (command === "prepared_agents")
       return Promise.resolve([{ id: "codex", name: "Codex" }]);
-    if (command === "subscribe_conversation") {
+    if (command === "subscribe_thread") {
       receiveUpdate = (args as { channel: { onmessage: typeof receiveUpdate } })
         .channel.onmessage;
       return new Promise((resolve) => {
@@ -916,12 +909,12 @@ it("ignores updates after unmount and unsubscribes even when registration finish
   await Promise.resolve();
   receive({ ...ready, revision: 3, notice: "should not appear" });
   expect(screen.queryByText("should not appear")).toBeNull();
-  expect(invoke).toHaveBeenCalledWith("unsubscribe_conversation", {
+  expect(invoke).toHaveBeenCalledWith("unsubscribe_thread", {
     subscription: "late-subscription",
   });
 });
 
-it("appends each text delta once and rejects updates for another conversation", async () => {
+it("appends each text delta once and rejects updates for another thread", async () => {
   const ready = {
     id: "draft-1",
     workingFolder: "/project",
@@ -935,7 +928,7 @@ it("appends each text delta once and rejects updates for another conversation", 
   await userEvent.click(screen.getByRole("button", { name: "폴더 선택" }));
   const delta = {
     kind: "textDelta",
-    conversationId: "draft-1",
+    threadId: "draft-1",
     revision: 3,
     turnId: "turn-1",
     text: "Hello",
@@ -944,7 +937,7 @@ it("appends each text delta once and rejects updates for another conversation", 
   receiveUpdate(delta);
   receiveUpdate({
     ...delta,
-    conversationId: "other",
+    threadId: "other",
     revision: 4,
     text: "wrong",
   });
@@ -953,7 +946,7 @@ it("appends each text delta once and rejects updates for another conversation", 
   expect(screen.queryByText(/wrong/)).toBeNull();
 });
 
-it("does not disable the new conversation when old subscription cleanup fails", async () => {
+it("does not disable the new thread when old subscription cleanup fails", async () => {
   const ready = {
     id: "draft-1",
     workingFolder: "/project",
@@ -969,7 +962,7 @@ it("does not disable the new conversation when old subscription cleanup fails", 
   if (!original) throw new Error("missing invocation fixture");
   let rejectCleanup!: (reason: Error) => void;
   vi.mocked(invoke).mockImplementation((command, args) => {
-    if (command === "unsubscribe_conversation")
+    if (command === "unsubscribe_thread")
       return new Promise((_resolve, reject) => {
         rejectCleanup = reject;
       });
@@ -987,7 +980,7 @@ it("does not disable the new conversation when old subscription cleanup fails", 
   expect(screen.queryByRole("alert")).toBeNull();
 });
 
-it("opens agent management when creating a conversation without an installed agent", async () => {
+it("opens agent management when creating a thread without an installed agent", async () => {
   vi.mocked(invoke).mockImplementation(async (command) => {
     if (command === "prepared_agents") return [];
     if (command === "agent_catalog" || command === "refresh_agent_catalog")
@@ -1034,7 +1027,7 @@ it("returns from project setup to create in the original folder", async () => {
   vi.mocked(invoke).mockImplementation(async (command, args) => {
     if (command === "prepared_agents")
       return installed ? [{ id: "new-provider", name: "New Provider" }] : [];
-    if (command === "list_conversations") return [saved];
+    if (command === "list_threads") return [saved];
     if (command === "agent_catalog" || command === "refresh_agent_catalog")
       return [
         {
@@ -1055,13 +1048,18 @@ it("returns from project setup to create in the original folder", async () => {
       installed = true;
       return;
     }
-    if (command === "create_conversation")
-      return { ...saved, id: "new", title: "새 대화", agentId: "new-provider" };
-    if (command === "connect_conversation")
+    if (command === "create_thread")
       return {
         ...saved,
         id: "new",
-        title: "새 대화",
+        title: "새 스레드",
+        agentId: "new-provider",
+      };
+    if (command === "connect_thread")
+      return {
+        ...saved,
+        id: "new",
+        title: "새 스레드",
         agentId: "new-provider",
         status: "sessionReady",
         revision: 1,
@@ -1070,21 +1068,18 @@ it("returns from project setup to create in the original folder", async () => {
   });
   render(() => <App />);
   await userEvent.click(
-    await screen.findByRole("button", { name: "original에 새 대화" }),
+    await screen.findByRole("button", { name: "original에 새 스레드" }),
   );
   await userEvent.click(
     await screen.findByRole("button", { name: "New Provider 설치" }),
   );
   await screen.findByText(/설치됨 · 1.0.0/);
-  expect(invoke).not.toHaveBeenCalledWith(
-    "create_conversation",
-    expect.anything(),
-  );
+  expect(invoke).not.toHaveBeenCalledWith("create_thread", expect.anything());
   await userEvent.click(
-    screen.getByRole("button", { name: "대화로 돌아가기" }),
+    screen.getByRole("button", { name: "스레드로 돌아가기" }),
   );
-  await screen.findByRole("heading", { name: "새 대화" });
-  expect(invoke).toHaveBeenCalledWith("create_conversation", {
+  await screen.findByRole("heading", { name: "새 스레드" });
+  expect(invoke).toHaveBeenCalledWith("create_thread", {
     folder: "/work/original",
     agentId: "new-provider",
   });
@@ -1094,7 +1089,7 @@ it("returns from project setup to create in the original folder", async () => {
   );
 });
 
-it("keeps streaming and the fixed conversation while management is open", async () => {
+it("keeps streaming and the fixed thread while management is open", async () => {
   const ready = {
     id: "draft-1",
     workingFolder: "/project",
@@ -1117,23 +1112,23 @@ it("keeps streaming and the fixed conversation while management is open", async 
   await userEvent.click(screen.getByRole("button", { name: "에이전트 관리" }));
   receiveUpdate({
     kind: "textDelta",
-    conversationId: "draft-1",
+    threadId: "draft-1",
     revision: 3,
     turnId: "turn-1",
     text: " there",
   });
   await userEvent.click(
-    screen.getByRole("button", { name: "대화로 돌아가기" }),
+    screen.getByRole("button", { name: "스레드로 돌아가기" }),
   );
   expect(screen.getByText("Hi there")).toBeTruthy();
   expect(invoke).not.toHaveBeenCalledWith(
-    "unsubscribe_conversation",
+    "unsubscribe_thread",
     expect.anything(),
   );
   expect(
     vi
       .mocked(invoke)
-      .mock.calls.filter(([command]) => command === "subscribe_conversation"),
+      .mock.calls.filter(([command]) => command === "subscribe_thread"),
   ).toHaveLength(1);
 });
 
@@ -1181,7 +1176,7 @@ it("retries a failed install and offers the installed agent without restarting",
   );
   expect(await screen.findByText(/설치됨 · 1.12.0/)).toBeTruthy();
   await userEvent.click(
-    screen.getByRole("button", { name: "대화로 돌아가기" }),
+    screen.getByRole("button", { name: "스레드로 돌아가기" }),
   );
   expect((screen.getByRole("combobox") as HTMLSelectElement).value).toBe(
     "new-provider",
@@ -1254,7 +1249,7 @@ it("shows new registry agents and unsupported reasons while keeping cached insta
   expect(screen.getByText("설치됨 · 2.0.0")).toBeTruthy();
 });
 
-it("confirms uninstall, supports cancel and retry, and removes the agent from new conversation choices", async () => {
+it("confirms uninstall, supports cancel and retry, and removes the agent from new thread choices", async () => {
   let installed = true;
   let attempts = 0;
   vi.mocked(invoke).mockImplementation(async (command, args) => {
@@ -1306,12 +1301,12 @@ it("confirms uninstall, supports cancel and retry, and removes the agent from ne
     await screen.findByRole("button", { name: "New Provider 설치" }),
   ).toBeTruthy();
   await userEvent.click(
-    screen.getByRole("button", { name: "대화로 돌아가기" }),
+    screen.getByRole("button", { name: "스레드로 돌아가기" }),
   );
   expect(screen.queryByRole("option", { name: "New Provider" })).toBeNull();
 });
 
-it("keeps conversation content after agent removal and offers setup and explicit retry", async () => {
+it("keeps thread content after agent removal and offers setup and explicit retry", async () => {
   const draft = {
     id: "removed-chat",
     workingFolder: "/Users/test/project",
@@ -1418,7 +1413,7 @@ it("replaces the composer with agent choices and restores the draft after one de
 });
 
 it.each(["running", "waitingForApproval"])(
-  "can stop a %s turn and ignores a late conversation",
+  "can stop a %s turn and ignores a late thread",
   async (status) => {
     const turn = {
       id: "turn-1",

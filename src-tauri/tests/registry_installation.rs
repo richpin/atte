@@ -6,7 +6,7 @@ use atte_lib::{
         registry::{Binary, Registry},
         AgentManagement, ManagementError,
     },
-    conversation::{ConversationStatus, Conversations},
+    thread::{ThreadStatus, Threads},
 };
 use sha2::{Digest, Sha256};
 use std::{
@@ -110,21 +110,21 @@ async fn supported_binary_formats_preserve_registry_launch_metadata_and_restore(
             },
             NodeRuntime::default(),
         );
-        let conversations = Conversations::new(vec![]);
+        let threads = Threads::new(vec![]);
         manager
-            .install("unknown-agent", &conversations, &installer, &|_| {})
+            .install("unknown-agent", &threads, &installer, &|_| {})
             .await
             .unwrap();
         manager
-            .install("unknown-agent", &conversations, &installer, &|_| {})
+            .install("unknown-agent", &threads, &installer, &|_| {})
             .await
             .unwrap();
         assert_eq!(count.load(Ordering::SeqCst), 1);
         drop(manager);
         let manager = AgentManagement::open(root.path()).unwrap();
-        let conversations = Conversations::new(vec![]);
-        manager.restore(&conversations).unwrap();
-        assert_eq!(conversations.prepared_agents()[0].id, "unknown-agent");
+        let threads = Threads::new(vec![]);
+        manager.restore(&threads).unwrap();
+        assert_eq!(threads.prepared_agents()[0].id, "unknown-agent");
         let installs = atte_lib::storage::Store::open(&root.path().join("atte.sqlite"))
             .unwrap()
             .installations()
@@ -141,7 +141,7 @@ async fn supported_binary_formats_preserve_registry_launch_metadata_and_restore(
 #[tokio::test]
 async fn bad_downloads_do_not_replace_a_working_installation_or_fall_back_to_npm() {
     let root = tempfile::tempdir().unwrap();
-    let conversations = Conversations::new(vec![]);
+    let threads = Threads::new(vec![]);
     let manager = AgentManagement::open(root.path()).unwrap();
     let good = b"good".to_vec();
     let url = "https://fixture/agent";
@@ -156,10 +156,10 @@ async fn bad_downloads_do_not_replace_a_working_installation_or_fall_back_to_npm
         NodeRuntime::default(),
     );
     manager
-        .install("unknown-agent", &conversations, &installer, &|_| {})
+        .install("unknown-agent", &threads, &installer, &|_| {})
         .await
         .unwrap();
-    let original = manager.catalog(&conversations).unwrap()[0].artifact.clone();
+    let original = manager.catalog(&threads).unwrap()[0].artifact.clone();
     let mut link_tar = tar::Builder::new(Vec::new());
     let mut header = tar::Header::new_gnu();
     header.set_entry_type(tar::EntryType::Symlink);
@@ -193,26 +193,18 @@ async fn bad_downloads_do_not_replace_a_working_installation_or_fall_back_to_npm
             NodeRuntime::default(),
         );
         assert!(manager
-            .install("unknown-agent", &conversations, &installer, &|_| {})
+            .install("unknown-agent", &threads, &installer, &|_| {})
             .await
             .is_ok());
         let empty_root = tempfile::tempdir().unwrap();
         let empty_manager = AgentManagement::open(empty_root.path()).unwrap();
         empty_manager.set_registry(updated_registry).unwrap();
         assert!(empty_manager
-            .install(
-                "unknown-agent",
-                &Conversations::new(vec![]),
-                &installer,
-                &|_| {}
-            )
+            .install("unknown-agent", &Threads::new(vec![]), &installer, &|_| {})
             .await
             .is_err());
-        assert!(!empty_manager.catalog(&Conversations::new(vec![])).unwrap()[0].installed);
-        assert_eq!(
-            manager.catalog(&conversations).unwrap()[0].artifact,
-            original
-        );
+        assert!(!empty_manager.catalog(&Threads::new(vec![])).unwrap()[0].installed);
+        assert_eq!(manager.catalog(&threads).unwrap()[0].artifact, original);
         assert_eq!(
             std::fs::read_dir(root.path().join("agents"))
                 .unwrap()
@@ -260,7 +252,7 @@ async fn managed_runtime_retry_reuse_npm_install_authentication_and_two_response
     let login = root.path().join("login");
     let registry = Registry::parse(&serde_json::json!({"version":"1.0.0", "agents":[{"id":"unexpected-provider","name":"Unexpected", "version":"1.0.0", "distribution":{"npx":{"package":"@fixture/agent@3.2.1", "env":{"AUTH_FILE":login}}}}]}).to_string()).unwrap();
     manager.set_registry(registry.clone()).unwrap();
-    let conversations = Conversations::new(vec![]);
+    let threads = Threads::new(vec![]);
     let failed = SystemInstaller::new(
         Downloads {
             files: HashMap::new(),
@@ -269,10 +261,10 @@ async fn managed_runtime_retry_reuse_npm_install_authentication_and_two_response
         NodeRuntime::managed(runtime.clone(), "node-test".into()),
     );
     assert!(manager
-        .install("unexpected-provider", &conversations, &failed, &|_| {})
+        .install("unexpected-provider", &threads, &failed, &|_| {})
         .await
         .is_err());
-    assert!(!manager.catalog(&conversations).unwrap()[0].installed);
+    assert!(!manager.catalog(&threads).unwrap()[0].installed);
     let count = Arc::new(AtomicUsize::new(0));
     let installer = SystemInstaller::new(
         Downloads {
@@ -282,71 +274,65 @@ async fn managed_runtime_retry_reuse_npm_install_authentication_and_two_response
         NodeRuntime::managed(runtime, "node-test".into()),
     );
     manager
-        .install("unexpected-provider", &conversations, &installer, &|_| {})
+        .install("unexpected-provider", &threads, &installer, &|_| {})
         .await
         .unwrap();
     let mut registry2 = registry;
     registry2.agents[0].id = "second-provider".into();
     manager.set_registry(registry2).unwrap();
     manager
-        .install("second-provider", &conversations, &installer, &|_| {})
+        .install("second-provider", &threads, &installer, &|_| {})
         .await
         .unwrap();
     assert_eq!(count.load(Ordering::SeqCst), 1);
     assert_eq!(
-        manager.catalog(&conversations).unwrap()[0]
+        manager.catalog(&threads).unwrap()[0]
             .installed_version
             .as_deref(),
         Some("3.2.1")
     );
     let state = manager
-        .authenticate("unexpected-provider", None, &conversations)
+        .authenticate("unexpected-provider", None, &threads)
         .await
         .unwrap();
     assert!(!state.authenticated);
     assert!(manager
-        .authenticate(
-            "unexpected-provider",
-            Some("fixture-denied"),
-            &conversations
-        )
+        .authenticate("unexpected-provider", Some("fixture-denied"), &threads)
         .await
         .is_err());
     assert!(
         manager
-            .authenticate("unexpected-provider", Some("fixture-login"), &conversations)
+            .authenticate("unexpected-provider", Some("fixture-login"), &threads)
             .await
             .unwrap()
             .authenticated
     );
-    let conversation = conversations
+    let thread = threads
         .create_for_agent(root.path(), "unexpected-provider")
         .unwrap();
-    conversations.connect(conversation.id).unwrap();
+    threads.connect(thread.id).unwrap();
     for message in ["first", "second"] {
-        wait_ready(&conversations, conversation.id).await;
-        conversations
-            .send_message(conversation.id, message.into())
-            .unwrap();
+        wait_ready(&threads, thread.id).await;
+        threads.send_message(thread.id, message.into()).unwrap();
     }
-    wait_ready(&conversations, conversation.id).await;
-    assert_eq!(conversations.get(conversation.id).unwrap().turns.len(), 2);
-    conversations.shutdown().await;
+    wait_ready(&threads, thread.id).await;
+    assert_eq!(threads.get(thread.id).unwrap().turns.len(), 2);
+    threads.shutdown().await;
     drop(manager);
     let manager = AgentManagement::open(root.path()).unwrap();
-    let restored = Conversations::new(vec![]);
+    let restored = Threads::new(vec![]);
     manager.restore(&restored).unwrap();
     assert_eq!(restored.prepared_agents().len(), 2);
 }
 
-async fn wait_ready(conversations: &Conversations, id: uuid::Uuid) {
+async fn wait_ready(threads: &Threads, id: uuid::Uuid) {
     tokio::time::timeout(Duration::from_secs(10), async {
         loop {
-            let state = conversations.get(id).unwrap();
-            if matches!(state.status, ConversationStatus::SessionReady) {
+            let state = threads.get(id).unwrap();
+            if matches!(state.status, ThreadStatus::SessionReady) {
                 break;
             }
-            assert_ne!(state.status, ConversationStatus::Failed, "{state:?}");
+            assert_ne!(state.status, ThreadStatus::Failed, "{state:?}");
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
     })
@@ -380,12 +366,7 @@ async fn binary_node_entrypoint_is_resolved_from_installation_not_working_folder
     let manager = AgentManagement::open(root.path()).unwrap();
     manager.set_registry(registry(descriptor)).unwrap();
     manager
-        .install(
-            "unknown-agent",
-            &Conversations::new(vec![]),
-            &installer,
-            &|_| {},
-        )
+        .install("unknown-agent", &Threads::new(vec![]), &installer, &|_| {})
         .await
         .unwrap();
     let installations = atte_lib::storage::Store::open(&root.path().join("atte.sqlite"))
@@ -416,66 +397,59 @@ async fn uninstall_stops_live_acp_and_removes_files_before_returning() {
         },
         NodeRuntime::default(),
     );
-    let conversations = Conversations::new(vec![]);
+    let threads = Threads::new(vec![]);
     manager
-        .install("unknown-agent", &conversations, &installer, &|_| {})
+        .install("unknown-agent", &threads, &installer, &|_| {})
         .await
         .unwrap();
-    let artifact = manager.catalog(&conversations).unwrap()[0]
+    let artifact = manager.catalog(&threads).unwrap()[0]
         .artifact
         .clone()
         .unwrap();
-    let draft = conversations
+    let draft = threads
         .create_for_agent(root.path(), "unknown-agent")
         .unwrap();
-    conversations.connect(draft.id).unwrap();
-    wait_ready(&conversations, draft.id).await;
-    conversations
-        .send_message(draft.id, "first".into())
-        .unwrap();
-    wait_ready(&conversations, draft.id).await;
-    manager
-        .uninstall("unknown-agent", &conversations)
-        .await
-        .unwrap();
-    assert!(conversations
-        .send_message(draft.id, "second".into())
-        .is_err());
-    assert!(conversations.connect(draft.id).is_err());
-    let state = conversations.get(draft.id).unwrap();
+    threads.connect(draft.id).unwrap();
+    wait_ready(&threads, draft.id).await;
+    threads.send_message(draft.id, "first".into()).unwrap();
+    wait_ready(&threads, draft.id).await;
+    manager.uninstall("unknown-agent", &threads).await.unwrap();
+    assert!(threads.send_message(draft.id, "second".into()).is_err());
+    assert!(threads.connect(draft.id).is_err());
+    let state = threads.get(draft.id).unwrap();
     assert_eq!(state.turns.len(), 1);
     assert_eq!(state.turns[0].response, "Hello world");
     assert_eq!(
         state.failure,
-        Some(atte_lib::conversation::ConnectionFailure::AgentRemoved)
+        Some(atte_lib::thread::ConnectionFailure::AgentRemoved)
     );
     assert!(!artifact.exists());
-    assert!(conversations.prepared_agents().is_empty());
+    assert!(threads.prepared_agents().is_empty());
     manager
-        .install("unknown-agent", &conversations, &installer, &|_| {})
+        .install("unknown-agent", &threads, &installer, &|_| {})
         .await
         .unwrap();
-    let replacement = manager.catalog(&conversations).unwrap()[0]
+    let replacement = manager.catalog(&threads).unwrap()[0]
         .artifact
         .clone()
         .unwrap();
     assert!(replacement.exists());
     assert_ne!(artifact, replacement);
-    conversations.connect(draft.id).unwrap();
-    wait_ready(&conversations, draft.id).await;
+    threads.connect(draft.id).unwrap();
+    wait_ready(&threads, draft.id).await;
     assert_eq!(
-        conversations.get(draft.id).unwrap().remote_session_id,
+        threads.get(draft.id).unwrap().remote_session_id,
         state.remote_session_id
     );
-    let next = conversations
+    let next = threads
         .create_for_agent(root.path(), "unknown-agent")
         .unwrap();
-    conversations.connect(next.id).unwrap();
-    wait_ready(&conversations, next.id).await;
-    conversations.shutdown().await;
-    drop(conversations);
+    threads.connect(next.id).unwrap();
+    wait_ready(&threads, next.id).await;
+    threads.shutdown().await;
+    drop(threads);
     drop(manager);
     let manager = AgentManagement::open(root.path()).unwrap();
     assert!(!artifact.exists());
-    assert!(manager.catalog(&Conversations::new(vec![])).unwrap()[0].installed);
+    assert!(manager.catalog(&Threads::new(vec![])).unwrap()[0].installed);
 }

@@ -1,5 +1,5 @@
 import { AgentManagementPage } from "pages/agent-management";
-import { ConversationPage } from "pages/conversation";
+import { ThreadPage } from "pages/thread";
 import { createSignal } from "solid-js";
 import "./styles.css";
 
@@ -9,7 +9,7 @@ export default function App() {
   return (
     <>
       <div hidden={management()}>
-        <ConversationPage
+        <ThreadPage
           active={!management()}
           agentsRevision={agentsRevision()}
           onManage={() => setManagement(true)}

@@ -2,7 +2,7 @@
 #[cfg(target_os = "macos")]
 mod macos;
 
-use crate::conversation::Conversations;
+use crate::thread::Threads;
 use std::{
     future::Future,
     sync::atomic::{AtomicBool, Ordering},
@@ -114,8 +114,8 @@ fn request_quit(app: &AppHandle) {
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
         let lifecycle = app.state::<Lifecycle>();
-        let conversations = app.state::<Conversations>();
-        tokio::join!(lifecycle.operations.wait(), conversations.shutdown());
+        let threads = app.state::<Threads>();
+        tokio::join!(lifecycle.operations.wait(), threads.shutdown());
         lifecycle.finished.store(true, Ordering::Release);
         app.exit(0);
     });
