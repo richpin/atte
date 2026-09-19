@@ -19,6 +19,15 @@ impl ThreadList {
 
     pub fn publish(&mut self, metadata: ThreadMetadata) {
         self.entries.insert(metadata.id, metadata);
+        self.publish_entries();
+    }
+
+    pub fn remove(&mut self, id: Uuid) {
+        self.entries.remove(&id);
+        self.publish_entries();
+    }
+
+    fn publish_entries(&mut self) {
         let entries = self.sorted_entries();
         self.subscribers
             .retain(|subscriber| subscriber.send(entries.clone()).is_ok());

@@ -99,6 +99,14 @@ impl Store {
         Ok(())
     }
 
+    pub(crate) fn delete_thread(&self, id: uuid::Uuid) -> Result<(), StorageError> {
+        self.0
+            .lock()
+            .map_err(|_| StorageError::Unavailable)?
+            .execute("DELETE FROM threads WHERE id=?1", [id.to_string()])?;
+        Ok(())
+    }
+
     pub fn agents(&self) -> Result<Vec<StoredAgent>, StorageError> {
         let connection = self.0.lock().map_err(|_| StorageError::Unavailable)?;
         let mut statement = connection.prepare("SELECT id, registry_metadata, installed_version, artifact_path, launch_definition FROM agents ORDER BY id")?;

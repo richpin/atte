@@ -8,6 +8,8 @@
   --color-ink: #252b27;
   --color-muted: #667064;
   --color-accent: #334c3b;
+  --color-danger: #b42318;
+  --color-danger-soft: #fef3f2;
 }
 
 :root {

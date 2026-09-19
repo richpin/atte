@@ -72,6 +72,11 @@ fn get_thread(id: Uuid, threads: State<'_, Threads>) -> Result<Thread, ThreadErr
 }
 
 #[tauri::command]
+fn delete_thread(id: Uuid, threads: State<'_, Threads>) -> Result<(), ThreadError> {
+    threads.delete(id)
+}
+
+#[tauri::command]
 fn prepared_agents(threads: State<'_, Threads>) -> Vec<agent::PreparedAgent> {
     threads.prepared_agents()
 }
@@ -235,6 +240,7 @@ pub fn run() {
             authenticate_agent,
             select_working_folder,
             get_thread,
+            delete_thread,
             list_threads,
             create_thread,
             delete_queued_message,

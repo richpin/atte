@@ -26,6 +26,10 @@ export function getThread(id: string) {
   return invoke<Thread>("get_thread", { id });
 }
 
+export function deleteThread(id: string) {
+  return invoke<void>("delete_thread", { id });
+}
+
 export function sendMessage(id: string, text: string) {
   return invoke<Thread>("send_message", { id, text });
 }

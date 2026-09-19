@@ -1,6 +1,152 @@
 use atte_lib::thread::{ThreadUpdate, Threads};
 
 #[test]
+fn permanently_deletes_a_thread_and_its_queued_input() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("atte.sqlite");
+    let store = std::sync::Arc::new(atte_lib::storage::Store::open(&path).unwrap());
+    let threads = Threads::with_store(vec![atte_lib::agent::prepared_codex()], store).unwrap();
+    let deleted = threads.create(root.path()).unwrap();
+    let database = rusqlite::Connection::open(&path).unwrap();
+    database
+        .execute(
+            "UPDATE threads SET queued_messages=?2 WHERE id=?1",
+            rusqlite::params![
+                deleted.id.to_string(),
+                serde_json::to_string(&[atte_lib::thread::QueuedMessage {
+                    id: uuid::Uuid::new_v4(),
+                    text: "queued".into(),
+                }])
+                .unwrap()
+            ],
+        )
+        .unwrap();
+    threads.delete(deleted.id).unwrap();
+    let rows: i64 = database
+        .query_row(
+            "SELECT COUNT(*) FROM threads WHERE id=?1",
+            [deleted.id.to_string()],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(rows, 0);
+    drop(threads);
+    let reopened = Threads::with_store(
+        vec![],
+        std::sync::Arc::new(atte_lib::storage::Store::open(&path).unwrap()),
+    )
+    .unwrap();
+    assert_eq!(
+        (
+            matches!(
+                reopened.get(deleted.id),
+                Err(atte_lib::thread::ThreadError::NotFound(_))
+            ),
+            rows,
+        ),
+        (true, 0)
+    );
+}
+
+#[test]
+fn publishes_the_remaining_list_after_deletion() {
+    let root = tempfile::tempdir().unwrap();
+    let store = std::sync::Arc::new(
+        atte_lib::storage::Store::open(&root.path().join("atte.sqlite")).unwrap(),
+    );
+    let threads = Threads::with_store(vec![atte_lib::agent::prepared_codex()], store).unwrap();
+    let deleted = threads.create(root.path()).unwrap();
+    let remaining = threads.create(root.path()).unwrap();
+    let mut updates = threads.subscribe_list().unwrap();
+    updates.blocking_recv().unwrap();
+
+    threads.delete(deleted.id).unwrap();
+
+    assert_eq!(
+        updates
+            .blocking_recv()
+            .unwrap()
+            .into_iter()
+            .map(|entry| entry.id)
+            .collect::<Vec<_>>(),
+        vec![remaining.id]
+    );
+}
+
+#[test]
+fn keeps_the_thread_and_queue_when_local_deletion_fails() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("atte.sqlite");
+    let store = std::sync::Arc::new(atte_lib::storage::Store::open(&path).unwrap());
+    let threads = Threads::with_store(vec![atte_lib::agent::prepared_codex()], store).unwrap();
+    let draft = threads.create(root.path()).unwrap();
+    let database = rusqlite::Connection::open(&path).unwrap();
+    database
+        .execute_batch(
+            "CREATE TRIGGER reject_thread_delete BEFORE DELETE ON threads \
+             BEGIN SELECT RAISE(ABORT, 'delete rejected'); END;",
+        )
+        .unwrap();
+
+    let failed = matches!(
+        threads.delete(draft.id),
+        Err(atte_lib::thread::ThreadError::Unavailable(_))
+    );
+    let rows: i64 = database
+        .query_row(
+            "SELECT COUNT(*) FROM threads WHERE id=?1",
+            [draft.id.to_string()],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(
+        (
+            failed,
+            threads.get(draft.id).unwrap().id,
+            threads.list().unwrap()[0].id,
+            rows,
+        ),
+        (true, draft.id, draft.id, 1)
+    );
+}
+
+#[test]
+fn rejects_local_deletion_after_an_acp_session_exists() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("atte.sqlite");
+    let store = std::sync::Arc::new(atte_lib::storage::Store::open(&path).unwrap());
+    let original = Threads::with_store(vec![atte_lib::agent::prepared_codex()], store).unwrap();
+    let draft = original.create(root.path()).unwrap();
+    drop(original);
+    let database = rusqlite::Connection::open(&path).unwrap();
+    let metadata: String = database
+        .query_row(
+            "SELECT metadata FROM threads WHERE id=?1",
+            [draft.id.to_string()],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let mut metadata: serde_json::Value = serde_json::from_str(&metadata).unwrap();
+    metadata["remoteSessionId"] = serde_json::json!("remote");
+    database
+        .execute(
+            "UPDATE threads SET metadata=?2 WHERE id=?1",
+            rusqlite::params![draft.id.to_string(), metadata.to_string()],
+        )
+        .unwrap();
+    let restored = Threads::with_store(
+        vec![],
+        std::sync::Arc::new(atte_lib::storage::Store::open(&path).unwrap()),
+    )
+    .unwrap();
+
+    assert!(matches!(
+        restored.delete(draft.id),
+        Err(atte_lib::thread::ThreadError::NotReady(_))
+    ));
+}
+
+#[test]
 fn restores_queued_messages_in_order_and_keeps_the_thread_after_deletion() {
     let root = tempfile::tempdir().unwrap();
     let path = root.path().join("atte.sqlite");

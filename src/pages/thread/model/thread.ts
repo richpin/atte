@@ -13,6 +13,7 @@ import {
   connectThread,
   createThread,
   deleteQueuedMessage,
+  deleteThread as deleteThreadCommand,
   getThread,
   listThreads,
   selectWorkingFolder,
@@ -29,6 +30,7 @@ export function createThreadModel() {
   const [selecting, setSelecting] = createSignal(false);
   const [listError, setListError] = createSignal(false);
   let disposed = false;
+  const deleted = new Set<string>();
   let selection = 0;
   let view = 0;
   onCleanup(() => {
@@ -42,7 +44,9 @@ export function createThreadModel() {
       const version = listVersion;
       try {
         setListError(false);
-        const entries = await listThreads();
+        const entries = (await listThreads()).filter(
+          (entry) => !deleted.has(entry.id),
+        );
         return version === listVersion ? entries : (history() ?? entries);
       } catch {
         if (version !== listVersion || disposed) return history() ?? [];
@@ -56,7 +60,7 @@ export function createThreadModel() {
       subscribeThreadList(
         (entries) => {
           listVersion++;
-          updateList(entries);
+          updateList(entries.filter((entry) => !deleted.has(entry.id)));
           setListError(false);
         },
         () => setListError(true),
@@ -88,6 +92,7 @@ export function createThreadModel() {
     !streamError();
 
   function applyThread(updatedThread: Thread) {
+    if (deleted.has(updatedThread.id)) return;
     const current = thread();
     if (
       current?.id === updatedThread.id &&
@@ -99,6 +104,7 @@ export function createThreadModel() {
   }
 
   function remember(updatedThread: Thread) {
+    if (deleted.has(updatedThread.id)) return;
     listVersion++;
     const {
       id,
@@ -137,6 +143,7 @@ export function createThreadModel() {
   }
 
   function display(updatedThread: Thread) {
+    if (deleted.has(updatedThread.id)) return;
     view++;
     setError(undefined);
     setSending(false);
@@ -155,7 +162,7 @@ export function createThreadModel() {
     setError(undefined);
     try {
       const updatedThread = await getThread(id);
-      if (attempt !== selection) return;
+      if (attempt !== selection || deleted.has(id)) return;
       display(updatedThread);
     } catch (cause) {
       if (attempt === selection)
@@ -339,6 +346,27 @@ export function createThreadModel() {
     }
   }
 
+  async function removeThread(id: string) {
+    await deleteThreadCommand(id);
+    deleted.add(id);
+    listVersion++;
+    updateList((previous) =>
+      (previous ?? []).filter((entry) => entry.id !== id),
+    );
+    if (thread()?.id !== id) return;
+    selection++;
+    view++;
+    setThread(undefined);
+    setError(undefined);
+    setSending(false);
+    setAnswering(undefined);
+    setCancelling(undefined);
+    setConnectingId(undefined);
+    setMessage("");
+    setConnectionRejected(false);
+    setStreamError(false);
+  }
+
   return {
     thread,
     error,
@@ -366,6 +394,7 @@ export function createThreadModel() {
     connect,
     selectFolder,
     createInFolder,
+    removeThread,
     retrySubscription: () => setSubscriptionAttempt((value) => value + 1),
   };
 }

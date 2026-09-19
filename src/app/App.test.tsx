@@ -103,6 +103,16 @@ beforeEach(() => {
   });
 });
 
+function threadMenu(title: string): HTMLButtonElement {
+  const row = screen.getByRole("button", { name: title }).parentElement;
+  expect(row).not.toBeNull();
+  const menu = row?.querySelector<HTMLButtonElement>(
+    `[aria-label="${title} 메뉴"]`,
+  );
+  expect(menu).not.toBeNull();
+  return menu as HTMLButtonElement;
+}
+
 it("groups threads by folder, collapses projects and creates within the selected folder", async () => {
   const saved = {
     id: "one",
@@ -145,7 +155,7 @@ it("groups threads by folder, collapses projects and creates within the selected
   ).toHaveLength(1);
   await userEvent.click(project);
   expect(
-    screen.queryByRole("button", { name: /First project task/ }),
+    screen.queryByRole("button", { name: "First project task" }),
   ).toBeNull();
   await userEvent.click(project);
   receiveList([
@@ -154,7 +164,7 @@ it("groups threads by folder, collapses projects and creates within the selected
   ]);
   expect(
     await screen.findByRole("button", {
-      name: /First project task.*승인 대기/,
+      name: /^First project task.*승인 대기$/,
     }),
   ).toBeTruthy();
   await userEvent.click(screen.getByRole("button", { name: "사이드바 닫기" }));
@@ -168,6 +178,231 @@ it("groups threads by folder, collapses projects and creates within the selected
     agentId: "codex",
   });
   expect(invoke).toHaveBeenCalledWith("connect_thread", { id: "new" });
+});
+
+it("opens the same delete action from the row menu and right click, then cancels safely", async () => {
+  const saved = {
+    id: "delete-me",
+    title: "삭제할 초안",
+    workingFolder: "/work/project",
+    agentId: "codex",
+    status: "disconnected",
+    remoteSessionId: null,
+  };
+  vi.mocked(invoke).mockImplementation(async (command) => {
+    if (command === "list_threads") return [saved];
+    if (command === "subscribe_thread_list") return "list";
+    if (command === "prepared_agents") return [{ id: "codex", name: "Codex" }];
+  });
+  render(() => <App />);
+
+  await userEvent.click(
+    await screen.findByRole("button", { name: "삭제할 초안 메뉴" }),
+  );
+  await userEvent.click(screen.getByRole("menuitem", { name: "삭제" }));
+  expect(
+    screen.getByRole("heading", { name: "스레드를 삭제할까요?" }),
+  ).toBeTruthy();
+  expect(
+    screen.getByText(
+      "이 스레드가 영구적으로 삭제됩니다. 이 작업은 취소할 수 없습니다.",
+    ),
+  ).toBeTruthy();
+  await userEvent.click(screen.getByRole("button", { name: "취소" }));
+  await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+  expect(
+    vi
+      .mocked(invoke)
+      .mock.calls.some(([command]) => command === "delete_thread"),
+  ).toBe(false);
+
+  const menu = await waitFor(() => threadMenu("삭제할 초안"));
+  const row = menu.parentElement;
+  if (!row) throw new Error("thread menu must belong to its row");
+  fireEvent.contextMenu(row);
+  expect(await screen.findByRole("menuitem", { name: "삭제" })).toBeTruthy();
+});
+
+it("keeps confirmation open while deleting the selected thread and ignores late updates", async () => {
+  const selected = {
+    id: "selected",
+    title: "현재 스레드",
+    workingFolder: "/work/project",
+    agentId: "codex",
+    status: "sessionReady",
+    remoteSessionId: null,
+    authentication: "authenticated",
+    revision: 1,
+    turns: [],
+    permissions: [],
+    queuedMessages: [],
+  };
+  const other = { ...selected, id: "other", title: "남은 스레드" };
+  let receiveList!: (entries: (typeof selected)[]) => void;
+  let finishDelete!: () => void;
+  const original = vi.mocked(invoke).getMockImplementation();
+  vi.mocked(invoke).mockImplementation((command, args) => {
+    if (command === "list_threads") return Promise.resolve([selected, other]);
+    if (command === "get_thread") return Promise.resolve(selected);
+    if (command === "subscribe_thread_list") {
+      receiveList = (args as { channel: { onmessage: typeof receiveList } })
+        .channel.onmessage;
+      return Promise.resolve("list");
+    }
+    if (command === "delete_thread")
+      return new Promise<void>((resolve) => {
+        finishDelete = resolve;
+      });
+    return original?.(command, args) ?? Promise.resolve();
+  });
+  render(() => <App />);
+  await userEvent.click(
+    await screen.findByRole("button", { name: "현재 스레드" }),
+  );
+  await userEvent.type(screen.getByRole("textbox"), "작성 중인 입력");
+  await userEvent.click(threadMenu("현재 스레드"));
+  await userEvent.click(screen.getByRole("menuitem", { name: "삭제" }));
+  await userEvent.click(screen.getByRole("button", { name: "삭제" }));
+  expect(screen.getByRole("alertdialog")).toBeTruthy();
+  expect(screen.getByRole("button", { name: "삭제 중…" })).toHaveProperty(
+    "disabled",
+    true,
+  );
+
+  finishDelete();
+  expect(
+    await screen.findByRole("heading", { name: "어디에서 작업할까요?" }),
+  ).toBeTruthy();
+  expect(screen.queryByRole("button", { name: "현재 스레드" })).toBeNull();
+  expect(screen.getByRole("button", { name: "남은 스레드" })).toBeTruthy();
+  receiveList([selected, other]);
+  expect(screen.queryByRole("button", { name: "현재 스레드" })).toBeNull();
+  expect(
+    vi
+      .mocked(invoke)
+      .mock.calls.some(
+        ([command, args]) =>
+          command === "unsubscribe_thread" &&
+          (args as { subscription?: string }).subscription === "subscription-1",
+      ),
+  ).toBe(true);
+});
+
+it("does not reopen a deleted thread when an overlapping open finishes late", async () => {
+  const saved = {
+    id: "late-open",
+    title: "느린 스레드",
+    workingFolder: "/work/project",
+    agentId: "codex",
+    status: "disconnected",
+    remoteSessionId: null,
+    revision: 0,
+    turns: [],
+    permissions: [],
+    queuedMessages: [],
+  };
+  let finishOpen!: (thread: typeof saved) => void;
+  const original = vi.mocked(invoke).getMockImplementation();
+  vi.mocked(invoke).mockImplementation((command, args) => {
+    if (command === "list_threads") return Promise.resolve([saved]);
+    if (command === "get_thread")
+      return new Promise<typeof saved>((resolve) => {
+        finishOpen = resolve;
+      });
+    if (command === "delete_thread") return Promise.resolve();
+    return original?.(command, args) ?? Promise.resolve();
+  });
+  render(() => <App />);
+  await userEvent.click(
+    await screen.findByRole("button", { name: "느린 스레드" }),
+  );
+  await userEvent.click(threadMenu("느린 스레드"));
+  await userEvent.click(screen.getByRole("menuitem", { name: "삭제" }));
+  await userEvent.click(screen.getByRole("button", { name: "삭제" }));
+  finishOpen(saved);
+
+  expect(
+    await screen.findByRole("heading", { name: "어디에서 작업할까요?" }),
+  ).toBeTruthy();
+  expect(
+    vi
+      .mocked(invoke)
+      .mock.calls.some(([command]) => command === "connect_thread"),
+  ).toBe(false);
+});
+
+it("preserves the selected thread and draft when deleting another thread", async () => {
+  const current = {
+    id: "current",
+    title: "계속 작업",
+    workingFolder: "/work/project",
+    agentId: "codex",
+    status: "sessionReady",
+    authentication: "authenticated",
+    revision: 1,
+    turns: [],
+    permissions: [],
+    queuedMessages: [],
+  };
+  const other = { ...current, id: "other", title: "다른 스레드" };
+  const original = vi.mocked(invoke).getMockImplementation();
+  vi.mocked(invoke).mockImplementation((command, args) => {
+    if (command === "list_threads") return Promise.resolve([current, other]);
+    if (command === "get_thread") return Promise.resolve(current);
+    if (command === "delete_thread") return Promise.resolve();
+    return original?.(command, args) ?? Promise.resolve();
+  });
+  render(() => <App />);
+  await userEvent.click(
+    await screen.findByRole("button", { name: "계속 작업" }),
+  );
+  await userEvent.type(screen.getByRole("textbox"), "유지할 입력");
+  await userEvent.click(threadMenu("다른 스레드"));
+  await userEvent.click(screen.getByRole("menuitem", { name: "삭제" }));
+  await userEvent.click(screen.getByRole("button", { name: "삭제" }));
+
+  await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+  await waitFor(() =>
+    expect(screen.queryByRole("button", { name: "다른 스레드" })).toBeNull(),
+  );
+  expect(
+    await screen.findByRole("heading", { name: "계속 작업" }),
+  ).toBeTruthy();
+  expect(screen.getByRole("textbox")).toHaveProperty("value", "유지할 입력");
+});
+
+it("keeps the thread and allows retry after local deletion fails", async () => {
+  const saved = {
+    id: "failure",
+    title: "실패할 삭제",
+    workingFolder: "/work/project",
+    agentId: "codex",
+    status: "disconnected",
+  };
+  let attempts = 0;
+  vi.mocked(invoke).mockImplementation(async (command) => {
+    if (command === "list_threads") return [saved];
+    if (command === "subscribe_thread_list") return "list";
+    if (command === "prepared_agents") return [{ id: "codex", name: "Codex" }];
+    if (command === "delete_thread") {
+      attempts++;
+      if (attempts === 1)
+        throw { code: "unavailable", message: "로컬 저장소 오류" };
+    }
+  });
+  render(() => <App />);
+  await screen.findByRole("button", { name: "실패할 삭제" });
+  await userEvent.click(threadMenu("실패할 삭제"));
+  await userEvent.click(screen.getByRole("menuitem", { name: "삭제" }));
+  await userEvent.click(screen.getByRole("button", { name: "삭제" }));
+  expect((await screen.findByRole("alert")).textContent).toContain(
+    "로컬 저장소 오류",
+  );
+  expect(screen.getByText("실패할 삭제")).toBeTruthy();
+
+  await userEvent.click(screen.getByRole("button", { name: "삭제" }));
+  await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+  expect(attempts).toBe(2);
 });
 
 it("keeps the saved list accessible without agents and restores on selection only", async () => {
@@ -202,6 +437,7 @@ it("keeps the saved list accessible without agents and restores on selection onl
   });
   render(() => <App />);
   await screen.findByRole("button", { name: /지난 작업/ });
+  expect(screen.queryByRole("button", { name: "지난 작업 메뉴" })).toBeNull();
   expect(screen.queryByRole("heading", { name: "에이전트 관리" })).toBeNull();
   expect(
     vi

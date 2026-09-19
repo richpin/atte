@@ -45,6 +45,7 @@ export function ThreadPage(props: {
     answer,
     cancel,
     connect,
+    removeThread,
     retrySubscription,
   } = model;
   const [agentsFailed, setAgentsFailed] = createSignal(false);
@@ -174,6 +175,7 @@ export function ThreadPage(props: {
             onRetry={() => void reloadList()}
             onSelect={(id) => void openThread(id)}
             onCreate={(folder) => void createInFolder(folder)}
+            onDelete={removeThread}
             onClose={() => setSidebarOpen(false)}
           />
         </Show>

@@ -486,6 +486,34 @@ impl Threads {
         Ok(thread)
     }
 
+    /// Permanently removes one app-owned thread and its queued input locally.
+    ///
+    /// # Errors
+    /// Returns an error without changing in-memory state when local persistence fails.
+    pub fn delete(&self, id: Uuid) -> Result<(), ThreadError> {
+        let mut state = self.lock()?;
+        let entry = state.entries.get_mut(&id).ok_or_else(not_found)?;
+        let mut current = entry.state.lock().map_err(|_| unavailable())?;
+        if current.thread.remote_session_id.is_some() {
+            return Err(ThreadError::NotReady(
+                "원격 세션이 없는 로컬 스레드만 삭제할 수 있습니다.".into(),
+            ));
+        }
+        let mut list = self.list.lock().map_err(|_| unavailable())?;
+        if let Some(store) = &self.store {
+            store
+                .delete_thread(id)
+                .map_err(|error| ThreadError::Unavailable(error.to_string()))?;
+        }
+        current.generation += 1;
+        current.clear_permissions();
+        current.subscribers.clear();
+        drop(current);
+        state.entries.remove(&id);
+        list.remove(id);
+        Ok(())
+    }
+
     /// Starts one connection attempt. Concurrent requests return the same state.
     /// Requires a Tokio runtime; failures are observed through `get`.
     pub fn connect(&self, id: Uuid) -> Result<Thread, ThreadError> {
