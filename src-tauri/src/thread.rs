@@ -179,14 +179,14 @@ struct Entry {
 }
 
 struct SessionCommands {
-    prompts: mpsc::UnboundedSender<Prompt>,
-    cancellations: mpsc::UnboundedSender<Uuid>,
+    inputs: crate::agent_runtime::SessionInputSenders,
+    runtime: mpsc::UnboundedSender<crate::agent_runtime::RuntimeCommand>,
 }
 
 struct Runtime {
     agent: AgentDefinition,
     folder: PathBuf,
-    sessions: mpsc::UnboundedSender<crate::agent_runtime::Session>,
+    commands: mpsc::UnboundedSender<crate::agent_runtime::RuntimeCommand>,
     stop: Option<oneshot::Sender<()>>,
     task: Option<tokio::task::JoinHandle<()>>,
 }
@@ -486,7 +486,7 @@ impl Threads {
         Ok(thread)
     }
 
-    /// Permanently removes one app-owned thread and its queued input locally.
+    /// Permanently removes one app-owned thread locally, then requests remote cleanup.
     ///
     /// # Errors
     /// Returns an error without changing in-memory state when local persistence fails.
@@ -494,11 +494,17 @@ impl Threads {
         let mut state = self.lock()?;
         let entry = state.entries.get_mut(&id).ok_or_else(not_found)?;
         let mut current = entry.state.lock().map_err(|_| unavailable())?;
-        if current.thread.remote_session_id.is_some() {
-            return Err(ThreadError::NotReady(
-                "원격 세션이 없는 로컬 스레드만 삭제할 수 있습니다.".into(),
-            ));
-        }
+        let remote_session_id = match current.thread.remote_session_id.clone() {
+            Some(session_id) => {
+                if entry.runtime.is_none() {
+                    return Err(ThreadError::NotReady(
+                        "연결된 원격 세션만 현재 삭제할 수 있습니다.".into(),
+                    ));
+                }
+                Some(session_id)
+            }
+            None => None,
+        };
         let mut list = self.list.lock().map_err(|_| unavailable())?;
         if let Some(store) = &self.store {
             store
@@ -509,8 +515,23 @@ impl Threads {
         current.clear_permissions();
         current.subscribers.clear();
         drop(current);
-        state.entries.remove(&id);
+        let mut removed = state.entries.remove(&id).ok_or_else(not_found)?;
         list.remove(id);
+        if let Some(session_id) = remote_session_id {
+            let SessionCommands { inputs, runtime } =
+                removed.runtime.take().ok_or_else(unavailable)?;
+            if runtime
+                .send(crate::agent_runtime::RuntimeCommand::DeleteSession {
+                    owner: id,
+                    session_id,
+                    inputs_to_close: inputs,
+                })
+                .is_err()
+            {
+                eprintln!("ACP session deletion could not be queued");
+            }
+        }
+        drop(removed);
         Ok(())
     }
 
@@ -572,10 +593,6 @@ impl Threads {
         let (prompts, requests) = mpsc::unbounded_channel();
         let (cancellations, cancelled) = mpsc::unbounded_channel();
         let folder = thread.working_folder.clone();
-        entry.runtime = Some(SessionCommands {
-            prompts,
-            cancellations,
-        });
         drop(current);
         let session = crate::agent_runtime::Session {
             id,
@@ -587,7 +604,7 @@ impl Threads {
         let runtime = if let Some(index) = state.runtimes.iter().position(|runtime| {
             runtime.agent == agent
                 && runtime.folder == folder
-                && !runtime.sessions.is_closed()
+                && !runtime.commands.is_closed()
                 && runtime
                     .task
                     .as_ref()
@@ -595,7 +612,7 @@ impl Threads {
         }) {
             &mut state.runtimes[index]
         } else {
-            let (sessions, receiver) = mpsc::unbounded_channel();
+            let (commands, receiver) = mpsc::unbounded_channel();
             let (stop, stopped) = oneshot::channel();
             let task = handle.spawn(crate::agent_runtime::run(
                 agent.clone(),
@@ -606,14 +623,27 @@ impl Threads {
             state.runtimes.push(Runtime {
                 agent,
                 folder,
-                sessions,
+                commands,
                 stop: Some(stop),
                 task: Some(task),
             });
             state.runtimes.last_mut().ok_or_else(unavailable)?
         };
-        if let Err(error) = runtime.sessions.send(session) {
-            error.0.updates.modify(|thread| {
+        let runtime = runtime.commands.clone();
+        state.entries.get_mut(&id).ok_or_else(not_found)?.runtime = Some(SessionCommands {
+            inputs: crate::agent_runtime::SessionInputSenders {
+                prompts,
+                cancellations,
+            },
+            runtime: runtime.clone(),
+        });
+        if let Err(error) =
+            runtime.send(crate::agent_runtime::RuntimeCommand::StartSession(session))
+        {
+            let crate::agent_runtime::RuntimeCommand::StartSession(session) = error.0 else {
+                return Err(unavailable());
+            };
+            session.updates.modify(|thread| {
                 thread.status = ThreadStatus::Failed;
                 thread.failure = Some(ConnectionFailure::ConnectionClosed);
             });
@@ -674,6 +704,7 @@ impl Threads {
         let runtime = entry.runtime.as_ref().ok_or_else(unavailable)?;
         let turn = Uuid::new_v4();
         runtime
+            .inputs
             .prompts
             .send(Prompt {
                 turn,
@@ -735,6 +766,7 @@ impl Threads {
             .runtime
             .as_ref()
             .ok_or_else(unavailable)?
+            .inputs
             .cancellations
             .send(turn)
             .map_err(|_| unavailable())?;
@@ -802,7 +834,7 @@ impl Threads {
                         if let (Some(runtime), Some(turn)) =
                             (&entry.runtime, current.thread.turns.last())
                         {
-                            let _ = runtime.cancellations.send(turn.id);
+                            let _ = runtime.inputs.cancellations.send(turn.id);
                         }
                         current.publish();
                     }

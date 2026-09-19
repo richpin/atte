@@ -187,7 +187,7 @@ it("opens the same delete action from the row menu and right click, then cancels
     workingFolder: "/work/project",
     agentId: "codex",
     status: "disconnected",
-    remoteSessionId: null,
+    remoteSessionId: "remote-delete-me",
   };
   vi.mocked(invoke).mockImplementation(async (command) => {
     if (command === "list_threads") return [saved];
@@ -436,15 +436,15 @@ it("keeps the saved list accessible without agents and restores on selection onl
     }
   });
   render(() => <App />);
-  await screen.findByRole("button", { name: /지난 작업/ });
-  expect(screen.queryByRole("button", { name: "지난 작업 메뉴" })).toBeNull();
+  await screen.findByRole("button", { name: "지난 작업" });
+  expect(screen.getByRole("button", { name: "지난 작업 메뉴" })).toBeTruthy();
   expect(screen.queryByRole("heading", { name: "에이전트 관리" })).toBeNull();
   expect(
     vi
       .mocked(invoke)
       .mock.calls.some(([command]) => command === "connect_thread"),
   ).toBe(false);
-  await userEvent.click(screen.getByRole("button", { name: /지난 작업/ }));
+  await userEvent.click(screen.getByRole("button", { name: "지난 작업" }));
   await screen.findByText(/에이전트를 설치한 뒤/);
   await userEvent.click(
     screen.getByRole("button", { name: "설치·인증 관리 열기" }),
@@ -480,7 +480,7 @@ it("loads selected history once and keeps newer list metadata when an older thre
   });
   render(() => <App />);
   await userEvent.click(
-    await screen.findByRole("button", { name: /저장된 제목/ }),
+    await screen.findByRole("button", { name: "저장된 제목" }),
   );
   await screen.findByText("이전 스레드를 불러오는 중…");
   expect(screen.getByRole("button", { name: "전송" })).toHaveProperty(
@@ -503,10 +503,10 @@ it("loads selected history once and keeps newer list metadata when an older thre
   });
   expect(await screen.findAllByText("과거 답변")).toHaveLength(1);
   receive({ ...saved, revision: 1 });
-  expect(screen.getByRole("button", { name: /복원한 제목/ })).toBeTruthy();
-  expect(screen.queryByRole("button", { name: /저장된 제목/ })).toBeNull();
+  expect(screen.getByRole("button", { name: "복원한 제목" })).toBeTruthy();
+  expect(screen.queryByRole("button", { name: "저장된 제목" })).toBeNull();
   await userEvent.type(screen.getByRole("textbox"), "작성 중인 질문");
-  await userEvent.click(screen.getByRole("button", { name: /복원한 제목/ }));
+  await userEvent.click(screen.getByRole("button", { name: "복원한 제목" }));
   expect(screen.getByRole("textbox")).toHaveProperty("value", "작성 중인 질문");
   expect(
     vi
@@ -569,7 +569,7 @@ it("returns from setup to the same thread and resumes only after an explicit ret
   });
   render(() => <App />);
   await userEvent.click(
-    await screen.findByRole("button", { name: /인증이 필요한 작업/ }),
+    await screen.findByRole("button", { name: "인증이 필요한 작업" }),
   );
   await userEvent.click(
     await screen.findByRole("button", { name: "로그인 안내 열기" }),

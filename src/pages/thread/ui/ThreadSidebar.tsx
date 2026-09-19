@@ -136,7 +136,6 @@ export function ThreadSidebar(props: {
                     return (
                       <ContextMenu>
                         <ContextMenu.Trigger
-                          disabled={Boolean(entry.remoteSessionId)}
                           ref={(element) => {
                             row = element;
                           }}
@@ -174,28 +173,26 @@ export function ThreadSidebar(props: {
                               </span>
                             </Show>
                           </button>
-                          <Show when={!entry.remoteSessionId}>
-                            <button
-                              type="button"
-                              aria-label={`${entry.title || "새 스레드"} 메뉴`}
-                              class="mr-1 shrink-0 rounded p-1 text-muted opacity-0 focus:opacity-100 group-hover:opacity-100 group-focus-within:opacity-100 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
-                              onClick={(event) => {
-                                if (!row) return;
-                                const bounds =
-                                  event.currentTarget.getBoundingClientRect();
-                                row.dispatchEvent(
-                                  new MouseEvent("contextmenu", {
-                                    bubbles: true,
-                                    cancelable: true,
-                                    clientX: bounds.right,
-                                    clientY: bounds.bottom,
-                                  }),
-                                );
-                              }}
-                            >
-                              <span aria-hidden="true">⋮</span>
-                            </button>
-                          </Show>
+                          <button
+                            type="button"
+                            aria-label={`${entry.title || "새 스레드"} 메뉴`}
+                            class="mr-1 shrink-0 rounded p-1 text-muted opacity-0 focus:opacity-100 group-hover:opacity-100 group-focus-within:opacity-100 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
+                            onClick={(event) => {
+                              if (!row) return;
+                              const bounds =
+                                event.currentTarget.getBoundingClientRect();
+                              row.dispatchEvent(
+                                new MouseEvent("contextmenu", {
+                                  bubbles: true,
+                                  cancelable: true,
+                                  clientX: bounds.right,
+                                  clientY: bounds.bottom,
+                                }),
+                              );
+                            }}
+                          >
+                            <span aria-hidden="true">⋮</span>
+                          </button>
                         </ContextMenu.Trigger>
                         <ContextMenu.Portal>
                           <ContextMenu.Content class={menuClass}>

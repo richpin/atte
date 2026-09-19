@@ -7,10 +7,23 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     let mut active = HashMap::<String, Value>::new();
     for line in io::stdin().lock().lines() {
         let request: Value = serde_json::from_str(&line?)?;
+        let method = request["method"].as_str().unwrap_or_default();
         let session = request["params"]["sessionId"].as_str().unwrap_or_default();
-        let result = match request["method"].as_str().unwrap_or_default() {
+        if let Some(path) = env::var_os("REQUEST_LOG") {
+            writeln!(
+                fs::OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open(path)?,
+                "{method} {session}"
+            )?;
+        }
+        let result = match method {
             "initialize" => {
-                json!({"protocolVersion":1,"agentCapabilities":{"loadSession":true},"authMethods":[]})
+                let session_capabilities = env::var_os("DELETE_MODE")
+                    .is_some()
+                    .then(|| json!({"delete":{}}));
+                json!({"protocolVersion":1,"agentCapabilities":{"loadSession":true,"sessionCapabilities":session_capabilities.unwrap_or_default()},"authMethods":[]})
             }
             "session/new" => {
                 sessions += 1;
@@ -46,6 +59,27 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                     )?;
                 }
                 continue;
+            }
+            "session/delete" => {
+                let mode = env::var("DELETE_MODE").unwrap_or_default();
+                if mode == "delayed" {
+                    send(
+                        &mut output,
+                        json!({"jsonrpc":"2.0","method":"session/update","params":{"sessionId":session,"update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"late deleted output"}}}}),
+                    )?;
+                    continue;
+                }
+                if mode == "error" {
+                    send(
+                        &mut output,
+                        json!({"jsonrpc":"2.0","id":request["id"],"error":{"code":-32603,"message":"delete rejected with private fixture details"}}),
+                    )?;
+                    continue;
+                }
+                if mode == "close" {
+                    process::exit(17);
+                }
+                json!({})
             }
             "" => {
                 if request["result"]["outcome"]["outcome"] == "selected" {

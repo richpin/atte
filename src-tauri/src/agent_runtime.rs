@@ -8,11 +8,11 @@ use crate::{
 use agent_client_protocol::{
     schema::{
         v1::{
-            AgentCapabilities, CancelNotification, ContentBlock, InitializeRequest,
-            LoadSessionRequest, NewSessionRequest, PromptRequest, RequestPermissionOutcome,
-            RequestPermissionRequest, RequestPermissionResponse, ResumeSessionRequest,
-            SelectedPermissionOutcome, SessionId, SessionNotification, SessionUpdate,
-            ToolCallContent, ToolCallUpdate, ToolCallUpdateFields,
+            AgentCapabilities, CancelNotification, ContentBlock, DeleteSessionRequest,
+            InitializeRequest, LoadSessionRequest, NewSessionRequest, PromptRequest,
+            RequestPermissionOutcome, RequestPermissionRequest, RequestPermissionResponse,
+            ResumeSessionRequest, SelectedPermissionOutcome, SessionId, SessionNotification,
+            SessionUpdate, ToolCallContent, ToolCallUpdate, ToolCallUpdateFields,
         },
         ProtocolVersion,
     },
@@ -41,6 +41,20 @@ pub(crate) struct Session {
     pub cancellations: mpsc::UnboundedReceiver<Uuid>,
 }
 
+pub(crate) struct SessionInputSenders {
+    pub prompts: mpsc::UnboundedSender<Prompt>,
+    pub cancellations: mpsc::UnboundedSender<Uuid>,
+}
+
+pub(crate) enum RuntimeCommand {
+    StartSession(Session),
+    DeleteSession {
+        owner: Uuid,
+        session_id: String,
+        inputs_to_close: SessionInputSenders,
+    },
+}
+
 struct Route {
     owner: Uuid,
     updates: RuntimeUpdates,
@@ -53,7 +67,7 @@ type Routes = Arc<Mutex<HashMap<String, Route>>>;
 pub(crate) async fn run(
     agent: AgentDefinition,
     folder: PathBuf,
-    mut sessions: mpsc::UnboundedReceiver<Session>,
+    mut commands: mpsc::UnboundedReceiver<RuntimeCommand>,
     mut stop: oneshot::Receiver<()>,
 ) {
     let mut command = Command::new(&agent.command);
@@ -70,8 +84,11 @@ pub(crate) async fn run(
     let mut child = match command.spawn() {
         Ok(child) => child,
         Err(error) => {
-            sessions.close();
-            while let Some(session) = sessions.recv().await {
+            commands.close();
+            while let Some(command) = commands.recv().await {
+                let RuntimeCommand::StartSession(session) = command else {
+                    continue;
+                };
                 session.updates.connection_failed(
                     if error.kind() == std::io::ErrorKind::NotFound {
                         ConnectionFailure::ExecutableNotFound
@@ -156,28 +173,57 @@ pub(crate) async fn run(
                 tokio::select! {
                     _ = connection.incoming_closed() => return Ok(ConnectionFailure::ConnectionClosed),
                     Some((id, failure)) = completions.recv() => {
-                        let remaining = participants.lock().map(|all| all.len()).unwrap_or_default();
+                        let participant = participants.lock().map(|mut all| {
+                            let remaining = all.len();
+                            all.contains_key(&id).then(|| {
+                                let updates = (remaining > 1).then(|| all.remove(&id)).flatten();
+                                (remaining, updates)
+                            })
+                        }).unwrap_or_default();
+                        let Some((remaining, updates)) = participant else {
+                            if let Ok(mut routes) = routes.lock() { routes.retain(|_, route| route.owner != id); }
+                            continue;
+                        };
                         // A sole failed session keeps the old reap-before-retry contract.
                         if remaining <= 1 { return Ok(failure); }
-                        if let Ok(mut all) = participants.lock() {
-                            if let Some(updates) = all.remove(&id) { updates.connection_failed(failure); }
-                        }
+                        if let Some(updates) = updates { updates.connection_failed(failure); }
                         if let Ok(mut routes) = routes.lock() { routes.retain(|_, route| route.owner != id); }
                     },
-                    session = sessions.recv() => {
-                        let Some(session) = session else { return Ok(ConnectionFailure::ConnectionClosed); };
-                        if let Ok(mut all) = participants.lock() { all.insert(session.id, session.updates.clone()); }
-                        let finished = finished.clone();
-                        let connection_task = connection.clone();
-                        let capabilities = initialized.agent_capabilities.clone();
-                        let folder = folder.clone();
-                        let routes = routes.clone();
-                        connection.spawn(async move {
-                            let id = session.id;
-                            let failure = run_session(connection_task, capabilities, folder, routes, session).await;
-                            let _ = finished.send((id, failure));
-                            Ok(())
-                        })?;
+                    command = commands.recv() => {
+                        let Some(command) = command else { return Ok(ConnectionFailure::ConnectionClosed); };
+                        match command {
+                            RuntimeCommand::StartSession(session) => {
+                                if let Ok(mut all) = participants.lock() { all.insert(session.id, session.updates.clone()); }
+                                let finished = finished.clone();
+                                let connection_task = connection.clone();
+                                let capabilities = initialized.agent_capabilities.clone();
+                                let folder = folder.clone();
+                                let routes = routes.clone();
+                                connection.spawn(async move {
+                                    let id = session.id;
+                                    let failure = run_session(connection_task, capabilities, folder, routes, session).await;
+                                    let _ = finished.send((id, failure));
+                                    Ok(())
+                                })?;
+                            }
+                            RuntimeCommand::DeleteSession { owner, session_id, inputs_to_close } => {
+                                if let Ok(mut all) = participants.lock() { all.remove(&owner); }
+                                if let Ok(mut routes) = routes.lock() { routes.retain(|_, route| route.owner != owner); }
+                                drop(inputs_to_close);
+                                if initialized.agent_capabilities.session_capabilities.delete.is_none() {
+                                    continue;
+                                }
+                                let deletion = connection.clone();
+                                if connection.spawn(async move {
+                                    if deletion.send_request(DeleteSessionRequest::new(session_id)).block_task().await.is_err() {
+                                        eprintln!("ACP session deletion failed");
+                                    }
+                                    Ok(())
+                                }).is_err() {
+                                    eprintln!("ACP session deletion could not be started");
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -200,15 +246,17 @@ pub(crate) async fn run(
     };
     drop(group);
     drop(protocol);
-    sessions.close();
+    commands.close();
     let _ = child.kill().await;
     let _ = child.wait().await;
     let mut all = participants
         .lock()
         .map(|mut all| std::mem::take(&mut *all))
         .unwrap_or_default();
-    while let Some(session) = sessions.recv().await {
-        all.insert(session.id, session.updates);
+    while let Some(command) = commands.recv().await {
+        if let RuntimeCommand::StartSession(session) = command {
+            all.insert(session.id, session.updates);
+        }
     }
     for updates in all.into_values() {
         match &failure {

@@ -219,6 +219,165 @@ async fn shared_connection_isolates_sessions_permissions_and_cancellation() {
 }
 
 #[tokio::test]
+async fn deleting_an_active_session_is_detached_and_keeps_shared_sessions_usable() {
+    let folder = tempfile::tempdir().unwrap();
+    let log = folder.path().join("requests.log");
+    let mut agent = mock_agent();
+    agent.env.insert("FIXTURE_MODE".into(), "concurrent".into());
+    agent.env.insert("DELETE_MODE".into(), "delayed".into());
+    agent
+        .env
+        .insert("REQUEST_LOG".into(), log.to_string_lossy().into());
+    let threads = Threads::new(vec![agent]);
+    let deleted = threads.create(folder.path()).unwrap();
+    let remaining = threads.create(folder.path()).unwrap();
+    threads.connect(deleted.id).unwrap();
+    settle(&threads, deleted.id).await;
+    threads.connect(remaining.id).unwrap();
+    settle(&threads, remaining.id).await;
+    threads.send_message(deleted.id, "hold".into()).unwrap();
+
+    threads.delete(deleted.id).unwrap();
+
+    assert!(threads.get(deleted.id).is_err());
+    wait_for_request(&log, "session/delete remote-1").await;
+    threads
+        .send_message(remaining.id, "independent".into())
+        .unwrap();
+    assert_eq!(
+        settle(&threads, remaining.id).await.turns[0].response,
+        "reply:independent"
+    );
+    let requests = std::fs::read_to_string(log).unwrap();
+    assert!(!requests.contains("session/cancel remote-1"));
+    assert!(threads.get(deleted.id).is_err());
+    threads.shutdown().await;
+}
+
+#[tokio::test]
+async fn deleting_without_remote_capability_skips_the_request_and_keeps_shared_sessions_usable() {
+    let folder = tempfile::tempdir().unwrap();
+    let log = folder.path().join("requests.log");
+    let mut agent = mock_agent();
+    agent.env.insert("FIXTURE_MODE".into(), "concurrent".into());
+    agent
+        .env
+        .insert("REQUEST_LOG".into(), log.to_string_lossy().into());
+    let threads = Threads::new(vec![agent]);
+    let deleted = threads.create(folder.path()).unwrap();
+    let remaining = threads.create(folder.path()).unwrap();
+    threads.connect(deleted.id).unwrap();
+    settle(&threads, deleted.id).await;
+    threads.connect(remaining.id).unwrap();
+    settle(&threads, remaining.id).await;
+
+    threads.delete(deleted.id).unwrap();
+    threads
+        .send_message(remaining.id, "still connected".into())
+        .unwrap();
+
+    assert_eq!(
+        settle(&threads, remaining.id).await.turns[0].response,
+        "reply:still connected"
+    );
+    assert!(!std::fs::read_to_string(log)
+        .unwrap()
+        .contains("session/delete"));
+    threads.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_deleted_ready_session_finishing_does_not_close_the_shared_connection() {
+    let folder = tempfile::tempdir().unwrap();
+    let log = folder.path().join("requests.log");
+    let mut agent = mock_agent();
+    agent.env.insert("FIXTURE_MODE".into(), "concurrent".into());
+    agent.env.insert("DELETE_MODE".into(), "success".into());
+    agent
+        .env
+        .insert("REQUEST_LOG".into(), log.to_string_lossy().into());
+    let threads = Threads::new(vec![agent]);
+    let deleted = threads.create(folder.path()).unwrap();
+    let remaining = threads.create(folder.path()).unwrap();
+    threads.connect(deleted.id).unwrap();
+    settle(&threads, deleted.id).await;
+    threads.connect(remaining.id).unwrap();
+    settle(&threads, remaining.id).await;
+
+    threads.delete(deleted.id).unwrap();
+    wait_for_request(&log, "session/delete remote-1").await;
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    assert_eq!(
+        threads.get(remaining.id).unwrap().status,
+        ThreadStatus::SessionReady
+    );
+    threads.shutdown().await;
+}
+
+#[tokio::test]
+async fn remote_delete_error_does_not_restore_the_locally_deleted_thread() {
+    let folder = tempfile::tempdir().unwrap();
+    let path = folder.path().join("atte.sqlite");
+    let log = folder.path().join("requests.log");
+    let store = std::sync::Arc::new(atte_lib::storage::Store::open(&path).unwrap());
+    let mut agent = mock_agent();
+    agent.env.insert("FIXTURE_MODE".into(), "concurrent".into());
+    agent.env.insert("DELETE_MODE".into(), "error".into());
+    agent
+        .env
+        .insert("REQUEST_LOG".into(), log.to_string_lossy().into());
+    let threads = Threads::with_store(vec![agent], store).unwrap();
+    let deleted = threads.create(folder.path()).unwrap();
+    threads.connect(deleted.id).unwrap();
+    settle(&threads, deleted.id).await;
+
+    threads.delete(deleted.id).unwrap();
+
+    wait_for_request(&log, "session/delete remote-1").await;
+    assert!(threads.get(deleted.id).is_err());
+    let rows: i64 = rusqlite::Connection::open(path)
+        .unwrap()
+        .query_row(
+            "SELECT COUNT(*) FROM threads WHERE id=?1",
+            [deleted.id.to_string()],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(rows, 0);
+    threads.shutdown().await;
+}
+
+#[tokio::test]
+async fn transport_close_during_remote_delete_does_not_restore_the_local_thread() {
+    let folder = tempfile::tempdir().unwrap();
+    let log = folder.path().join("requests.log");
+    let mut agent = mock_agent();
+    agent.env.insert("FIXTURE_MODE".into(), "concurrent".into());
+    agent.env.insert("DELETE_MODE".into(), "close".into());
+    agent
+        .env
+        .insert("REQUEST_LOG".into(), log.to_string_lossy().into());
+    let threads = Threads::new(vec![agent]);
+    let deleted = threads.create(folder.path()).unwrap();
+    let remaining = threads.create(folder.path()).unwrap();
+    threads.connect(deleted.id).unwrap();
+    settle(&threads, deleted.id).await;
+    threads.connect(remaining.id).unwrap();
+    settle(&threads, remaining.id).await;
+
+    threads.delete(deleted.id).unwrap();
+
+    wait_for_request(&log, "session/delete remote-1").await;
+    assert_eq!(
+        settle(&threads, remaining.id).await.status,
+        ThreadStatus::Failed
+    );
+    assert!(threads.get(deleted.id).is_err());
+    threads.shutdown().await;
+}
+
+#[tokio::test]
 #[ignore = "requires ATTE_CODEX_ACP and existing login; requests then cancels permission in a temporary folder"]
 async fn real_codex_concurrent_sessions_keep_approval_and_queue_isolated() {
     let folder = tempfile::tempdir().unwrap();
@@ -860,6 +1019,19 @@ async fn settle(threads: &Threads, id: uuid::Uuid) -> atte_lib::thread::Thread {
     })
     .await
     .unwrap()
+}
+
+async fn wait_for_request(log: &std::path::Path, expected: &str) {
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while !std::fs::read_to_string(log)
+            .unwrap_or_default()
+            .contains(expected)
+        {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
 }
 
 #[tokio::test]
