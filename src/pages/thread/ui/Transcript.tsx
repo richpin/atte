@@ -1,6 +1,8 @@
 import { type TranslationKey, useI18n } from "shared/i18n";
-import { Index, Show } from "solid-js";
+import { createSignal, Index, onCleanup, onMount, Show } from "solid-js";
 import type { Turn } from "../model/types";
+
+const collapsedLines = 20;
 
 const completionKeys: Record<string, TranslationKey> = {
   end_turn: "thread.completion.end_turn",
@@ -10,6 +12,67 @@ const completionKeys: Record<string, TranslationKey> = {
   cancelled: "thread.completion.cancelled",
 };
 
+function UserMessage(props: { children: string }) {
+  const { t } = useI18n();
+  const [expanded, setExpanded] = createSignal(false);
+  const [collapsible, setCollapsible] = createSignal(false);
+  let content!: HTMLParagraphElement;
+
+  onMount(() => {
+    const measure = () => {
+      const lineHeight = Number.parseFloat(
+        getComputedStyle(content).lineHeight,
+      );
+      setCollapsible(
+        Number.isFinite(lineHeight) &&
+          content.scrollHeight > lineHeight * collapsedLines + 0.5,
+      );
+    };
+    const observer = new ResizeObserver(measure);
+    observer.observe(content);
+    measure();
+    onCleanup(() => observer.disconnect());
+  });
+
+  return (
+    <div class="ml-auto max-w-[85%] rounded-2xl bg-user-bubble px-4 py-3 text-sm text-white">
+      <div
+        class={
+          collapsible() && !expanded() ? "max-h-[25rem] overflow-hidden" : ""
+        }
+      >
+        <p ref={content} class="whitespace-pre-wrap break-words leading-5">
+          {props.children}
+        </p>
+      </div>
+      <Show when={collapsible()}>
+        <button
+          type="button"
+          aria-expanded={expanded()}
+          class="mt-2 flex items-center gap-1 text-xs text-white/75 hover:text-white focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white"
+          onClick={() => setExpanded((value) => !value)}
+        >
+          {expanded() ? t("thread.showLess") : t("thread.showMore")}
+          <svg
+            aria-hidden="true"
+            class={expanded() ? "rotate-180" : ""}
+            width="14"
+            height="14"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+          >
+            <path d="m6 9 6 6 6-6" />
+          </svg>
+        </button>
+      </Show>
+    </div>
+  );
+}
+
 export function Transcript(props: { turns: Turn[] }) {
   const { t } = useI18n();
   return (
@@ -17,9 +80,7 @@ export function Transcript(props: { turns: Turn[] }) {
       <Index each={props.turns}>
         {(turn) => (
           <li class="flex min-w-0 flex-col gap-5">
-            <p class="ml-auto max-w-[85%] whitespace-pre-wrap break-words rounded-2xl bg-user-bubble px-4 py-3 text-sm text-white">
-              {turn().message}
-            </p>
+            <UserMessage>{turn().message}</UserMessage>
             <Show when={turn().response}>
               <div class="w-full whitespace-pre-wrap break-words text-left text-sm leading-7">
                 {turn().response}
