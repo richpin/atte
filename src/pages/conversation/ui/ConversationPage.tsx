@@ -1,35 +1,14 @@
 import {
   createEffect,
-  createMemo,
   createResource,
   createSignal,
   For,
   on,
-  onCleanup,
-  onMount,
   Show,
 } from "solid-js";
-import {
-  answerPermission,
-  cancelTurn,
-  connectConversation,
-  createConversation,
-  deleteQueuedMessage,
-  getConversation,
-  listConversations,
-  preparedAgents,
-  selectWorkingFolder,
-  sendMessage,
-  subscribeConversation,
-  subscribeConversationList,
-} from "../api/conversations";
-import {
-  type Conversation,
-  type ConversationMetadata,
-  type ConversationUpdate,
-  failureMessages,
-  statusLabels,
-} from "../model/types";
+import { preparedAgents } from "../api/conversations";
+import { createConversationModel } from "../model/conversation";
+import { failureMessages, statusLabels } from "../model/types";
 import { ConversationHistory } from "./ConversationHistory";
 import { ConversationSidebar } from "./ConversationSidebar";
 import { PermissionPanel } from "./PermissionPanel";
@@ -41,40 +20,39 @@ export function ConversationPage(props: {
   agentsRevision: number;
   onManage: () => void;
 }) {
-  const [conversation, setConversation] = createSignal<Conversation>();
-  const [error, setError] = createSignal<string>();
+  const model = createConversationModel();
+  const {
+    conversation,
+    selecting,
+    history,
+    listError,
+    reloadList,
+    connecting,
+    connectionRejected,
+    message,
+    setMessage,
+    sending,
+    answering,
+    cancelling,
+    activeTurn,
+    showStop,
+    stopping,
+    streamError,
+    canSend,
+    openConversation,
+    send,
+    deleteQueued,
+    answer,
+    cancel,
+    connect,
+    retrySubscription,
+  } = model;
   const [agentsFailed, setAgentsFailed] = createSignal(false);
-  const [selecting, setSelecting] = createSignal(false);
-  const [listError, setListError] = createSignal(false);
   const [sidebarOpen, setSidebarOpen] = createSignal(true);
   const [pendingFolder, setPendingFolder] = createSignal<string>();
-  let listVersion = 0;
-  const [history, { refetch: reloadList, mutate: updateList }] = createResource(
-    async (): Promise<ConversationMetadata[]> => {
-      try {
-        const version = listVersion;
-        setListError(false);
-        const entries = await listConversations();
-        return version === listVersion ? entries : (history() ?? entries);
-      } catch {
-        setListError(true);
-        return [];
-      }
-    },
-  );
-  onMount(() => {
-    onCleanup(
-      subscribeConversationList(
-        (entries) => {
-          listVersion++;
-          updateList(entries);
-          setListError(false);
-        },
-        () => setListError(true),
-      ),
-    );
-  });
-
+  const error = () =>
+    model.error() ??
+    (agentsFailed() ? "준비된 에이전트를 불러올 수 없습니다." : undefined);
   const [agents] = createResource(
     () => props.agentsRevision,
     async () => {
@@ -84,7 +62,6 @@ export function ConversationPage(props: {
         return installed;
       } catch {
         setAgentsFailed(true);
-        setError("준비된 에이전트를 불러올 수 없습니다.");
         return [];
       }
     },
@@ -94,249 +71,16 @@ export function ConversationPage(props: {
     agents()?.some((agent) => agent.id === selectedAgent())
       ? selectedAgent()
       : agents()?.[0]?.id || "";
-  const [connectingId, setConnectingId] = createSignal<string>();
-  const connecting = () =>
-    Boolean(connectingId()) && connectingId() === conversation()?.id;
-  const [connectionRejected, setConnectionRejected] = createSignal(false);
-  const [message, setMessage] = createSignal("");
-  const [sending, setSending] = createSignal(false);
-  const [answering, setAnswering] = createSignal<string>();
-  const [cancelling, setCancelling] = createSignal<string>();
-  const activeTurn = () => conversation()?.turns?.at(-1)?.id;
-  const canCancel = () =>
-    ["running", "waitingForApproval"].includes(conversation()?.status ?? "");
-  const showStop = () => canCancel() || conversation()?.status === "cancelling";
-  const stopping = () =>
-    Boolean(cancelling()) || conversation()?.status === "cancelling";
-  const [streamError, setStreamError] = createSignal(false);
-  const [subscriptionAttempt, setSubscriptionAttempt] = createSignal(0);
-  const canSend = () =>
-    ["sessionReady", "running", "cancelling"].includes(
-      conversation()?.status ?? "",
-    ) &&
-    !sending() &&
-    !streamError();
 
-  function applyConversation(updatedConversation: Conversation) {
-    const current = conversation();
-    if (
-      current?.id === updatedConversation.id &&
-      updatedConversation.revision >= current.revision
-    ) {
-      remember(updatedConversation);
-      setConversation(updatedConversation);
-    }
-  }
-
-  function remember(updatedConversation: Conversation) {
-    listVersion++;
-    const {
-      id,
-      title,
-      workingFolder,
-      agentId,
-      status,
-      remoteSessionId,
-      createdAt,
-      updatedAt,
-      failure,
-      interrupted,
-    } = updatedConversation;
-    const metadata = {
-      id,
-      title,
-      workingFolder,
-      agentId,
-      status,
-      remoteSessionId,
-      createdAt,
-      updatedAt,
-      failure,
-      interrupted,
-    };
-    updateList((previous) => [
-      metadata,
-      ...(previous ?? []).filter((entry) => entry.id !== id),
-    ]);
-  }
-
-  let selection = 0;
-  async function openConversation(id: string) {
-    if (conversation()?.id === id) return;
-    const attempt = ++selection;
-    setError(undefined);
-    try {
-      const updatedConversation = await getConversation(id);
-      if (attempt !== selection) return;
-      setConversation(updatedConversation);
-      setMessage("");
-      setConnectionRejected(false);
-      if (updatedConversation.status === "disconnected") void connect();
-    } catch (cause) {
-      if (attempt === selection)
-        setError(errorMessage(cause, "대화를 열 수 없습니다."));
-    }
-  }
-
-  function applyUpdate(update: ConversationUpdate) {
-    if (update.kind === "conversation") {
-      applyConversation(update.conversation);
-      return;
-    }
-    const current = conversation();
-    if (
-      !current ||
-      update.conversationId !== current.id ||
-      update.revision <= current.revision
-    )
-      return;
-    if (
-      update.revision !== current.revision + 1 ||
-      current.turns.at(-1)?.id !== update.turnId
-    ) {
-      setStreamError(true);
-      return;
-    }
-    setConversation({
-      ...current,
-      revision: update.revision,
-      turns: current.turns.map((turn) =>
-        turn.id === update.turnId
-          ? { ...turn, response: turn.response + update.text }
-          : turn,
-      ),
-    });
-  }
-
-  const conversationId = createMemo(() => conversation()?.id);
-  createEffect(
-    on(
-      () => [conversationId(), subscriptionAttempt()] as const,
-      ([id]) => {
-        if (!id) return;
-        setStreamError(false);
-        onCleanup(
-          subscribeConversation(id, applyUpdate, () => setStreamError(true)),
-        );
-      },
-    ),
-  );
-
-  async function send() {
-    const current = conversation();
-    if (!current || !canSend() || !message().trim()) return;
-    setSending(true);
-    setError(undefined);
-    try {
-      const updatedConversation = await sendMessage(current.id, message());
-      if (conversation()?.id === current.id) {
-        applyConversation(updatedConversation);
-        setMessage("");
-      }
-    } catch (cause) {
-      if (conversation()?.id === current.id)
-        setError(errorMessage(cause, "메시지를 전송할 수 없습니다."));
-    } finally {
-      setSending(false);
-    }
-  }
-
-  async function deleteQueued(id: string) {
-    const current = conversation();
-    if (!current) return;
-    try {
-      const updatedConversation = await deleteQueuedMessage(current.id, id);
-      applyConversation(updatedConversation);
-    } catch (cause) {
-      if (conversation()?.id === current.id)
-        setError(errorMessage(cause, "대기 메시지를 삭제할 수 없습니다."));
-    }
-  }
-
-  async function answer(request: string, option: string) {
-    const current = conversation();
-    if (!current || answering() || cancelling()) return;
-    setAnswering(request);
-    setError(undefined);
-    try {
-      applyConversation(await answerPermission(current.id, request, option));
-    } catch (cause) {
-      if (conversation()?.id === current.id)
-        setError(errorMessage(cause, "승인 응답을 전달할 수 없습니다."));
-    } finally {
-      setAnswering(undefined);
-    }
-  }
-
-  async function cancel() {
-    const current = conversation();
-    const turn = activeTurn();
-    if (!current || !turn || !canCancel() || cancelling()) return;
-    setCancelling(turn);
-    setError(undefined);
-    try {
-      applyConversation(await cancelTurn(current.id, turn));
-    } catch (cause) {
-      if (conversation()?.id === current.id)
-        setError(errorMessage(cause, "작업을 중단할 수 없습니다."));
-    } finally {
-      setCancelling(undefined);
-    }
-  }
-
-  async function connect() {
-    const draft = conversation();
-    if (!draft || connecting()) return;
-    setConnectingId(draft.id);
-    setConnectionRejected(false);
-    setError(undefined);
-    try {
-      const updatedConversation = await connectConversation(draft.id);
-      if (conversation()?.id === draft.id)
-        applyConversation(updatedConversation);
-    } catch (cause) {
-      if (conversation()?.id === draft.id) {
-        setConnectionRejected(true);
-        setError(
-          errorMessage(cause, "연결을 시작할 수 없습니다. 다시 시도해주세요."),
-        );
-      }
-    } finally {
-      if (connectingId() === draft.id) setConnectingId(undefined);
-    }
-  }
-
-  async function selectFolder() {
+  function selectFolder() {
     if (!agentId()) {
       props.onManage();
       return;
     }
-    if (selecting()) return;
-    setSelecting(true);
-    setError(undefined);
-    try {
-      const draft = await selectWorkingFolder(agentId());
-      if (draft) {
-        ++selection;
-        setConversation(draft);
-        remember(draft);
-        setMessage("");
-        setConnectionRejected(false);
-        if (draft.status === "disconnected") void connect();
-      }
-    } catch (cause) {
-      setError(
-        errorMessage(
-          cause,
-          "폴더 선택을 완료할 수 없습니다. 다시 시도해주세요.",
-        ),
-      );
-    } finally {
-      setSelecting(false);
-    }
+    void model.selectFolder(agentId());
   }
 
-  async function createInFolder(folder: string) {
+  function createInFolder(folder: string) {
     if (selecting()) return;
     if (!agentId()) {
       setPendingFolder(folder);
@@ -344,23 +88,7 @@ export function ConversationPage(props: {
       return;
     }
     setPendingFolder(undefined);
-    setSelecting(true);
-    setError(undefined);
-    const attempt = ++selection;
-    try {
-      const draft = await createConversation(folder, agentId());
-      remember(draft);
-      if (attempt !== selection) return;
-      setConversation(draft);
-      setMessage("");
-      setConnectionRejected(false);
-      if (draft.status === "disconnected") void connect();
-    } catch (cause) {
-      if (attempt === selection)
-        setError(errorMessage(cause, "새 대화를 만들 수 없습니다."));
-    } finally {
-      setSelecting(false);
-    }
+    void model.createInFolder(folder, agentId());
   }
 
   createEffect(
@@ -506,10 +234,7 @@ export function ConversationPage(props: {
               </Show>
               <Show when={streamError()}>
                 <p role="alert">대화 상태를 구독할 수 없습니다.</p>
-                <button
-                  type="button"
-                  onClick={() => setSubscriptionAttempt((value) => value + 1)}
-                >
+                <button type="button" onClick={retrySubscription}>
                   상태 다시 불러오기
                 </button>
               </Show>
@@ -664,13 +389,4 @@ export function ConversationPage(props: {
       </div>
     </main>
   );
-}
-
-function errorMessage(cause: unknown, fallback: string): string {
-  return typeof cause === "object" &&
-    cause !== null &&
-    "message" in cause &&
-    typeof cause.message === "string"
-    ? cause.message
-    : fallback;
 }
