@@ -26,6 +26,7 @@ it.each([
           resize = callback;
         }
         observe() {}
+        unobserve() {}
         disconnect() {}
       },
     );
@@ -77,6 +78,7 @@ it("follows growth, preserves reading position, and resumes from the latest butt
         resize = callback;
       }
       observe() {}
+      unobserve() {}
       disconnect = disconnect;
     },
   );

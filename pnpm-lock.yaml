@@ -14,6 +14,9 @@ importers:
       '@solid-primitives/i18n':
         specifier: ^2.2.1
         version: 2.2.1(solid-js@1.9.15)
+      '@solid-primitives/resize-observer':
+        specifier: ^2.2.0
+        version: 2.2.0(solid-js@1.9.15)
       '@solid-primitives/storage':
         specifier: ^4.4.0
         version: 4.4.0(solid-js@1.9.15)

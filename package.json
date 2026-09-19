@@ -23,6 +23,7 @@
   "dependencies": {
     "@kobalte/core": "^0.13.14",
     "@solid-primitives/i18n": "^2.2.1",
+    "@solid-primitives/resize-observer": "^2.2.0",
     "@solid-primitives/storage": "^4.4.0",
     "@tanstack/solid-query": "^5.103.1",
     "@tauri-apps/api": "^2",

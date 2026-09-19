@@ -1,10 +1,10 @@
+import { makeResizeObserver } from "@solid-primitives/resize-observer";
 import { useI18n } from "shared/i18n";
 import {
   createEffect,
   createSignal,
   type JSX,
   on,
-  onCleanup,
   onMount,
   Show,
 } from "solid-js";
@@ -32,7 +32,7 @@ export function ThreadHistory(props: {
   createEffect(on(() => props.followKey, followLatest));
   onMount(() => {
     // Observe both streamed content and space changes caused by the composer.
-    const observer = new ResizeObserver(() => {
+    const { observe } = makeResizeObserver(() => {
       // Native scrolling can precede its scroll event (for example, dragging
       // the scrollbar). Do not overwrite an upward move in that interval.
       if (Math.max(0, viewport.scrollTop) < previousScrollTop && !atBottom())
@@ -40,9 +40,8 @@ export function ThreadHistory(props: {
       if (following) followLatest();
       else setAwayFromBottom(!atBottom());
     });
-    observer.observe(content);
-    observer.observe(viewport);
-    onCleanup(() => observer.disconnect());
+    observe(content);
+    observe(viewport);
   });
 
   return (
