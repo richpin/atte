@@ -111,7 +111,7 @@ fn keeps_the_thread_and_queue_when_local_deletion_fails() {
 }
 
 #[test]
-fn rejects_local_deletion_after_an_acp_session_exists() {
+fn permanently_deletes_a_restored_remote_session_without_an_installed_agent() {
     let root = tempfile::tempdir().unwrap();
     let path = root.path().join("atte.sqlite");
     let store = std::sync::Arc::new(atte_lib::storage::Store::open(&path).unwrap());
@@ -140,10 +140,17 @@ fn rejects_local_deletion_after_an_acp_session_exists() {
     )
     .unwrap();
 
-    assert!(matches!(
-        restored.delete(draft.id),
-        Err(atte_lib::thread::ThreadError::NotReady(_))
-    ));
+    restored.delete(draft.id).unwrap();
+
+    assert!(restored.list().unwrap().is_empty());
+    let rows: i64 = database
+        .query_row(
+            "SELECT COUNT(*) FROM threads WHERE id=?1",
+            [draft.id.to_string()],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(rows, 0);
 }
 
 #[test]

@@ -199,6 +199,41 @@ impl Drop for Runtime {
     }
 }
 
+fn runtime_for(
+    state: &mut State,
+    handle: &tokio::runtime::Handle,
+    agent: AgentDefinition,
+    folder: PathBuf,
+) -> mpsc::UnboundedSender<crate::agent_runtime::RuntimeCommand> {
+    if let Some(runtime) = state.runtimes.iter().find(|runtime| {
+        runtime.agent == agent
+            && runtime.folder == folder
+            && !runtime.commands.is_closed()
+            && runtime
+                .task
+                .as_ref()
+                .is_some_and(|task| !task.is_finished())
+    }) {
+        return runtime.commands.clone();
+    }
+    let (commands, receiver) = mpsc::unbounded_channel();
+    let (stop, stopped) = oneshot::channel();
+    let task = handle.spawn(crate::agent_runtime::run(
+        agent.clone(),
+        folder.clone(),
+        receiver,
+        stopped,
+    ));
+    state.runtimes.push(Runtime {
+        agent,
+        folder,
+        commands: commands.clone(),
+        stop: Some(stop),
+        task: Some(task),
+    });
+    commands
+}
+
 impl Default for Threads {
     fn default() -> Self {
         Self::new(vec![prepared_codex()])
@@ -491,20 +526,19 @@ impl Threads {
     /// # Errors
     /// Returns an error without changing in-memory state when local persistence fails.
     pub fn delete(&self, id: Uuid) -> Result<(), ThreadError> {
+        let agents = self.agents.lock().map_err(|_| unavailable())?;
         let mut state = self.lock()?;
         let entry = state.entries.get_mut(&id).ok_or_else(not_found)?;
         let mut current = entry.state.lock().map_err(|_| unavailable())?;
-        let remote_session_id = match current.thread.remote_session_id.clone() {
-            Some(session_id) => {
-                if entry.runtime.is_none() {
-                    return Err(ThreadError::NotReady(
-                        "연결된 원격 세션만 현재 삭제할 수 있습니다.".into(),
-                    ));
-                }
-                Some(session_id)
-            }
-            None => None,
-        };
+        let remote_session_id = current.thread.remote_session_id.clone();
+        let agent = remote_session_id.as_ref().and_then(|_| {
+            agents
+                .iter()
+                .find(|agent| agent.id == current.thread.agent_id)
+                .cloned()
+        });
+        let agent_available = agent.is_some();
+        let folder = current.thread.working_folder.clone();
         let mut list = self.list.lock().map_err(|_| unavailable())?;
         if let Some(store) = &self.store {
             store
@@ -518,13 +552,28 @@ impl Threads {
         let mut removed = state.entries.remove(&id).ok_or_else(not_found)?;
         list.remove(id);
         if let Some(session_id) = remote_session_id {
-            let SessionCommands { inputs, runtime } =
-                removed.runtime.take().ok_or_else(unavailable)?;
+            let (runtime, inputs_to_close) =
+                if let Some(SessionCommands { inputs, runtime }) = removed.runtime.take() {
+                    (Some(runtime), Some(inputs))
+                } else if let Some(agent) = agent {
+                    let runtime = tokio::runtime::Handle::try_current()
+                        .ok()
+                        .map(|handle| runtime_for(&mut state, &handle, agent, folder));
+                    (runtime, None)
+                } else {
+                    (None, None)
+                };
+            let Some(runtime) = runtime else {
+                if agent_available {
+                    eprintln!("ACP session deletion could not be started");
+                }
+                return Ok(());
+            };
             if runtime
                 .send(crate::agent_runtime::RuntimeCommand::DeleteSession {
                     owner: id,
                     session_id,
-                    inputs_to_close: inputs,
+                    inputs_to_close,
                 })
                 .is_err()
             {
@@ -601,35 +650,7 @@ impl Threads {
             prompts: requests,
             cancellations: cancelled,
         };
-        let runtime = if let Some(index) = state.runtimes.iter().position(|runtime| {
-            runtime.agent == agent
-                && runtime.folder == folder
-                && !runtime.commands.is_closed()
-                && runtime
-                    .task
-                    .as_ref()
-                    .is_some_and(|task| !task.is_finished())
-        }) {
-            &mut state.runtimes[index]
-        } else {
-            let (commands, receiver) = mpsc::unbounded_channel();
-            let (stop, stopped) = oneshot::channel();
-            let task = handle.spawn(crate::agent_runtime::run(
-                agent.clone(),
-                folder.clone(),
-                receiver,
-                stopped,
-            ));
-            state.runtimes.push(Runtime {
-                agent,
-                folder,
-                commands,
-                stop: Some(stop),
-                task: Some(task),
-            });
-            state.runtimes.last_mut().ok_or_else(unavailable)?
-        };
-        let runtime = runtime.commands.clone();
+        let runtime = runtime_for(&mut state, &handle, agent, folder);
         state.entries.get_mut(&id).ok_or_else(not_found)?.runtime = Some(SessionCommands {
             inputs: crate::agent_runtime::SessionInputSenders {
                 prompts,

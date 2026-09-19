@@ -20,6 +20,17 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
         }
         let result = match method {
             "initialize" => {
+                let connection_mode = env::var("DELETE_CONNECTION_MODE").unwrap_or_default();
+                if connection_mode == "exit" {
+                    process::exit(18);
+                }
+                if connection_mode == "init-error" {
+                    send(
+                        &mut output,
+                        json!({"jsonrpc":"2.0","id":request["id"],"error":{"code":-32603,"message":"initialize rejected with private fixture details"}}),
+                    )?;
+                    continue;
+                }
                 let session_capabilities = env::var_os("DELETE_MODE")
                     .is_some()
                     .then(|| json!({"delete":{}}));
@@ -73,6 +84,13 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                     send(
                         &mut output,
                         json!({"jsonrpc":"2.0","id":request["id"],"error":{"code":-32603,"message":"delete rejected with private fixture details"}}),
+                    )?;
+                    continue;
+                }
+                if mode == "auth" {
+                    send(
+                        &mut output,
+                        json!({"jsonrpc":"2.0","id":request["id"],"error":{"code":-32000,"message":"authentication required with private fixture details"}}),
                     )?;
                     continue;
                 }

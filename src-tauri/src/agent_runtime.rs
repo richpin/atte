@@ -51,7 +51,7 @@ pub(crate) enum RuntimeCommand {
     DeleteSession {
         owner: Uuid,
         session_id: String,
-        inputs_to_close: SessionInputSenders,
+        inputs_to_close: Option<SessionInputSenders>,
     },
 }
 
@@ -86,16 +86,18 @@ pub(crate) async fn run(
         Err(error) => {
             commands.close();
             while let Some(command) = commands.recv().await {
-                let RuntimeCommand::StartSession(session) = command else {
-                    continue;
-                };
-                session.updates.connection_failed(
-                    if error.kind() == std::io::ErrorKind::NotFound {
-                        ConnectionFailure::ExecutableNotFound
-                    } else {
-                        ConnectionFailure::LaunchFailed
-                    },
-                );
+                match command {
+                    RuntimeCommand::StartSession(session) => session.updates.connection_failed(
+                        if error.kind() == std::io::ErrorKind::NotFound {
+                            ConnectionFailure::ExecutableNotFound
+                        } else {
+                            ConnectionFailure::LaunchFailed
+                        },
+                    ),
+                    RuntimeCommand::DeleteSession { .. } => {
+                        eprintln!("ACP session deletion connection could not be launched");
+                    }
+                }
             }
             return;
         }
@@ -254,8 +256,13 @@ pub(crate) async fn run(
         .map(|mut all| std::mem::take(&mut *all))
         .unwrap_or_default();
     while let Some(command) = commands.recv().await {
-        if let RuntimeCommand::StartSession(session) = command {
-            all.insert(session.id, session.updates);
+        match command {
+            RuntimeCommand::StartSession(session) => {
+                all.insert(session.id, session.updates);
+            }
+            RuntimeCommand::DeleteSession { .. } => {
+                eprintln!("ACP session deletion connection closed before the request");
+            }
         }
     }
     for updates in all.into_values() {

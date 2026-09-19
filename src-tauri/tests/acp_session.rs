@@ -48,6 +48,20 @@ fn mock_agent() -> AgentDefinition {
     }
 }
 
+async fn persist_remote_session(
+    folder: &std::path::Path,
+    agent: &AgentDefinition,
+) -> (std::sync::Arc<atte_lib::storage::Store>, uuid::Uuid) {
+    let store =
+        std::sync::Arc::new(atte_lib::storage::Store::open(&folder.join("atte.sqlite")).unwrap());
+    let threads = Threads::with_store(vec![agent.clone()], store.clone()).unwrap();
+    let saved = threads.create(folder).unwrap();
+    threads.connect(saved.id).unwrap();
+    settle(&threads, saved.id).await;
+    threads.shutdown().await;
+    (store, saved.id)
+}
+
 #[tokio::test]
 async fn list_subscription_tracks_background_thread_status() {
     let folder = tempfile::tempdir().unwrap();
@@ -375,6 +389,275 @@ async fn transport_close_during_remote_delete_does_not_restore_the_local_thread(
     );
     assert!(threads.get(deleted.id).is_err());
     threads.shutdown().await;
+}
+
+#[tokio::test]
+async fn deleting_a_restored_session_sends_only_the_exact_remote_delete_request() {
+    let folder = tempfile::tempdir().unwrap();
+    let log = folder.path().join("requests.log");
+    let mut agent = mock_agent();
+    agent.env.insert("FIXTURE_MODE".into(), "concurrent".into());
+    agent.env.insert("DELETE_MODE".into(), "success".into());
+    agent
+        .env
+        .insert("REQUEST_LOG".into(), log.to_string_lossy().into());
+    let (store, saved) = persist_remote_session(folder.path(), &agent).await;
+    std::fs::write(&log, "").unwrap();
+    let restored = Threads::with_store(vec![agent], store).unwrap();
+
+    restored.delete(saved).unwrap();
+
+    wait_for_request(&log, "session/delete remote-1").await;
+    let requests = std::fs::read_to_string(&log).unwrap();
+    assert_eq!(requests, "initialize \nsession/delete remote-1\n");
+    restored.shutdown().await;
+}
+
+#[tokio::test]
+async fn deleting_a_restored_session_without_delete_capability_skips_remote_deletion() {
+    let folder = tempfile::tempdir().unwrap();
+    let log = folder.path().join("requests.log");
+    let mut agent = mock_agent();
+    agent.env.insert("FIXTURE_MODE".into(), "concurrent".into());
+    agent
+        .env
+        .insert("REQUEST_LOG".into(), log.to_string_lossy().into());
+    let (store, saved) = persist_remote_session(folder.path(), &agent).await;
+    std::fs::write(&log, "").unwrap();
+    let restored = Threads::with_store(vec![agent], store).unwrap();
+
+    restored.delete(saved).unwrap();
+
+    wait_for_request(&log, "initialize ").await;
+    let requests = std::fs::read_to_string(log).unwrap();
+    assert_eq!(
+        (requests.as_str(), restored.get(saved).is_err()),
+        ("initialize \n", true)
+    );
+    restored.shutdown().await;
+}
+
+#[tokio::test]
+async fn initialize_failure_during_restored_session_deletion_keeps_the_local_deletion() {
+    let folder = tempfile::tempdir().unwrap();
+    let log = folder.path().join("requests.log");
+    let mut agent = mock_agent();
+    agent.env.insert("FIXTURE_MODE".into(), "concurrent".into());
+    agent.env.insert("DELETE_MODE".into(), "success".into());
+    agent
+        .env
+        .insert("REQUEST_LOG".into(), log.to_string_lossy().into());
+    let (store, saved) = persist_remote_session(folder.path(), &agent).await;
+    std::fs::write(&log, "").unwrap();
+    agent
+        .env
+        .insert("DELETE_CONNECTION_MODE".into(), "init-error".into());
+    let restored = Threads::with_store(vec![agent], store).unwrap();
+
+    restored.delete(saved).unwrap();
+
+    wait_for_request(&log, "initialize ").await;
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    let requests = std::fs::read_to_string(log).unwrap();
+    assert_eq!(
+        (
+            restored.get(saved).is_err(),
+            requests.contains("session/delete")
+        ),
+        (true, false)
+    );
+    restored.shutdown().await;
+}
+
+#[tokio::test]
+async fn deleting_a_restored_session_after_agent_removal_keeps_the_local_deletion() {
+    let folder = tempfile::tempdir().unwrap();
+    let mut agent = mock_agent();
+    agent.env.insert("FIXTURE_MODE".into(), "concurrent".into());
+    let (store, saved) = persist_remote_session(folder.path(), &agent).await;
+    let restored = Threads::with_store(Vec::new(), store.clone()).unwrap();
+
+    restored.delete(saved).unwrap();
+
+    let reopened = Threads::with_store(Vec::new(), store).unwrap();
+    assert_eq!(
+        (
+            restored.list().unwrap().len(),
+            reopened.list().unwrap().len()
+        ),
+        (0, 0)
+    );
+    restored.shutdown().await;
+}
+
+#[tokio::test]
+async fn missing_executable_during_restored_session_deletion_keeps_the_local_deletion() {
+    let folder = tempfile::tempdir().unwrap();
+    let mut agent = mock_agent();
+    agent.env.insert("FIXTURE_MODE".into(), "concurrent".into());
+    let (store, saved) = persist_remote_session(folder.path(), &agent).await;
+    agent.command = folder.path().join("missing-agent");
+    let restored = Threads::with_store(vec![agent], store.clone()).unwrap();
+
+    restored.delete(saved).unwrap();
+
+    restored.shutdown().await;
+    let reopened = Threads::with_store(Vec::new(), store).unwrap();
+    assert_eq!(
+        (
+            restored.list().unwrap().len(),
+            reopened.list().unwrap().len()
+        ),
+        (0, 0)
+    );
+}
+
+#[tokio::test]
+async fn launch_failure_during_restored_session_deletion_keeps_the_local_deletion() {
+    let folder = tempfile::tempdir().unwrap();
+    let mut agent = mock_agent();
+    agent.env.insert("FIXTURE_MODE".into(), "concurrent".into());
+    let (store, saved) = persist_remote_session(folder.path(), &agent).await;
+    agent.command = folder.path().to_path_buf();
+    let restored = Threads::with_store(vec![agent], store.clone()).unwrap();
+
+    restored.delete(saved).unwrap();
+
+    restored.shutdown().await;
+    let reopened = Threads::with_store(Vec::new(), store).unwrap();
+    assert_eq!(
+        (
+            restored.list().unwrap().len(),
+            reopened.list().unwrap().len()
+        ),
+        (0, 0)
+    );
+}
+
+#[tokio::test]
+async fn process_exit_during_restored_session_deletion_keeps_the_local_deletion() {
+    let folder = tempfile::tempdir().unwrap();
+    let log = folder.path().join("requests.log");
+    let mut agent = mock_agent();
+    agent.env.insert("FIXTURE_MODE".into(), "concurrent".into());
+    agent.env.insert("DELETE_MODE".into(), "success".into());
+    agent
+        .env
+        .insert("REQUEST_LOG".into(), log.to_string_lossy().into());
+    let (store, saved) = persist_remote_session(folder.path(), &agent).await;
+    std::fs::write(&log, "").unwrap();
+    agent
+        .env
+        .insert("DELETE_CONNECTION_MODE".into(), "exit".into());
+    let restored = Threads::with_store(vec![agent], store).unwrap();
+
+    restored.delete(saved).unwrap();
+
+    wait_for_request(&log, "initialize ").await;
+    assert!(restored.list().unwrap().is_empty());
+    restored.shutdown().await;
+}
+
+#[tokio::test]
+async fn authentication_failure_during_restored_session_deletion_keeps_the_local_deletion() {
+    let folder = tempfile::tempdir().unwrap();
+    let log = folder.path().join("requests.log");
+    let mut agent = mock_agent();
+    agent.env.insert("FIXTURE_MODE".into(), "concurrent".into());
+    agent.env.insert("DELETE_MODE".into(), "success".into());
+    agent
+        .env
+        .insert("REQUEST_LOG".into(), log.to_string_lossy().into());
+    let (store, saved) = persist_remote_session(folder.path(), &agent).await;
+    std::fs::write(&log, "").unwrap();
+    agent.env.insert("DELETE_MODE".into(), "auth".into());
+    let restored = Threads::with_store(vec![agent], store).unwrap();
+
+    restored.delete(saved).unwrap();
+
+    wait_for_request(&log, "session/delete remote-1").await;
+    assert!(restored.list().unwrap().is_empty());
+    restored.shutdown().await;
+}
+
+#[tokio::test]
+async fn delete_rpc_failure_during_restored_session_deletion_keeps_the_local_deletion() {
+    let folder = tempfile::tempdir().unwrap();
+    let log = folder.path().join("requests.log");
+    let mut agent = mock_agent();
+    agent.env.insert("FIXTURE_MODE".into(), "concurrent".into());
+    agent.env.insert("DELETE_MODE".into(), "success".into());
+    agent
+        .env
+        .insert("REQUEST_LOG".into(), log.to_string_lossy().into());
+    let (store, saved) = persist_remote_session(folder.path(), &agent).await;
+    std::fs::write(&log, "").unwrap();
+    agent.env.insert("DELETE_MODE".into(), "error".into());
+    let restored = Threads::with_store(vec![agent], store).unwrap();
+
+    restored.delete(saved).unwrap();
+
+    wait_for_request(&log, "session/delete remote-1").await;
+    assert!(restored.list().unwrap().is_empty());
+    restored.shutdown().await;
+}
+
+#[tokio::test]
+async fn deleting_a_restored_session_reuses_a_matching_shared_connection_without_loading_it() {
+    let folder = tempfile::tempdir().unwrap();
+    let path = folder.path().join("atte.sqlite");
+    let log = folder.path().join("requests.log");
+    let store = std::sync::Arc::new(atte_lib::storage::Store::open(&path).unwrap());
+    let mut agent = mock_agent();
+    agent.env.insert("FIXTURE_MODE".into(), "concurrent".into());
+    agent.env.insert("DELETE_MODE".into(), "success".into());
+    agent
+        .env
+        .insert("REQUEST_LOG".into(), log.to_string_lossy().into());
+    let threads = Threads::with_store(vec![agent.clone()], store.clone()).unwrap();
+    let deleted = threads.create(folder.path()).unwrap();
+    let remaining = threads.create(folder.path()).unwrap();
+    threads.connect(deleted.id).unwrap();
+    settle(&threads, deleted.id).await;
+    threads.connect(remaining.id).unwrap();
+    settle(&threads, remaining.id).await;
+    threads.shutdown().await;
+    std::fs::write(&log, "").unwrap();
+    let restored = Threads::with_store(vec![agent], store).unwrap();
+    restored.connect(remaining.id).unwrap();
+    settle(&restored, remaining.id).await;
+
+    restored.delete(deleted.id).unwrap();
+
+    wait_for_request(&log, "session/delete remote-1").await;
+    let requests = std::fs::read_to_string(log).unwrap();
+    assert_eq!(
+        requests,
+        "initialize \nsession/load remote-2\nsession/delete remote-1\n"
+    );
+    restored.shutdown().await;
+}
+
+#[tokio::test]
+async fn shutdown_reaps_a_delete_only_connection_with_a_pending_request() {
+    let folder = tempfile::tempdir().unwrap();
+    let log = folder.path().join("requests.log");
+    let mut agent = mock_agent();
+    agent.env.insert("FIXTURE_MODE".into(), "concurrent".into());
+    agent.env.insert("DELETE_MODE".into(), "success".into());
+    agent
+        .env
+        .insert("REQUEST_LOG".into(), log.to_string_lossy().into());
+    let (store, saved) = persist_remote_session(folder.path(), &agent).await;
+    std::fs::write(&log, "").unwrap();
+    agent.env.insert("DELETE_MODE".into(), "delayed".into());
+    let restored = Threads::with_store(vec![agent], store).unwrap();
+    restored.delete(saved).unwrap();
+    wait_for_request(&log, "session/delete remote-1").await;
+
+    tokio::time::timeout(Duration::from_secs(2), restored.shutdown())
+        .await
+        .unwrap();
 }
 
 #[tokio::test]
