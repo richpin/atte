@@ -589,7 +589,7 @@ impl Conversations {
             state.runtimes.last_mut().ok_or_else(unavailable)?
         };
         if let Err(error) = runtime.sessions.send(session) {
-            error.0.updates.modify(None, |conversation| {
+            error.0.updates.modify(|conversation| {
                 conversation.status = ConversationStatus::Failed;
                 conversation.failure = Some(ConnectionFailure::ConnectionClosed);
             });
@@ -975,11 +975,67 @@ pub(crate) struct RuntimeUpdates {
 }
 
 impl RuntimeUpdates {
+    pub fn session_ready(&self, remote_session_id: String) {
+        self.modify(|conversation| {
+            conversation.remote_session_id = Some(remote_session_id);
+            conversation.status = ConversationStatus::SessionReady;
+        });
+    }
+
+    pub fn history_restored(&self, turns: Vec<Turn>) {
+        self.modify(|conversation| {
+            conversation.turns = turns;
+            conversation.notice = None;
+        });
+    }
+
+    pub fn context_resumed(&self) {
+        self.modify(|conversation| {
+            conversation.turns.clear();
+            conversation.notice = Some(
+                "기존 맥락을 재개했습니다. 이 에이전트는 이전 메시지 표시를 지원하지 않습니다."
+                    .into(),
+            );
+        });
+    }
+
+    pub fn connection_failed(&self, failure: ConnectionFailure) {
+        if failure == ConnectionFailure::AuthenticationRequired {
+            self.record_authentication(AuthenticationStatus::Required);
+        }
+        self.modify(|conversation| {
+            conversation.interrupted |= matches!(
+                conversation.status,
+                ConversationStatus::Running
+                    | ConversationStatus::WaitingForApproval
+                    | ConversationStatus::Cancelling
+            );
+            conversation.status = ConversationStatus::Failed;
+            if failure == ConnectionFailure::AuthenticationRequired {
+                conversation.authentication = AuthenticationStatus::Required;
+            }
+            conversation.failure = Some(failure);
+        });
+    }
+
+    pub fn connection_closed(&self) {
+        self.modify(|conversation| {
+            conversation.interrupted |= matches!(
+                conversation.status,
+                ConversationStatus::Running
+                    | ConversationStatus::WaitingForApproval
+                    | ConversationStatus::Cancelling
+            );
+            conversation.status = ConversationStatus::Disconnected;
+        });
+    }
+
     pub fn complete_turn(
         &self,
         turn: Uuid,
         reason: agent_client_protocol::schema::v1::StopReason,
     ) -> Option<Prompt> {
+        self.record_authentication(AuthenticationStatus::Authenticated);
         let mut state = self.state.lock().ok()?;
         if state.generation != self.generation
             || !matches!(
@@ -1056,7 +1112,7 @@ impl RuntimeUpdates {
         Some(receiver)
     }
 
-    pub fn record_authentication(&self, status: AuthenticationStatus) {
+    fn record_authentication(&self, status: AuthenticationStatus) {
         let Ok(state) = self.state.lock() else {
             return;
         };
@@ -1096,23 +1152,12 @@ impl RuntimeUpdates {
             .retain(|sender| sender.send(change.clone()).is_ok());
     }
 
-    pub fn modify(&self, turn: Option<Uuid>, update: impl FnOnce(&mut Conversation)) {
+    fn modify(&self, update: impl FnOnce(&mut Conversation)) {
         let Ok(mut state) = self.state.lock() else {
             return;
         };
         if state.generation != self.generation {
             return;
-        }
-        if let Some(turn) = turn {
-            if !matches!(
-                state.conversation.status,
-                ConversationStatus::Running
-                    | ConversationStatus::WaitingForApproval
-                    | ConversationStatus::Cancelling
-            ) || state.conversation.turns.last().map(|item| item.id) != Some(turn)
-            {
-                return;
-            }
         }
         update(&mut state.conversation);
         if !matches!(

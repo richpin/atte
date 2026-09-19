@@ -1432,6 +1432,64 @@ async fn permission_preserves_agent_choices_and_answers_exactly_once() {
 }
 
 #[tokio::test]
+async fn process_exit_during_approval_clears_permissions_and_preserves_the_queue() {
+    use atte_lib::conversation::ConnectionFailure;
+    use nix::{
+        sys::signal::{kill, Signal},
+        unistd::Pid,
+    };
+    let folder = tempfile::tempdir().unwrap();
+    let pid_file = folder.path().join("pid");
+    let mut agent = mock_agent();
+    agent
+        .env
+        .insert("FIXTURE_MODE".into(), "prompt-permission".into());
+    agent
+        .env
+        .insert("PID_FILE".into(), pid_file.to_string_lossy().into());
+    let conversations = Conversations::new(vec![agent]);
+    let draft = conversations.create(folder.path()).unwrap();
+    conversations.connect(draft.id).unwrap();
+    settle(&conversations, draft.id).await;
+    let mut stream = subscribe(&conversations, draft.id);
+    conversations
+        .send_message(draft.id, "ask permission".into())
+        .unwrap();
+    let waiting = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let next = stream.recv().await.unwrap();
+            if next.status == ConversationStatus::WaitingForApproval {
+                break next;
+            }
+        }
+    })
+    .await
+    .unwrap();
+    conversations
+        .send_message(draft.id, "keep for later".into())
+        .unwrap();
+    let pid = Pid::from_raw(std::fs::read_to_string(pid_file).unwrap().parse().unwrap());
+    kill(pid, Signal::SIGKILL).unwrap();
+    let failed = settle(&conversations, draft.id).await;
+    assert_eq!(failed.status, ConversationStatus::Failed);
+    assert_eq!(failed.failure, Some(ConnectionFailure::ProcessExited));
+    assert!(failed.interrupted);
+    assert!(failed.permissions.is_empty());
+    assert_eq!(failed.remote_session_id, waiting.remote_session_id);
+    assert_eq!(failed.turns, waiting.turns);
+    assert_eq!(failed.queued_messages.len(), 1);
+    assert_eq!(failed.queued_messages[0].text, "keep for later");
+    assert!(conversations
+        .answer_permission(
+            draft.id,
+            waiting.permissions[0].id,
+            "arbitrary-allow".into()
+        )
+        .is_err());
+    conversations.shutdown().await;
+}
+
+#[tokio::test]
 async fn cancelling_permission_resolves_pending_and_late_requests_without_execution() {
     let folder = tempfile::tempdir().unwrap();
     let mut agent = mock_agent();

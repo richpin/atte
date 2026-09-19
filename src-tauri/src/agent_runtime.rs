@@ -4,8 +4,7 @@ mod replay;
 use crate::{
     agent::AgentDefinition,
     conversation::{
-        AuthenticationStatus, ConnectionFailure, ConversationStatus, PermissionOption,
-        PermissionRequest, Prompt, RuntimeUpdates,
+        ConnectionFailure, PermissionOption, PermissionRequest, Prompt, RuntimeUpdates,
     },
 };
 use agent_client_protocol::{
@@ -75,8 +74,7 @@ pub(crate) async fn run(
         Err(error) => {
             sessions.close();
             while let Some(session) = sessions.recv().await {
-                failed(
-                    &session.updates,
+                session.updates.connection_failed(
                     if error.kind() == std::io::ErrorKind::NotFound {
                         ConnectionFailure::ExecutableNotFound
                     } else {
@@ -164,7 +162,7 @@ pub(crate) async fn run(
                         // A sole failed session keeps the old reap-before-retry contract.
                         if remaining <= 1 { return Ok(failure); }
                         if let Ok(mut all) = participants.lock() {
-                            if let Some(updates) = all.remove(&id) { failed(&updates, failure); }
+                            if let Some(updates) = all.remove(&id) { updates.connection_failed(failure); }
                         }
                         if let Ok(mut routes) = routes.lock() { routes.retain(|_, route| route.owner != id); }
                     },
@@ -216,16 +214,8 @@ pub(crate) async fn run(
     }
     for updates in all.into_values() {
         match &failure {
-            Some(failure) => failed(&updates, failure.clone()),
-            None => updates.modify(None, |conversation| {
-                conversation.interrupted |= matches!(
-                    conversation.status,
-                    ConversationStatus::Running
-                        | ConversationStatus::WaitingForApproval
-                        | ConversationStatus::Cancelling
-                );
-                conversation.status = ConversationStatus::Disconnected;
-            }),
+            Some(failure) => updates.connection_failed(failure.clone()),
+            None => updates.connection_closed(),
         }
     }
 }
@@ -264,10 +254,7 @@ async fn run_session(
                     .ok()
                     .and_then(|mut routes| routes.get_mut(id)?.replay.take());
                 if let Some(history) = history {
-                    updates.modify(None, |conversation| {
-                        conversation.turns = history.turns;
-                        conversation.notice = None;
-                    });
+                    updates.history_restored(history.turns);
                 }
             } else if capabilities.session_capabilities.resume.is_some() {
                 connection
@@ -282,10 +269,7 @@ async fn run_session(
                         route.replay = None;
                     }
                 }
-                updates.modify(None, |conversation| {
-                    conversation.turns.clear();
-                    conversation.notice = Some("기존 맥락을 재개했습니다. 이 에이전트는 이전 메시지 표시를 지원하지 않습니다.".into());
-                });
+                updates.context_resumed();
             } else {
                 return Err(ConnectionFailure::ResumptionUnsupported);
             }
@@ -315,10 +299,7 @@ async fn run_session(
         Ok(Err(failure)) => return failure,
         Err(_) => return ConnectionFailure::TimedOut,
     };
-    updates.modify(None, |conversation| {
-        conversation.remote_session_id = Some(remote.to_string());
-        conversation.status = ConversationStatus::SessionReady;
-    });
+    updates.session_ready(remote.to_string());
     let mut next_prompt = None;
     loop {
         let prompt = match next_prompt.take() {
@@ -350,7 +331,6 @@ async fn run_session(
                 }
                 let completed = match result {
                     Ok(response) => {
-                        turn_updates.record_authentication(AuthenticationStatus::Authenticated);
                         Ok(turn_updates.complete_turn(prompt.turn, response.stop_reason))
                     }
                     Err(error) => Err(classify(error, ConnectionFailure::PromptFailed)),
@@ -420,23 +400,4 @@ fn classify(error: agent_client_protocol::Error, fallback: ConnectionFailure) ->
     } else {
         fallback
     }
-}
-
-fn failed(updates: &RuntimeUpdates, failure: ConnectionFailure) {
-    if failure == ConnectionFailure::AuthenticationRequired {
-        updates.record_authentication(AuthenticationStatus::Required);
-    }
-    updates.modify(None, |conversation| {
-        conversation.interrupted |= matches!(
-            conversation.status,
-            ConversationStatus::Running
-                | ConversationStatus::WaitingForApproval
-                | ConversationStatus::Cancelling
-        );
-        conversation.status = ConversationStatus::Failed;
-        if failure == ConnectionFailure::AuthenticationRequired {
-            conversation.authentication = AuthenticationStatus::Required;
-        }
-        conversation.failure = Some(failure);
-    });
 }
