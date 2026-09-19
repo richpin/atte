@@ -859,6 +859,7 @@ it("keeps the existing thread's agent fixed when selecting a target for the next
   await userEvent.click(screen.getByRole("button", { name: "폴더 선택" }));
   expect(invoke).toHaveBeenCalledWith("select_working_folder", {
     agentId: "fixture",
+    dialogTitle: "작업 폴더 선택",
   });
   await userEvent.selectOptions(screen.getByRole("combobox"), "codex");
   expect(invoke).toHaveBeenCalledWith("connect_thread", {
@@ -1424,7 +1425,10 @@ it("retries a failed install and offers the installed agent without restarting",
       });
     }
     if (command === "select_working_folder") {
-      expect(args).toEqual({ agentId: "new-provider" });
+      expect(args).toEqual({
+        agentId: "new-provider",
+        dialogTitle: "작업 폴더 선택",
+      });
       return null;
     }
   });
@@ -1454,6 +1458,7 @@ it("retries a failed install and offers the installed agent without restarting",
   await userEvent.click(screen.getByRole("button", { name: "폴더 선택" }));
   expect(invoke).toHaveBeenCalledWith("select_working_folder", {
     agentId: "new-provider",
+    dialogTitle: "작업 폴더 선택",
   });
 });
 

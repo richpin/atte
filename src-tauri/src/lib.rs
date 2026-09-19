@@ -29,12 +29,13 @@ struct Subscription {
 async fn select_working_folder(
     app: tauri::AppHandle,
     agent_id: String,
+    dialog_title: String,
 ) -> Result<Option<Thread>, ThreadError> {
     tauri::async_runtime::spawn_blocking(move || {
         let selection = app
             .dialog()
             .file()
-            .set_title("작업 폴더 선택")
+            .set_title(dialog_title)
             .blocking_pick_folder();
         let Some(selection) = selection else {
             return Ok(None);

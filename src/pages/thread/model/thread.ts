@@ -3,6 +3,7 @@ import {
   type QueryClient,
   useQueryClient,
 } from "@tanstack/solid-query";
+import { useI18n } from "shared/i18n";
 import {
   createEffect,
   createMemo,
@@ -38,6 +39,7 @@ function sortThreads(entries: ThreadMetadata[]) {
 
 /** Owns synchronization for one thread view; call inside a Solid owner. */
 export function createThreadModel(queryClient?: QueryClient) {
+  const { message: localizedMessage, t } = useI18n();
   const client = useQueryClient(queryClient);
   const [thread, setThread] = createSignal<Thread>();
   const [error, setError] = createSignal<string>();
@@ -192,7 +194,7 @@ export function createThreadModel(queryClient?: QueryClient) {
       display(updatedThread);
     } catch (cause) {
       if (attempt === selection)
-        setError(errorMessage(cause, "스레드를 열 수 없습니다."));
+        setError(localizedMessage(cause, "thread.error.open"));
     }
   }
 
@@ -252,7 +254,7 @@ export function createThreadModel(queryClient?: QueryClient) {
       }
     } catch (cause) {
       if (isCurrent(expectedView))
-        setError(errorMessage(cause, "메시지를 전송할 수 없습니다."));
+        setError(localizedMessage(cause, "thread.error.send"));
     } finally {
       if (isCurrent(expectedView)) setSending(false);
     }
@@ -267,7 +269,7 @@ export function createThreadModel(queryClient?: QueryClient) {
       if (isCurrent(expectedView)) applyThread(updatedThread);
     } catch (cause) {
       if (isCurrent(expectedView))
-        setError(errorMessage(cause, "대기 메시지를 삭제할 수 없습니다."));
+        setError(localizedMessage(cause, "thread.error.deleteQueued"));
     }
   }
 
@@ -282,7 +284,7 @@ export function createThreadModel(queryClient?: QueryClient) {
       if (isCurrent(expectedView)) applyThread(updated);
     } catch (cause) {
       if (isCurrent(expectedView))
-        setError(errorMessage(cause, "승인 응답을 전달할 수 없습니다."));
+        setError(localizedMessage(cause, "thread.error.answerPermission"));
     } finally {
       if (isCurrent(expectedView)) setAnswering(undefined);
     }
@@ -300,7 +302,7 @@ export function createThreadModel(queryClient?: QueryClient) {
       if (isCurrent(expectedView)) applyThread(updated);
     } catch (cause) {
       if (isCurrent(expectedView))
-        setError(errorMessage(cause, "작업을 중단할 수 없습니다."));
+        setError(localizedMessage(cause, "thread.error.cancel"));
     } finally {
       if (isCurrent(expectedView)) setCancelling(undefined);
     }
@@ -319,9 +321,7 @@ export function createThreadModel(queryClient?: QueryClient) {
     } catch (cause) {
       if (isCurrent(expectedView)) {
         setConnectionRejected(true);
-        setError(
-          errorMessage(cause, "연결을 시작할 수 없습니다. 다시 시도해주세요."),
-        );
+        setError(localizedMessage(cause, "thread.error.connect"));
       }
     } finally {
       if (isCurrent(expectedView)) setConnectingId(undefined);
@@ -334,7 +334,10 @@ export function createThreadModel(queryClient?: QueryClient) {
     setError(undefined);
     const attempt = ++selection;
     try {
-      const draft = await selectWorkingFolder(agentId);
+      const draft = await selectWorkingFolder(
+        agentId,
+        t("thread.folderDialogTitle"),
+      );
       if (draft) {
         if (disposed) return;
         updateThreadInList(draft);
@@ -342,12 +345,7 @@ export function createThreadModel(queryClient?: QueryClient) {
       }
     } catch (cause) {
       if (attempt !== selection) return;
-      setError(
-        errorMessage(
-          cause,
-          "폴더 선택을 완료할 수 없습니다. 다시 시도해주세요.",
-        ),
-      );
+      setError(localizedMessage(cause, "thread.error.selectFolder"));
     } finally {
       setSelecting(false);
     }
@@ -366,7 +364,7 @@ export function createThreadModel(queryClient?: QueryClient) {
       display(draft);
     } catch (cause) {
       if (attempt === selection)
-        setError(errorMessage(cause, "새 스레드를 만들 수 없습니다."));
+        setError(localizedMessage(cause, "thread.error.create"));
     } finally {
       setSelecting(false);
     }
@@ -424,13 +422,4 @@ export function createThreadModel(queryClient?: QueryClient) {
     removeThread,
     retrySubscription: () => setSubscriptionAttempt((value) => value + 1),
   };
-}
-
-function errorMessage(cause: unknown, fallback: string): string {
-  return typeof cause === "object" &&
-    cause !== null &&
-    "message" in cause &&
-    typeof cause.message === "string"
-    ? cause.message
-    : fallback;
 }

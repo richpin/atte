@@ -1,5 +1,6 @@
 import { AlertDialog } from "@kobalte/core/alert-dialog";
 import { ContextMenu } from "@kobalte/core/context-menu";
+import { useI18n } from "shared/i18n";
 import { createMemo, createSignal, For, Show } from "solid-js";
 import type { ThreadMetadata } from "../model/types";
 
@@ -20,6 +21,7 @@ export function ThreadSidebar(props: {
   onDelete: (id: string) => Promise<void>;
   onClose: () => void;
 }) {
+  const { t, message, content } = useI18n();
   const [collapsed, setCollapsed] = createSignal(new Set<string>());
   const [deleteCandidate, setDeleteCandidate] = createSignal<ThreadMetadata>();
   const [deleting, setDeleting] = createSignal(false);
@@ -39,14 +41,7 @@ export function ThreadSidebar(props: {
       await props.onDelete(candidate.id);
       setDeleteCandidate(undefined);
     } catch (cause) {
-      setDeleteError(
-        typeof cause === "object" &&
-          cause !== null &&
-          "message" in cause &&
-          typeof cause.message === "string"
-          ? cause.message
-          : "스레드를 삭제할 수 없습니다. 다시 시도해주세요.",
-      );
+      setDeleteError(message(cause, "sidebar.deleteFailed"));
     } finally {
       setDeleting(false);
     }
@@ -66,14 +61,14 @@ export function ThreadSidebar(props: {
   });
   return (
     <nav
-      aria-label="스레드 목록"
+      aria-label={t("sidebar.threads")}
       class="flex w-60 shrink-0 flex-col border-r border-line bg-panel"
     >
       <div class="flex items-center justify-between p-3">
-        <h2 class="text-xs font-medium text-muted">프로젝트</h2>
+        <h2 class="text-xs font-medium text-muted">{t("sidebar.projects")}</h2>
         <button
           type="button"
-          aria-label="사이드바 닫기"
+          aria-label={t("sidebar.close")}
           class="rounded p-1 text-muted hover:bg-canvas focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-accent"
           onClick={props.onClose}
         >
@@ -83,18 +78,18 @@ export function ThreadSidebar(props: {
       <div class="min-h-0 flex-1 overflow-y-auto px-2 pb-3">
         <Show when={props.failed}>
           <p role="alert" class="text-sm">
-            스레드 목록을 불러올 수 없습니다.
+            {t("sidebar.loadFailed")}
           </p>
           <button
             type="button"
             class="focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-accent"
             onClick={props.onRetry}
           >
-            목록 다시 불러오기
+            {t("sidebar.reload")}
           </button>
         </Show>
         <Show when={!props.loading && !props.threads.length && !props.failed}>
-          <p class="px-2 text-sm text-muted">저장된 스레드가 없습니다.</p>
+          <p class="px-2 text-sm text-muted">{t("sidebar.empty")}</p>
         </Show>
         <For each={groups()}>
           {(group) => (
@@ -102,7 +97,7 @@ export function ThreadSidebar(props: {
               <div class="flex items-center gap-1">
                 <button
                   type="button"
-                  aria-label={`프로젝트 ${group.name}`}
+                  aria-label={t("sidebar.project", { name: group.name })}
                   aria-expanded={!collapsed().has(group.folder)}
                   class="flex min-w-0 flex-1 items-center gap-2 rounded px-2 py-2 text-left text-sm hover:bg-canvas focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-accent"
                   onClick={() =>
@@ -121,7 +116,7 @@ export function ThreadSidebar(props: {
                 </button>
                 <button
                   type="button"
-                  aria-label={`${group.name}에 새 스레드`}
+                  aria-label={t("sidebar.newThreadIn", { name: group.name })}
                   disabled={props.creating}
                   class="shrink-0 rounded px-2 py-1 text-muted hover:bg-canvas focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-accent disabled:opacity-40"
                   onClick={() => props.onCreate(group.folder)}
@@ -150,7 +145,7 @@ export function ThreadSidebar(props: {
                             onClick={() => props.onSelect(entry.id)}
                           >
                             <span class="min-w-0 flex-1 truncate">
-                              {entry.title || "새 스레드"}
+                              {content(entry.title) || t("common.newThread")}
                             </span>
                             <Show
                               when={
@@ -159,23 +154,26 @@ export function ThreadSidebar(props: {
                               }
                             >
                               <span class="shrink-0 text-xs text-muted">
-                                실행 중
+                                {t("sidebar.running")}
                               </span>
                             </Show>
                             <Show when={entry.status === "waitingForApproval"}>
                               <span class="shrink-0 text-xs text-accent">
-                                승인 대기
+                                {t("sidebar.waitingForApproval")}
                               </span>
                             </Show>
                             <Show when={entry.status === "failed"}>
                               <span class="shrink-0 text-xs text-muted">
-                                연결 오류
+                                {t("sidebar.connectionError")}
                               </span>
                             </Show>
                           </button>
                           <button
                             type="button"
-                            aria-label={`${entry.title || "새 스레드"} 메뉴`}
+                            aria-label={t("sidebar.threadMenu", {
+                              name:
+                                content(entry.title) || t("common.newThread"),
+                            })}
                             class="mr-1 shrink-0 rounded p-1 text-muted opacity-0 focus:opacity-100 group-hover:opacity-100 group-focus-within:opacity-100 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
                             onClick={(event) => {
                               if (!row) return;
@@ -200,7 +198,7 @@ export function ThreadSidebar(props: {
                               class={deleteItemClass}
                               onSelect={() => requestDelete(entry)}
                             >
-                              삭제
+                              {t("common.delete")}
                             </ContextMenu.Item>
                           </ContextMenu.Content>
                         </ContextMenu.Portal>
@@ -223,10 +221,10 @@ export function ThreadSidebar(props: {
           <AlertDialog.Overlay class="fixed inset-0 z-40 bg-black/40" />
           <AlertDialog.Content class="fixed top-1/2 left-1/2 z-50 w-[min(28rem,90vw)] -translate-x-1/2 -translate-y-1/2 space-y-4 rounded-2xl border border-line bg-panel p-6 text-ink shadow-xl">
             <AlertDialog.Title class="font-semibold">
-              스레드를 삭제할까요?
+              {t("sidebar.deleteTitle")}
             </AlertDialog.Title>
             <AlertDialog.Description class="text-sm text-muted">
-              이 스레드가 영구적으로 삭제됩니다. 이 작업은 취소할 수 없습니다.
+              {t("sidebar.deleteDescription")}
             </AlertDialog.Description>
             <Show when={deleteError()}>
               {(message) => (
@@ -241,11 +239,11 @@ export function ThreadSidebar(props: {
             </Show>
             <div class="flex justify-end gap-3 text-sm">
               <AlertDialog.CloseButton
-                aria-label="취소"
+                aria-label={t("common.cancel")}
                 disabled={deleting()}
                 class="rounded-lg border border-line px-4 py-2 focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-accent disabled:opacity-40"
               >
-                취소
+                {t("common.cancel")}
               </AlertDialog.CloseButton>
               <button
                 type="button"
@@ -253,7 +251,7 @@ export function ThreadSidebar(props: {
                 class="rounded-lg bg-danger px-4 py-2 text-white focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-danger disabled:opacity-40"
                 onClick={() => void confirmDelete()}
               >
-                {deleting() ? "삭제 중…" : "삭제"}
+                {deleting() ? t("common.deleting") : t("common.delete")}
               </button>
             </div>
           </AlertDialog.Content>

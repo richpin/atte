@@ -1,3 +1,4 @@
+import { useI18n } from "shared/i18n";
 import { createMemo, createSignal, For, Show } from "solid-js";
 import type { QueuedMessage } from "../model/types";
 
@@ -5,13 +6,14 @@ export function QueuedMessages(props: {
   messages: QueuedMessage[];
   onDelete: (id: string) => Promise<void>;
 }) {
+  const { t } = useI18n();
   const messages = createMemo(
     () => new Map(props.messages.map((message) => [message.id, message.text])),
   );
   return (
     <Show when={props.messages.length}>
       <ul
-        aria-label="대기 메시지"
+        aria-label={t("thread.queue")}
         class="mb-2 max-h-40 overflow-y-auto rounded-xl border border-line bg-panel px-3 py-1"
       >
         <For each={[...messages().keys()]}>
@@ -30,7 +32,9 @@ export function QueuedMessages(props: {
                 </button>
                 <button
                   type="button"
-                  aria-label={`대기 메시지 삭제: ${messages().get(id)}`}
+                  aria-label={t("thread.deleteQueued", {
+                    message: messages().get(id) ?? "",
+                  })}
                   disabled={deleting()}
                   class="shrink-0 rounded p-1 text-muted hover:text-ink focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-accent disabled:opacity-40"
                   onClick={async () => {

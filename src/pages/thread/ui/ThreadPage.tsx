@@ -1,3 +1,5 @@
+import { type TranslationKey, useI18n } from "shared/i18n";
+import { LanguageMenu } from "shared/ui";
 import {
   createEffect,
   createResource,
@@ -8,7 +10,7 @@ import {
 } from "solid-js";
 import { preparedAgents } from "../api/threads";
 import { createThreadModel } from "../model/thread";
-import { failureMessages, statusLabels } from "../model/types";
+import type { ConnectionFailure, Thread } from "../model/types";
 import { PermissionPanel } from "./PermissionPanel";
 import { QueuedMessages } from "./QueuedMessages";
 import { ThreadHistory } from "./ThreadHistory";
@@ -20,6 +22,7 @@ export function ThreadPage(props: {
   agentsRevision: number;
   onManage: () => void;
 }) {
+  const { t, content } = useI18n();
   const model = createThreadModel();
   const {
     thread,
@@ -53,8 +56,7 @@ export function ThreadPage(props: {
   const [sidebarOpen, setSidebarOpen] = createSignal(true);
   const [pendingFolder, setPendingFolder] = createSignal<string>();
   const error = () =>
-    model.error() ??
-    (agentsFailed() ? "준비된 에이전트를 불러올 수 없습니다." : undefined);
+    model.error() ?? (agentsFailed() ? t("thread.error.agents") : undefined);
   const [agents] = createResource(
     () => props.agentsRevision,
     async () => {
@@ -118,7 +120,7 @@ export function ThreadPage(props: {
         <Show when={!sidebarOpen()}>
           <button
             type="button"
-            aria-label="사이드바 열기"
+            aria-label={t("thread.openSidebar")}
             class="rounded p-1 text-muted focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-accent"
             onClick={() => setSidebarOpen(true)}
           >
@@ -130,7 +132,7 @@ export function ThreadPage(props: {
           {(draft) => (
             <>
               <h1 class="max-w-64 truncate text-sm font-medium">
-                {draft().title || "새 스레드"}
+                {content(draft().title) || t("common.newThread")}
               </h1>
               <span
                 class="min-w-0 flex-1 truncate text-xs text-muted"
@@ -139,15 +141,15 @@ export function ThreadPage(props: {
                 {draft().workingFolder}
               </span>
               <span role="status" class="shrink-0 text-xs text-muted">
-                {statusLabels[draft().status]}
+                {t(statusKeys[draft().status])}
               </span>
             </>
           )}
         </Show>
         <label class="text-xs text-muted">
-          새 스레드 에이전트
+          {t("thread.newThreadAgent")}
           <select
-            aria-label="새 스레드 에이전트"
+            aria-label={t("thread.newThreadAgent")}
             class="ml-2 rounded border border-line bg-panel p-1 focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-accent"
             value={agentId()}
             onChange={(event) => setSelectedAgent(event.currentTarget.value)}
@@ -165,15 +167,16 @@ export function ThreadPage(props: {
           }
           onClick={selectFolder}
         >
-          {selecting() ? "선택 중…" : "폴더 선택"}
+          {selecting() ? t("thread.selecting") : t("thread.selectFolder")}
         </button>
         <button
           type="button"
           class="shrink-0 text-xs text-muted focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-accent"
           onClick={props.onManage}
         >
-          에이전트 관리
+          {t("thread.manageAgents")}
         </button>
+        <LanguageMenu />
       </header>
       <div class="flex min-h-0 flex-1">
         <Show when={sidebarOpen()}>
@@ -205,9 +208,9 @@ export function ThreadPage(props: {
             when={thread()}
             fallback={
               <section class="flex flex-1 flex-col items-center justify-center gap-3 px-6 text-center">
-                <h1 class="text-xl font-medium">어디에서 작업할까요?</h1>
+                <h1 class="text-xl font-medium">{t("thread.empty.title")}</h1>
                 <p class="text-sm text-muted">
-                  폴더를 선택해 새 스레드를 준비하세요.
+                  {t("thread.empty.description")}
                 </p>
               </section>
             }
@@ -216,18 +219,15 @@ export function ThreadPage(props: {
               <Show when={thread()?.status === "connecting"}>
                 <p role="status">
                   {thread()?.remoteSessionId
-                    ? "이전 스레드를 불러오는 중…"
-                    : "에이전트에 연결 중…"}
+                    ? t("thread.restoring")
+                    : t("thread.connecting")}
                 </p>
               </Show>
               <Show when={thread()?.interrupted}>
-                <p role="status">
-                  이전 작업이 중단되었습니다. 새 메시지를 보내 계속할 수
-                  있습니다.
-                </p>
+                <p role="status">{t("thread.interrupted")}</p>
               </Show>
               <Show when={thread()?.storageError}>
-                {(message) => <p role="alert">{message()}</p>}
+                {(message) => <p role="alert">{content(message())}</p>}
               </Show>
               <Show
                 when={
@@ -236,27 +236,25 @@ export function ThreadPage(props: {
                   !thread()?.notice
                 }
               >
-                <h2 class="text-lg font-medium">스레드가 준비되었습니다</h2>
+                <h2 class="text-lg font-medium">{t("thread.ready")}</h2>
                 <Show when={thread()?.status === "disconnected"}>
-                  <p class="text-sm text-muted">
-                    아직 에이전트에 연결되지 않았습니다.
-                  </p>
+                  <p class="text-sm text-muted">{t("thread.notConnected")}</p>
                 </Show>
               </Show>
               <Show when={streamError()}>
-                <p role="alert">스레드 상태를 구독할 수 없습니다.</p>
+                <p role="alert">{t("thread.subscriptionFailed")}</p>
                 <button
                   type="button"
                   class="focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-accent"
                   onClick={retrySubscription}
                 >
-                  상태 다시 불러오기
+                  {t("thread.reloadStatus")}
                 </button>
               </Show>
               <Show when={thread()?.failure}>
                 {(failure) => (
                   <p role="alert" class="text-sm">
-                    {failureMessages[failure()]}
+                    {t(failureKeys[failure()])}
                   </p>
                 )}
               </Show>
@@ -266,7 +264,7 @@ export function ThreadPage(props: {
                   class="focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-accent"
                   onClick={props.onManage}
                 >
-                  로그인 안내 열기
+                  {t("thread.openSignIn")}
                 </button>
               </Show>
               <Show
@@ -283,7 +281,7 @@ export function ThreadPage(props: {
                   class="focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-accent"
                   onClick={props.onManage}
                 >
-                  설치·인증 관리 열기
+                  {t("thread.openAgentManagement")}
                 </button>
               </Show>
               <Show
@@ -294,7 +292,7 @@ export function ThreadPage(props: {
                 }
               >
                 <p class="text-sm text-muted">
-                  인증 상태는 아직 확인되지 않았습니다.
+                  {t("thread.authenticationUnknown")}
                 </p>
               </Show>
               <Show
@@ -309,14 +307,14 @@ export function ThreadPage(props: {
                   disabled={connecting() || thread()?.status === "connecting"}
                   onClick={connect}
                 >
-                  다시 연결
+                  {t("thread.reconnect")}
                 </button>
               </Show>
               <Transcript turns={thread()?.turns ?? []} />
               <Show when={thread()?.notice}>
                 {(notice) => (
                   <p role="status" class="text-sm text-muted">
-                    {notice()}
+                    {content(notice())}
                   </p>
                 )}
               </Show>
@@ -338,7 +336,7 @@ export function ThreadPage(props: {
                   fallback={
                     <textarea
                       ref={messageInput}
-                      aria-label="메시지"
+                      aria-label={t("thread.message")}
                       aria-describedby="connection-note"
                       class="w-full resize-none bg-transparent text-sm outline-none disabled:cursor-not-allowed"
                       disabled={
@@ -361,7 +359,7 @@ export function ThreadPage(props: {
                         if (!event.repeat) void send();
                       }}
                       rows={2}
-                      placeholder="메시지를 입력하세요"
+                      placeholder={t("thread.messagePlaceholder")}
                     />
                   }
                 >
@@ -381,7 +379,9 @@ export function ThreadPage(props: {
                   </span>
                   <button
                     type={showStop() ? "button" : "submit"}
-                    aria-label={showStop() ? "현재 작업 중단" : "전송"}
+                    aria-label={
+                      showStop() ? t("thread.stop") : t("thread.send")
+                    }
                     class="grid size-8 shrink-0 place-items-center rounded-full bg-accent text-white focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-accent disabled:opacity-40"
                     disabled={
                       showStop() ? stopping() : !canSend() || !message().trim()
@@ -421,8 +421,8 @@ export function ThreadPage(props: {
                 class="mt-2 text-center text-xs text-muted"
               >
                 {thread()?.status === "running"
-                  ? "작업 중에도 다음 메시지를 입력할 수 있습니다."
-                  : "연결된 스레드에 메시지를 보내세요."}
+                  ? t("thread.composer.running")
+                  : t("thread.composer.ready")}
               </p>
             </div>
           </Show>
@@ -431,3 +431,28 @@ export function ThreadPage(props: {
     </main>
   );
 }
+
+const statusKeys: Record<Thread["status"], TranslationKey> = {
+  disconnected: "thread.status.disconnected",
+  connecting: "thread.status.connecting",
+  sessionReady: "thread.status.sessionReady",
+  failed: "thread.status.failed",
+  running: "thread.status.running",
+  waitingForApproval: "thread.status.waitingForApproval",
+  cancelling: "thread.status.cancelling",
+};
+
+const failureKeys: Record<ConnectionFailure, TranslationKey> = {
+  executableNotFound: "thread.failure.executableNotFound",
+  launchFailed: "thread.failure.launchFailed",
+  initializationFailed: "thread.failure.initializationFailed",
+  sessionCreationFailed: "thread.failure.sessionCreationFailed",
+  authenticationRequired: "thread.failure.authenticationRequired",
+  processExited: "thread.failure.processExited",
+  connectionClosed: "thread.failure.connectionClosed",
+  promptFailed: "thread.failure.promptFailed",
+  timedOut: "thread.failure.timedOut",
+  agentRemoved: "thread.failure.agentRemoved",
+  resumptionUnsupported: "thread.failure.resumptionUnsupported",
+  sessionRestorationFailed: "thread.failure.sessionRestorationFailed",
+};

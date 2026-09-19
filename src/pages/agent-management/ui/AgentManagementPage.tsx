@@ -1,3 +1,4 @@
+import { useI18n } from "shared/i18n";
 import { AgentIcon } from "shared/ui";
 import { createResource, createSignal, For, Show } from "solid-js";
 import { createStore, reconcile } from "solid-js/store";
@@ -10,6 +11,7 @@ export function AgentManagementPage(props: {
   onBack: () => void;
   onAgentsChanged: () => void;
 }) {
+  const { t, message } = useI18n();
   const [error, setError] = createSignal<string>();
   const [search, setSearch] = createSignal("");
   const [work, setWork] = createStore<
@@ -23,7 +25,7 @@ export function AgentManagementPage(props: {
       try {
         return await refreshCatalog();
       } catch (cause) {
-        setError(message(cause));
+        setError(message(cause, "agents.requestFailed"));
         try {
           return await catalog();
         } catch {
@@ -67,7 +69,7 @@ export function AgentManagementPage(props: {
       }
       mutate(await catalog());
     } catch (cause) {
-      setError(message(cause));
+      setError(message(cause, "agents.requestFailed"));
       if (operation === "uninstall") props.onAgentsChanged();
       try {
         mutate(await catalog());
@@ -83,22 +85,22 @@ export function AgentManagementPage(props: {
     <main class="min-h-dvh bg-canvas text-ink">
       <header class="flex h-14 items-center gap-4 border-b border-line px-6">
         <span class="font-semibold">atte</span>
-        <h1 class="text-sm font-medium">에이전트 관리</h1>
+        <h1 class="text-sm font-medium">{t("agents.title")}</h1>
         <button
           type="button"
           class="ml-auto rounded-lg border border-line px-3 py-1.5 text-xs focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-accent"
           onClick={props.onBack}
         >
-          스레드로 돌아가기
+          {t("agents.back")}
         </button>
       </header>
       <section class="mx-auto max-w-3xl space-y-5 px-6 py-8">
         <label class="block">
-          <span class="sr-only">에이전트 이름 검색</span>
+          <span class="sr-only">{t("agents.search")}</span>
           <input
             type="search"
             value={search()}
-            placeholder="에이전트 이름 검색"
+            placeholder={t("agents.search")}
             class="w-full rounded-lg border border-line bg-panel px-4 py-2.5 text-sm placeholder:text-muted focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
             onInput={(event) => setSearch(event.currentTarget.value)}
           />
@@ -107,12 +109,10 @@ export function AgentManagementPage(props: {
           <p role="alert">{error()}</p>
         </Show>
         <Show when={agents.loading && !agents.latest}>
-          <p role="status">목록을 불러오는 중…</p>
+          <p role="status">{t("agents.loading")}</p>
         </Show>
         <Show when={!agents.loading && agents.latest?.length === 0}>
-          <p role="status">
-            저장된 목록이 없습니다. 네트워크 연결을 확인해주세요.
-          </p>
+          <p role="status">{t("agents.empty")}</p>
         </Show>
         <Show
           when={
@@ -121,7 +121,7 @@ export function AgentManagementPage(props: {
             filteredAgents().length === 0
           }
         >
-          <p role="status">검색 결과가 없습니다.</p>
+          <p role="status">{t("agents.noResults")}</p>
         </Show>
         <For each={filteredAgents()}>
           {(agent) => {
@@ -142,16 +142,20 @@ export function AgentManagementPage(props: {
                     fallback={
                       <button
                         type="button"
-                        aria-label={`${agent.name} ${installing() ? "설치 중" : "설치"}`}
+                        aria-label={`${agent.name} ${installing() ? t("agents.installing") : t("agents.install")}`}
                         disabled={!agent.distribution || installing()}
                         class="rounded-lg bg-accent px-4 py-2 text-white focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-accent disabled:opacity-40"
                         onClick={() => run(agent.id, "install")}
                       >
-                        {installing() ? "설치 중" : "설치"}
+                        {installing()
+                          ? t("agents.installing")
+                          : t("agents.install")}
                       </button>
                     }
                   >
-                    <span class="text-xs text-muted">설치됨</span>
+                    <span class="text-xs text-muted">
+                      {t("agents.installed")}
+                    </span>
                     <UninstallAgentDialog
                       name={agent.name}
                       disabled={work[agent.id]?.busy ?? false}
@@ -166,10 +170,4 @@ export function AgentManagementPage(props: {
       </section>
     </main>
   );
-}
-
-function message(cause: unknown) {
-  return typeof cause === "string"
-    ? cause
-    : "요청을 완료할 수 없습니다. 다시 시도해주세요.";
 }

@@ -1,5 +1,7 @@
 Use relative imports within a slice, and absolute imports through public APIs across slices
 
+Before implementing a SolidJS concern, review the relevant `@solid-primitives/*` packages. Prefer an established primitive when it fits the requirement and the project's dependency constraints instead of recreating the same reactive behavior locally.
+
 Follow Solid's fine-grained reactivity model. Do not apply React re-render patterns to Solid components.
 Remember that component functions normally execute once. Put reactive logic inside reactive scopes rather than expecting the component body to re-run.
 Keep reactive reads inside tracked scopes such as JSX, derived accessors, memos, and effects.

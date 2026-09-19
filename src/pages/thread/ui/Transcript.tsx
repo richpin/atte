@@ -1,17 +1,19 @@
+import { type TranslationKey, useI18n } from "shared/i18n";
 import { Index, Show } from "solid-js";
 import type { Turn } from "../model/types";
 
-const completionLabels: Record<string, string> = {
-  end_turn: "완료",
-  max_tokens: "응답 길이 제한에 도달했습니다",
-  max_turn_requests: "실행 횟수 제한에 도달했습니다",
-  refusal: "요청이 거절되었습니다",
-  cancelled: "취소됨",
+const completionKeys: Record<string, TranslationKey> = {
+  end_turn: "thread.completion.end_turn",
+  max_tokens: "thread.completion.max_tokens",
+  max_turn_requests: "thread.completion.max_turn_requests",
+  refusal: "thread.completion.refusal",
+  cancelled: "thread.completion.cancelled",
 };
 
 export function Transcript(props: { turns: Turn[] }) {
+  const { t } = useI18n();
   return (
-    <ol aria-label="스레드 내용" class="flex flex-col gap-8">
+    <ol aria-label={t("thread.transcript")} class="flex flex-col gap-8">
       <Index each={props.turns}>
         {(turn) => (
           <li class="flex min-w-0 flex-col gap-5">
@@ -26,7 +28,9 @@ export function Transcript(props: { turns: Turn[] }) {
             <Show when={turn().stopReason}>
               {(reason) => (
                 <p class="text-xs text-muted">
-                  {completionLabels[reason()] ?? reason()}
+                  {completionKeys[reason()]
+                    ? t(completionKeys[reason()])
+                    : reason()}
                 </p>
               )}
             </Show>

@@ -1,3 +1,4 @@
+import { useI18n } from "shared/i18n";
 import {
   createEffect,
   createSignal,
@@ -12,6 +13,7 @@ export function ThreadHistory(props: {
   followKey: string;
   children: JSX.Element;
 }) {
+  const { t } = useI18n();
   let viewport!: HTMLElement;
   let content!: HTMLDivElement;
   let following = true;
@@ -47,7 +49,7 @@ export function ThreadHistory(props: {
     <div class="relative min-h-0 w-full flex-1">
       <section
         ref={viewport}
-        aria-label="스레드 기록"
+        aria-label={t("thread.history")}
         // biome-ignore lint/a11y/noNoninteractiveTabindex: Scrollable history needs keyboard access.
         tabIndex={0}
         class="h-full overflow-y-auto overscroll-contain focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-accent [overflow-anchor:none]"
@@ -78,8 +80,8 @@ export function ThreadHistory(props: {
       <Show when={awayFromBottom()}>
         <button
           type="button"
-          aria-label="최신 내용으로 이동"
-          title="최신 내용으로 이동"
+          aria-label={t("thread.jumpToLatest")}
+          title={t("thread.jumpToLatest")}
           class="absolute bottom-3 left-1/2 flex size-9 -translate-x-1/2 items-center justify-center rounded-full border border-line bg-canvas text-ink shadow-sm hover:bg-panel focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-accent"
           onClick={followLatest}
         >

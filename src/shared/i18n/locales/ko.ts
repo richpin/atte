@@ -1,0 +1,194 @@
+import type { en } from "./en";
+
+type Localized<T> = {
+  [K in keyof T]: T[K] extends string ? string : Localized<T[K]>;
+};
+
+export const ko = {
+  common: {
+    cancel: "취소",
+    delete: "삭제",
+    deleting: "삭제 중…",
+    newThread: "새 스레드",
+    retry: "다시 시도",
+  },
+  language: {
+    label: "언어",
+    system: "시스템 설정",
+    english: "English",
+    korean: "한국어",
+  },
+  thread: {
+    status: {
+      disconnected: "연결 전",
+      connecting: "연결 중…",
+      sessionReady: "세션 준비 완료",
+      failed: "실패",
+      running: "응답 중…",
+      waitingForApproval: "승인 대기",
+      cancelling: "중단 중…",
+    },
+    failure: {
+      executableNotFound:
+        "에이전트 실행 파일을 찾을 수 없습니다. 설치와 실행 경로를 확인해주세요.",
+      launchFailed:
+        "에이전트를 실행할 수 없습니다. 실행 권한과 작업 폴더를 확인해주세요.",
+      initializationFailed: "에이전트 초기화에 실패했습니다.",
+      sessionCreationFailed: "스레드 세션을 만들 수 없습니다.",
+      authenticationRequired:
+        "에이전트 로그인이 필요합니다. 로그인 후 다시 연결해주세요.",
+      processExited: "에이전트 프로세스가 종료되었습니다.",
+      connectionClosed: "에이전트와의 연결이 끊어졌습니다.",
+      promptFailed: "메시지 실행에 실패했습니다. 다시 연결해주세요.",
+      timedOut: "에이전트 연결 시간이 초과되었습니다.",
+      agentRemoved: "에이전트를 설치한 뒤 이 스레드에서 다시 시도해주세요.",
+      resumptionUnsupported:
+        "이 에이전트는 기존 스레드 재개를 지원하지 않습니다.",
+      sessionRestorationFailed:
+        "기존 스레드를 복원할 수 없습니다. 세션이 삭제되었거나 사용할 수 없는지 확인해주세요.",
+    },
+    error: {
+      open: "스레드를 열 수 없습니다.",
+      send: "메시지를 전송할 수 없습니다.",
+      deleteQueued: "대기 메시지를 삭제할 수 없습니다.",
+      answerPermission: "승인 응답을 전달할 수 없습니다.",
+      cancel: "작업을 중단할 수 없습니다.",
+      connect: "연결을 시작할 수 없습니다. 다시 시도해주세요.",
+      selectFolder: "폴더 선택을 완료할 수 없습니다. 다시 시도해주세요.",
+      create: "새 스레드를 만들 수 없습니다.",
+      agents: "준비된 에이전트를 불러올 수 없습니다.",
+    },
+    openSidebar: "사이드바 열기",
+    newThreadAgent: "새 스레드 에이전트",
+    selecting: "선택 중…",
+    selectFolder: "폴더 선택",
+    folderDialogTitle: "작업 폴더 선택",
+    manageAgents: "에이전트 관리",
+    empty: {
+      title: "어디에서 작업할까요?",
+      description: "폴더를 선택해 새 스레드를 준비하세요.",
+    },
+    restoring: "이전 스레드를 불러오는 중…",
+    connecting: "에이전트에 연결 중…",
+    interrupted:
+      "이전 작업이 중단되었습니다. 새 메시지를 보내 계속할 수 있습니다.",
+    ready: "스레드가 준비되었습니다",
+    notConnected: "아직 에이전트에 연결되지 않았습니다.",
+    subscriptionFailed: "스레드 상태를 구독할 수 없습니다.",
+    reloadStatus: "상태 다시 불러오기",
+    openSignIn: "로그인 안내 열기",
+    openAgentManagement: "설치·인증 관리 열기",
+    authenticationUnknown: "인증 상태는 아직 확인되지 않았습니다.",
+    reconnect: "다시 연결",
+    message: "메시지",
+    messagePlaceholder: "메시지를 입력하세요",
+    stop: "현재 작업 중단",
+    send: "전송",
+    composer: {
+      running: "작업 중에도 다음 메시지를 입력할 수 있습니다.",
+      ready: "연결된 스레드에 메시지를 보내세요.",
+    },
+    history: "스레드 기록",
+    jumpToLatest: "최신 내용으로 이동",
+    transcript: "스레드 내용",
+    showMore: "더 보기",
+    showLess: "간략히",
+    completion: {
+      end_turn: "완료",
+      max_tokens: "응답 길이 제한에 도달했습니다",
+      max_turn_requests: "실행 횟수 제한에 도달했습니다",
+      refusal: "요청이 거절되었습니다",
+      cancelled: "취소됨",
+    },
+    queue: "대기 메시지",
+    deleteQueued: "대기 메시지 삭제: {{ message }}",
+    permission: "승인 요청",
+  },
+  sidebar: {
+    threads: "스레드 목록",
+    projects: "프로젝트",
+    close: "사이드바 닫기",
+    loadFailed: "스레드 목록을 불러올 수 없습니다.",
+    reload: "목록 다시 불러오기",
+    empty: "저장된 스레드가 없습니다.",
+    project: "프로젝트 {{ name }}",
+    newThreadIn: "{{ name }}에 새 스레드",
+    running: "실행 중",
+    waitingForApproval: "승인 대기",
+    connectionError: "연결 오류",
+    threadMenu: "{{ name }} 메뉴",
+    deleteFailed: "스레드를 삭제할 수 없습니다. 다시 시도해주세요.",
+    deleteTitle: "스레드를 삭제할까요?",
+    deleteDescription:
+      "이 스레드가 영구적으로 삭제됩니다. 이 작업은 취소할 수 없습니다.",
+  },
+  agents: {
+    title: "에이전트 관리",
+    back: "스레드로 돌아가기",
+    search: "에이전트 이름 검색",
+    loading: "목록을 불러오는 중…",
+    empty: "저장된 목록이 없습니다. 네트워크 연결을 확인해주세요.",
+    noResults: "검색 결과가 없습니다.",
+    install: "설치",
+    installing: "설치 중",
+    installed: "설치됨",
+    requestFailed: "요청을 완료할 수 없습니다. 다시 시도해주세요.",
+    uninstallLabel: "{{ name }} 삭제",
+    uninstall: "삭제",
+    uninstallTitle: "{{ name }} 에이전트를 삭제할까요?",
+    uninstallDescription:
+      "이 에이전트의 모든 연결과 진행 중인 작업을 종료하고 설치 파일을 삭제합니다. 스레드 내용, 작업 폴더와 로그인 정보는 유지됩니다.",
+    confirmUninstall: "삭제 확인",
+  },
+  backend: {
+    appClosing: "앱을 종료하고 있습니다.",
+    openWindowFailed: "창을 열 수 없습니다.",
+    storage:
+      "앱 정보를 저장하거나 불러올 수 없습니다. 앱 저장 폴더의 권한과 여유 공간을 확인해주세요.",
+    storageFormat: "저장 정보 형식을 읽을 수 없습니다.",
+    storageNewer: "더 새로운 앱의 저장소입니다. 앱을 업데이트해주세요.",
+    storageUnavailable: "저장소를 사용할 수 없습니다.",
+    localFolderRequired: "로컬 작업 폴더를 선택해주세요.",
+    folderSelectionFailed: "폴더 선택을 완료할 수 없습니다. 다시 시도해주세요.",
+    subscriptionFailed: "구독할 수 없습니다.",
+    workingFolderRequired: "존재하는 작업 폴더를 선택해주세요.",
+    workingFolderMissing: "작업 폴더를 찾을 수 없습니다.",
+    workingFolderReselect:
+      "작업 폴더를 찾을 수 없습니다. 폴더를 다시 선택해주세요.",
+    agentInstallRequired: "에이전트를 설치한 뒤 다시 시도해주세요.",
+    messageRequired: "메시지를 입력해주세요.",
+    threadNotReady: "응답이 완료된 연결된 스레드에서 전송해주세요.",
+    queuedMessageGone: "이미 전송되었거나 삭제된 메시지입니다.",
+    turnFinished: "이미 종료된 작업입니다.",
+    noActiveTurn: "진행 중인 작업이 없습니다.",
+    permissionGone: "이미 해소되었거나 유효하지 않은 승인 선택입니다.",
+    threadUnavailable: "스레드 상태를 사용할 수 없습니다.",
+    threadNotFound: "스레드를 찾을 수 없습니다.",
+    resumedWithoutHistory:
+      "기존 맥락을 재개했습니다. 이 에이전트는 이전 메시지 표시를 지원하지 않습니다.",
+    installLocation: "설치 파일의 위치를 확인할 수 없습니다.",
+    registryNetwork:
+      "Registry를 불러올 수 없습니다. 네트워크를 확인하고 다시 시도해주세요.",
+    registry:
+      "지원하는 Registry 배포 정보를 찾을 수 없습니다. 잠시 후 다시 시도해주세요.",
+    unsupportedPlatform: "이 플랫폼에 맞는 배포가 없습니다.",
+    nodeMissing:
+      "Node.js 런타임을 준비하지 못했습니다. 네트워크를 확인하고 다시 시도해주세요.",
+    installFailed:
+      "설치하지 못했습니다. 네트워크, 저장 공간과 폴더 권한을 확인한 뒤 다시 시도해주세요.",
+    removalFailed:
+      "설치 파일을 삭제하지 못했습니다. 위치와 폴더 권한을 확인하고 다시 시도해주세요.",
+    integrityFailed: "다운로드 검증에 실패했습니다. 다시 설치해주세요.",
+    connectionFailed:
+      "ACP 연결에 실패했습니다. 설치 상태를 확인하고 다시 시도해주세요.",
+    authenticationFailed:
+      "인증하지 못했습니다. 브라우저 또는 터미널에서 로그인을 완료한 뒤 다시 시도해주세요.",
+    authenticationUnsupported:
+      "에이전트가 제공한 이 인증 방식은 아직 지원하지 않습니다.",
+    busy: "진행 중인 작업이 있습니다. 완료 후 다시 시도해주세요.",
+    externalInstall: "Registry에서 제공하지 않는 기존 설치입니다.",
+    resumptionNotice:
+      "기존 맥락을 재개했습니다. 이 에이전트는 이전 메시지 표시를 지원하지 않습니다.",
+    defaultThreadTitle: "새 스레드",
+  },
+} as const satisfies Localized<typeof en>;
