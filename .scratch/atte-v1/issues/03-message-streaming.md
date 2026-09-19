@@ -12,7 +12,7 @@ Status: done
 
 02의 연결과 세션을 사용해 첫 대화 왕복을 완성한다. 완전한 취소·승인 UI는 04, 대기열은 06에서 추가한다. 이 단계까지 완료하면 원래 첫 티켓의 흐름이 완성된다.
 
-공통 원칙: macOS 우선, Rust 공개 대화 인터페이스 중심 테스트, SolidJS FSD 구성. UI 기준은 `codex/prototype-ui`의 `b591a6e`이며 프로토타입 코드를 그대로 이식하지 않는다. 필요한 테스트를 먼저 작성하고 관련 frontend 검사·타입 검사·테스트와 Rust 검사·테스트 및 빌드를 통과한다. 실제 에이전트 검증은 Codex로 한정한다.
+공통 원칙: macOS 우선, Rust 공개 대화 인터페이스 중심 테스트, SolidJS FSD 구성. 필요한 테스트를 먼저 작성하고 관련 frontend 검사·타입 검사·테스트와 Rust 검사·테스트 및 빌드를 통과한다. 실제 에이전트 검증은 Codex로 한정한다.
 
 ## Acceptance criteria
 
@@ -31,7 +31,7 @@ Status: done
 
 
 - 2026-09-17 구현: `send_message`와 원자적 snapshot 구독을 공개 대화 경계에 추가했다. Rust가 turn UUID, 연결 generation, revision, 사용자 메시지, 스트리밍 응답과 stop reason을 소유한다. 구독 시작 시 현재 snapshot을 먼저 보내고 이후 상태 변경 snapshot과 텍스트 증분(`TextDelta`)을 순서대로 전달한다. Tauri Channel을 사용하며 구독 해제와 창 종료는 구독만 정리한다.
-- 설계 참고: [ACP stable prompt turn](https://agentclientprotocol.com/protocol/prompt-turn), [Rust SDK ordering](https://docs.rs/agent-client-protocol/2.1.0/agent_client_protocol/concepts/ordering/index.html), 기존 Zed 조사와 `b591a6e:UI-PROTOTYPE.md`. stable-v1의 `PromptRequest`, `SessionNotification`, 순차 notification/result handler 사용. terminal result에서 turn 라우팅을 해제하고 실패 시 프로세스를 정리한 뒤 재연결을 허용한다.
+- 설계 참고: [ACP stable prompt turn](https://agentclientprotocol.com/protocol/prompt-turn), [Rust SDK ordering](https://docs.rs/agent-client-protocol/2.1.0/agent_client_protocol/concepts/ordering/index.html), 기존 Zed 조사. stable-v1의 `PromptRequest`, `SessionNotification`, 순차 notification/result handler 사용. terminal result에서 turn 라우팅을 해제하고 실패 시 프로세스를 정리한 뒤 재연결을 허용한다.
 - UI: polling 제거, 단일 전송 보호, 오른쪽 짙은 회색 사용자 말풍선과 전체 너비의 왼쪽 응답, 완료/오류/승인 취소 이유 표시. 오래된 revision은 현재 UI를 덮어쓰지 않는다. 구독 등록 응답보다 먼저 오는 업데이트 및 늦게 완료된 등록의 cleanup을 처리한다.
 - 자동 검증: Rust 공개 경계에서 순서·중복 거부·후속 전송·실행 중 재구독·구독 해제 후 계속 실행·prompt 인증/실행 오류·프로세스 종료·외부 세션과 실패 응답 이후 출력·승인 취소를 확인했다. Solid에서는 전송·표시·실패 시 입력 보존·오래된 revision·늦은 구독 정리를 확인했다.
 - 실제 Codex 검증: macOS arm64, `@agentclientprotocol/codex-acp` 1.12.0, Rust SDK 2.1.0. 기존 준비 설치의 실행 파일을 `ATTE_CODEX_ACP`로 지정하고 `cargo test --manifest-path src-tauri/Cargo.toml --test acp_session real_codex_streams -- --ignored --nocapture` 실행. 파일·도구 사용 금지 요청으로 `Remembered cobalt-73.` 응답(6개 streaming revision), 같은 세션의 후속 요청으로 `cobalt-73` 응답(4개 streaming revision), 두 turn 모두 `end_turn`, 작업 폴더 파일 없음 확인. pnpm store 안의 독립 엔트리는 의존성 연결이 없어 종료됐으나 기존 설치의 `.bin/codex-acp`로 통과했다. 실제 로그인 접근을 위해 sandbox 밖에서 실행했다. Claude/Antigravity는 미검증이다.

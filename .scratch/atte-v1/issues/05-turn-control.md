@@ -12,7 +12,7 @@ Status: done
 
 04에서 앱 내 설치·인증과 대화 왕복을 확보한 상태에서 03의 기본 승인 취소 처리에 사용자 승인 UI를 추가한다. 설치된 실행 정의와 인증 오류 복구 흐름을 사용해 승인·취소를 실제 앱에서 검증하는 것이 완료 조건이므로 04를 선행한다. 다른 대화에 대한 영향과 승인 목록 표시의 통합 검증은 07에서 확장한다.
 
-공통 원칙: macOS 우선, 공통 ACP와 capability 기반 구현, Rust의 공개 대화 인터페이스 중심 테스트, SolidJS의 FSD 구성. 실연결 검증은 Codex로 한정한다. 필요한 테스트를 먼저 작성하고 기존 동작을 유지한다. UI 기준은 `codex/prototype-ui`의 `b591a6e`, ACP 실행 근거는 `codex/prototype-acp-validation`의 `65023dc16fc7d62e6065082f11e138e4b9f8385d`다. 프로토타입은 설계·검증 근거로 사용한다.
+공통 원칙: macOS 우선, 공통 ACP와 capability 기반 구현, Rust의 공개 대화 인터페이스 중심 테스트, SolidJS의 FSD 구성. 실연결 검증은 Codex로 한정한다. 필요한 테스트를 먼저 작성하고 기존 동작을 유지한다.
 
 ## Acceptance criteria
 

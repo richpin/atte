@@ -145,8 +145,6 @@ Rust Core가 에이전트 프로세스, ACP 연결, 대화 실행 상태, 승인
 
 - 2026-09-18 사용자 결정: [Zed 외부 ACP 조사](../../docs/research/zed-session-history.md)를 근거로 전체 본문 영구 복제를 제외했다. 06은 목록·재연결 메타데이터 저장과 선택 시 load/resume을 담당한다. 에이전트 부재 시 전체 본문 열람 요구는 목록 접근과 복구 안내로 대체하며, 07의 미전송 대기 메시지 저장은 유지한다. 06에서 목록·재연결 메타데이터 저장과 선택 시 load/resume을, 07에서 미전송 대기 메시지 저장과 공유 연결의 복수 대화를 추가했다. 출시 전 DB는 이 구조를 포함한 초기 스키마 v1으로 유지한다.
 - Product terminology comes from the repository domain glossary. In particular, “대화” is the user-facing durable concept; “세션” refers only to the agent protocol object when necessary.
-- The ACP validation prototype is preserved on `codex/prototype-acp-validation`. Its key evidence commits are `59d4e437e9193576f6c2a123a77214929a8078d1` and `65023dc16fc7d62e6065082f11e138e4b9f8385d`.
-- The UI prototype is preserved on `codex/prototype-ui`; the chosen refinements end at commit `b591a6e`.
 - The [official ACP Rust SDK](https://github.com/agentclientprotocol/rust-sdk) provides the product's protocol types and stable client surface. Dependency versions are pinned by each implementation ticket after checking the current release and compatibility.
 - Tickets under issues/ have explicit blocking edges. Ticket 04 is complete for Registry-driven management, including uninstall; its earlier three-agent validation remains historical evidence. Its Comments record the expanded scope and verification results. No commits are made without an explicit user request.
 

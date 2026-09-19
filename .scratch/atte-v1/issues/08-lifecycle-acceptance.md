@@ -12,7 +12,7 @@ Status: implemented — native quit-policy revalidation pending
 
 04의 설치·인증, 05의 승인·취소, 06의 목록 저장·에이전트 본문 복원, 07의 동시 대화·대기 메시지가 완료된 제품을 대상으로 하는 수명주기 기능과 최종 통합 검증 티켓이다. 개별 티켓의 테스트와 관리 화면 통합은 각 티켓에서 이미 완료되어야 한다.
 
-공통 원칙: macOS 우선, 공통 ACP와 capability 기반 구현, Rust의 공개 대화 인터페이스 중심 테스트, SolidJS의 FSD 구성. 실연결 검증은 Codex로 한정한다. 필요한 테스트를 먼저 작성하고 기존 동작을 유지한다. UI 기준은 `codex/prototype-ui`의 `b591a6e`, ACP 실행 근거는 `codex/prototype-acp-validation`의 `65023dc16fc7d62e6065082f11e138e4b9f8385d`다. 프로토타입은 설계·검증 근거로 사용한다.
+공통 원칙: macOS 우선, 공통 ACP와 capability 기반 구현, Rust의 공개 대화 인터페이스 중심 테스트, SolidJS의 FSD 구성. 실연결 검증은 Codex로 한정한다. 필요한 테스트를 먼저 작성하고 기존 동작을 유지한다.
 
 ## Acceptance criteria
 

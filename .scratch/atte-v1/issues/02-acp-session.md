@@ -14,7 +14,7 @@ Status: done
 
 01의 초안에 프로세스와 원격 세션을 연결한다. prompt 전송, 응답 스트리밍과 완전한 승인 UI는 후속 티켓이다. 이후 Registry 설치 결과도 동일한 실행 정의를 사용한다.
 
-공통 원칙: macOS 우선, Rust 공개 대화 인터페이스 중심 테스트, SolidJS FSD 구성. UI 기준은 `codex/prototype-ui`의 `b591a6e`이며 프로토타입 코드를 그대로 이식하지 않는다. 필요한 테스트를 먼저 작성하고 관련 frontend 검사·타입 검사·테스트와 Rust 검사·테스트 및 빌드를 통과한다. 실제 에이전트 검증은 Codex로 한정한다.
+공통 원칙: macOS 우선, Rust 공개 대화 인터페이스 중심 테스트, SolidJS FSD 구성. 필요한 테스트를 먼저 작성하고 관련 frontend 검사·타입 검사·테스트와 Rust 검사·테스트 및 빌드를 통과한다. 실제 에이전트 검증은 Codex로 한정한다.
 
 ## Acceptance criteria
 

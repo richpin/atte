@@ -14,7 +14,7 @@ Status: done
 
 설계 근거: [Zed의 외부 ACP 대화 관리 조사](../../../docs/research/zed-session-history.md). Zed처럼 목록 메타데이터와 실행 중 본문을 분리하고, 대화 선택 시 공통 ACP로 본문을 불러온다. 이번 범위의 목록은 Atte가 생성하여 알고 있는 대화다. `session/list` 미지원이어도 저장한 세션 참조로 load/resume할 수 있어야 하며, 외부 도구에서 만든 세션 가져오기와 에이전트 내부 파일 직접 파싱은 추가하지 않는다.
 
-공통 원칙: macOS 우선, 공통 ACP와 capability 기반 구현, Rust의 공개 대화 인터페이스 중심 테스트, SolidJS의 FSD 구성. 실연결 검증은 Codex로 한정한다. 필요한 테스트를 먼저 작성하고 기존 동작을 유지한다. UI 기준은 `codex/prototype-ui`의 `b591a6e`, ACP 실행 근거는 `codex/prototype-acp-validation`의 `65023dc16fc7d62e6065082f11e138e4b9f8385d`다. 프로토타입은 설계·검증 근거로 사용한다.
+공통 원칙: macOS 우선, 공통 ACP와 capability 기반 구현, Rust의 공개 대화 인터페이스 중심 테스트, SolidJS의 FSD 구성. 실연결 검증은 Codex로 한정한다. 필요한 테스트를 먼저 작성하고 기존 동작을 유지한다.
 
 ## Acceptance criteria
 

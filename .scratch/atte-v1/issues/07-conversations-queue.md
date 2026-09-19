@@ -12,7 +12,7 @@ Status: complete
 
 이 작업으로 확정된 A안의 대화 탐색 UI를 완성하고, 프로젝트 +를 04의 설치·인증 관리 흐름에 연결한다. 06의 메타데이터 저장 기반을 Atte가 소유하는 미전송 대기 메시지까지 확장한다. 대기 메시지 저장은 에이전트가 소유하는 대화 본문 복제와 구분하며 전송 후 로컬 본문 이력으로 보존하지 않는다. 작업 폴더 공유는 파일 충돌 방지를 보장하지 않으며 worktree 격리는 후속 범위다.
 
-공통 원칙: macOS 우선, 공통 ACP와 capability 기반 구현, Rust의 공개 대화 인터페이스 중심 테스트, SolidJS의 FSD 구성. 실연결 검증은 Codex로 한정한다. 필요한 테스트를 먼저 작성하고 기존 동작을 유지한다. UI 기준은 `codex/prototype-ui`의 `b591a6e`, ACP 실행 근거는 `codex/prototype-acp-validation`의 `65023dc16fc7d62e6065082f11e138e4b9f8385d`다. 프로토타입은 설계·검증 근거로 사용한다.
+공통 원칙: macOS 우선, 공통 ACP와 capability 기반 구현, Rust의 공개 대화 인터페이스 중심 테스트, SolidJS의 FSD 구성. 실연결 검증은 Codex로 한정한다. 필요한 테스트를 먼저 작성하고 기존 동작을 유지한다.
 
 ## Acceptance criteria
 
