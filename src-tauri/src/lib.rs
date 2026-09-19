@@ -271,17 +271,14 @@ async fn agent_catalog(
 async fn refresh_agent_catalog(
     threads: State<'_, Threads>,
     management: State<'_, agent_management::AgentManagement>,
-    force: Option<bool>,
     lifecycle: State<'_, lifecycle::Lifecycle>,
 ) -> Result<Vec<agent_management::ManagedAgent>, String> {
     lifecycle
         .operation(async {
-            if force.unwrap_or(true) {
-                management.refresh().await
-            } else {
-                management.refresh_if_stale().await
-            }
-            .map_err(|error| error.to_string())?;
+            management
+                .refresh_if_stale()
+                .await
+                .map_err(|error| error.to_string())?;
             management
                 .catalog(&threads)
                 .map_err(|error| error.to_string())

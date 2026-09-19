@@ -27,7 +27,7 @@ Registry 갱신은 `registry_metadata`만 트랜잭션으로 교체한다. 목�
 | `key` | TEXT PRIMARY KEY NOT NULL | 메타데이터 이름 |
 | `value` | TEXT NOT NULL | 값 |
 
-현재 키는 `registry_fetched_at` 하나다. 마지막 정상 Registry 갱신의 Unix 초를 저장한다. 자동 갱신 시도는 메모리의 마지막 시도 시각으로 한 시간 간격을 제한하고, 재실행 시 저장된 정상 갱신 시각을 사용한다. 명시적 새로고침은 즉시 시도한다.
+현재 키는 `registry_fetched_at` 하나다. 마지막 정상 Registry 갱신의 Unix 초를 저장한다. 자동 갱신 시도는 메모리의 마지막 시도 시각으로 한 시간 간격을 제한하고, 재실행 시 저장된 정상 갱신 시각을 사용한다.
 
 ## 삭제와 실패 복구
 

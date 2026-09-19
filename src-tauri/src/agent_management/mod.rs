@@ -26,7 +26,7 @@ use std::{
 pub enum ManagementError {
     #[error("Registry를 불러올 수 없습니다. 네트워크를 확인하고 다시 시도해주세요.")]
     Network,
-    #[error("지원하는 Registry 배포 정보를 찾을 수 없습니다. 목록을 새로고침해주세요.")]
+    #[error("지원하는 Registry 배포 정보를 찾을 수 없습니다. 잠시 후 다시 시도해주세요.")]
     Registry,
     #[error("이 플랫폼에 맞는 배포가 없습니다.")]
     Unsupported,
@@ -127,10 +127,6 @@ impl AgentManagement {
 
     pub async fn refresh_if_stale(&self) -> Result<(), ManagementError> {
         self.refresh_from(registry::REGISTRY_URL, false).await
-    }
-
-    pub async fn refresh(&self) -> Result<(), ManagementError> {
-        self.refresh_from(registry::REGISTRY_URL, true).await
     }
 
     /// Registry transport boundary; desktop callers always use the official URL.

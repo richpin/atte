@@ -1,7 +1,7 @@
 import { AgentIcon } from "shared/ui";
 import { createResource, createSignal, For, Show } from "solid-js";
 import { createStore, reconcile } from "solid-js/store";
-import { authenticate, catalog, install, uninstall } from "../api/agents";
+import { catalog, install, refreshCatalog, uninstall } from "../api/agents";
 
 import { UninstallAgentDialog } from "./UninstallAgentDialog";
 
@@ -11,8 +11,9 @@ export function AgentManagementPage(props: {
   onAgentsChanged: () => void;
 }) {
   const [error, setError] = createSignal<string>();
+  const [search, setSearch] = createSignal("");
   const [work, setWork] = createStore<
-    Record<string, { busy: boolean; message: string; failed: boolean }>
+    Record<string, { busy: boolean; operation: "install" | "uninstall" }>
   >({});
   const [agents, { mutate }] = createResource(
     () => props.active,
@@ -20,7 +21,7 @@ export function AgentManagementPage(props: {
       const cached = await catalog();
       mutate(cached);
       try {
-        return await catalog(true, false);
+        return await refreshCatalog();
       } catch (cause) {
         setError(message(cause));
         try {
@@ -44,59 +45,29 @@ export function AgentManagementPage(props: {
       },
     },
   );
+  const filteredAgents = () => {
+    const query = search().trim().toLowerCase();
+    return query
+      ? (agents.latest ?? []).filter((agent) =>
+          agent.name.toLowerCase().includes(query),
+        )
+      : (agents.latest ?? []);
+  };
 
-  async function refresh() {
+  async function run(id: string, operation: "install" | "uninstall") {
     setError(undefined);
-    try {
-      mutate(await catalog(true));
-    } catch (cause) {
-      setError(message(cause));
-    }
-  }
-
-  async function run(
-    id: string,
-    operation: "install" | "inspect" | "login" | "uninstall",
-    method?: string,
-  ) {
-    setWork(id, {
-      busy: true,
-      message:
-        operation === "uninstall"
-          ? "삭제 중…"
-          : operation === "install"
-            ? "설치 준비 중…"
-            : "에이전트 연결 중…",
-      failed: false,
-    });
+    setWork(id, { busy: true, operation });
     try {
       if (operation === "uninstall") {
         await uninstall(id);
         props.onAgentsChanged();
-        setWork(id, "message", "삭제 완료.");
-      } else if (operation === "install") {
-        await install(id, (message) => setWork(id, "message", message));
-        props.onAgentsChanged();
-        setWork(id, "message", "설치 완료. 연결·인증 확인을 진행하세요.");
       } else {
-        if (operation === "login")
-          setWork(
-            id,
-            "message",
-            "선택한 인증 방식의 안내를 따라 로그인을 완료해주세요. 최대 10분 동안 기다립니다.",
-          );
-        const result = await authenticate(id, method);
-        setWork(
-          id,
-          "message",
-          result.authenticated
-            ? "인증 완료. 스레드로 돌아가 새 스레드를 시작하거나 다시 연결하세요."
-            : "ACP 연결 확인. 인증 여부는 첫 메시지 또는 로그인으로 확인합니다.",
-        );
+        await install(id);
+        props.onAgentsChanged();
       }
       mutate(await catalog());
     } catch (cause) {
-      setWork(id, { message: message(cause), failed: true });
+      setError(message(cause));
       if (operation === "uninstall") props.onAgentsChanged();
       try {
         mutate(await catalog());
@@ -122,19 +93,16 @@ export function AgentManagementPage(props: {
         </button>
       </header>
       <section class="mx-auto max-w-3xl space-y-5 px-6 py-8">
-        <p class="text-sm text-muted">
-          에이전트를 설치하고 로그인한 뒤 작업 폴더에서 스레드를 시작하세요.
-        </p>
-        <div class="flex items-center justify-between text-xs text-muted">
-          <span>공식 ACP Registry</span>
-          <button
-            type="button"
-            class="focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-accent"
-            onClick={refresh}
-          >
-            목록 새로고침
-          </button>
-        </div>
+        <label class="block">
+          <span class="sr-only">에이전트 이름 검색</span>
+          <input
+            type="search"
+            value={search()}
+            placeholder="에이전트 이름 검색"
+            class="w-full rounded-lg border border-line bg-panel px-4 py-2.5 text-sm placeholder:text-muted focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
+            onInput={(event) => setSearch(event.currentTarget.value)}
+          />
+        </label>
         <Show when={error()}>
           <p role="alert">{error()}</p>
         </Show>
@@ -143,136 +111,57 @@ export function AgentManagementPage(props: {
         </Show>
         <Show when={!agents.loading && agents.latest?.length === 0}>
           <p role="status">
-            저장된 목록이 없습니다. 네트워크 연결 후 목록을 새로고침하세요.
+            저장된 목록이 없습니다. 네트워크 연결을 확인해주세요.
           </p>
         </Show>
-        <For each={agents.latest ?? []}>
-          {(agent) => (
-            <article class="space-y-4 rounded-2xl border border-line bg-panel p-5">
-              <div class="flex items-center justify-between">
-                <div class="flex items-center gap-3">
+        <Show
+          when={
+            !agents.loading &&
+            (agents.latest?.length ?? 0) > 0 &&
+            filteredAgents().length === 0
+          }
+        >
+          <p role="status">검색 결과가 없습니다.</p>
+        </Show>
+        <For each={filteredAgents()}>
+          {(agent) => {
+            const installing = () =>
+              work[agent.id]?.busy && work[agent.id]?.operation === "install";
+            return (
+              <article class="flex items-start justify-between gap-5 rounded-2xl border border-line bg-panel p-5">
+                <div class="flex min-w-0 items-start gap-3">
                   <AgentIcon src={agent.icon} />
-                  <h2 class="font-medium">{agent.name}</h2>
+                  <div class="min-w-0 space-y-1">
+                    <h2 class="font-medium">{agent.name}</h2>
+                    <p class="text-sm text-muted">{agent.description}</p>
+                  </div>
                 </div>
-                <span class="text-xs text-muted">
-                  {agent.installed
-                    ? `설치됨 · ${agent.installedVersion}`
-                    : agent.installedVersion
-                      ? "설치 파일 없음 · 재설치 필요"
-                      : "설치되지 않음"}
-                </span>
-              </div>
-              <p class="text-sm text-muted">{agent.description}</p>
-              <p class="break-all text-xs text-muted">
-                {agent.distribution?.kind === "npm"
-                  ? `npm · ${agent.distribution.package}`
-                  : agent.distribution?.kind === "binary"
-                    ? `macOS 바이너리 · ${agent.availableVersion}`
-                    : (agent.unavailableReason ??
-                      "현재 플랫폼 배포를 확인할 수 없습니다.")}
-              </p>
-              <Show when={agent.artifact}>
-                <p class="break-all text-xs text-muted">
-                  설치 위치: {agent.artifact}
-                </p>
-              </Show>
-              <dl class="grid grid-cols-3 gap-3 text-xs">
-                <div>
-                  <dt class="text-muted">ACP 연결</dt>
-                  <dd>
-                    {agent.authentication.connected ? "연결 확인됨" : "미확인"}
-                  </dd>
-                </div>
-                <div>
-                  <dt class="text-muted">인증</dt>
-                  <dd>
-                    {agent.authentication.required
-                      ? "로그인 필요"
-                      : agent.authentication.authenticated
-                        ? "인증 완료"
-                        : "미확인"}
-                  </dd>
-                </div>
-                <div>
-                  <dt class="text-muted">스레드 실행</dt>
-                  <dd>
-                    {agent.installed
-                      ? agent.authentication.authenticated
-                        ? "시작 가능"
-                        : agent.authentication.required
-                          ? "로그인 후 다시 연결"
-                          : "첫 메시지에서 확인"
-                      : "설치 필요"}
-                  </dd>
-                </div>
-              </dl>
-              <div class="flex flex-wrap gap-3 text-sm">
-                <Show when={!agent.installed}>
-                  <button
-                    type="button"
-                    aria-label={`${agent.name} 설치`}
-                    disabled={!agent.distribution || work[agent.id]?.busy}
-                    class="rounded-lg bg-accent px-4 py-2 text-white focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-accent disabled:opacity-40"
-                    onClick={() => run(agent.id, "install")}
-                  >
-                    설치
-                  </button>
-                </Show>
-                <Show when={agent.installed}>
-                  <button
-                    type="button"
-                    disabled={work[agent.id]?.busy}
-                    class="rounded-lg border border-line px-4 py-2 focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-accent disabled:opacity-40"
-                    onClick={() => run(agent.id, "inspect")}
-                  >
-                    연결·인증 방법 확인
-                  </button>
-                  <For each={agent.authentication.methods}>
-                    {(method) => (
+                <div class="flex shrink-0 items-center gap-3 text-sm">
+                  <Show
+                    when={agent.installed}
+                    fallback={
                       <button
                         type="button"
-                        title={method.description ?? undefined}
-                        disabled={!method.supported || work[agent.id]?.busy}
+                        aria-label={`${agent.name} ${installing() ? "설치 중" : "설치"}`}
+                        disabled={!agent.distribution || installing()}
                         class="rounded-lg bg-accent px-4 py-2 text-white focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-accent disabled:opacity-40"
-                        onClick={() => run(agent.id, "login", method.id)}
+                        onClick={() => run(agent.id, "install")}
                       >
-                        {method.name}
-                        {method.supported
-                          ? method.terminal
-                            ? " · 터미널"
-                            : ""
-                          : " · 미지원 인증"}
+                        {installing() ? "설치 중" : "설치"}
                       </button>
-                    )}
-                  </For>
-                </Show>
-                <Show when={agent.installedVersion}>
-                  <UninstallAgentDialog
-                    name={agent.name}
-                    disabled={work[agent.id]?.busy ?? false}
-                    onConfirm={() => run(agent.id, "uninstall")}
-                  />
-                </Show>
-              </div>
-              <For each={agent.authentication.methods}>
-                {(method) => (
-                  <Show when={method.description}>
-                    <p class="text-xs text-muted">
-                      {method.name}: {method.description}
-                    </p>
+                    }
+                  >
+                    <span class="text-xs text-muted">설치됨</span>
+                    <UninstallAgentDialog
+                      name={agent.name}
+                      disabled={work[agent.id]?.busy ?? false}
+                      onConfirm={() => run(agent.id, "uninstall")}
+                    />
                   </Show>
-                )}
-              </For>
-              <Show when={work[agent.id]?.message}>
-                <p
-                  role={work[agent.id]?.failed ? "alert" : "status"}
-                  class="text-sm"
-                >
-                  {work[agent.id]?.message}
-                </p>
-              </Show>
-            </article>
-          )}
+                </div>
+              </article>
+            );
+          }}
         </For>
       </section>
     </main>

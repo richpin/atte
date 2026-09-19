@@ -63,10 +63,11 @@ it("shows registry icons and falls back for missing or failed images", async () 
       expect(
         screen
           .getByRole("heading", { name: "Available" })
-          .parentElement?.querySelector("img")?.src,
+          .closest("article")
+          ?.querySelector("img")?.src,
       ).toBe("https://cdn.agentclientprotocol.com/available.svg");
       for (const name of ["Broken", "Missing"]) {
-        const row = screen.getByRole("heading", { name }).parentElement;
+        const row = screen.getByRole("heading", { name }).closest("article");
         expect(row?.querySelector("img")).toBeNull();
         expect(row?.querySelector("svg")).not.toBeNull();
       }
@@ -1073,7 +1074,7 @@ it("returns from project setup to create in the original folder", async () => {
   await userEvent.click(
     await screen.findByRole("button", { name: "New Provider 설치" }),
   );
-  await screen.findByText(/설치됨 · 1.0.0/);
+  await screen.findByText("설치됨");
   expect(invoke).not.toHaveBeenCalledWith("create_thread", expect.anything());
   await userEvent.click(
     screen.getByRole("button", { name: "스레드로 돌아가기" }),
@@ -1135,6 +1136,7 @@ it("keeps streaming and the fixed thread while management is open", async () => 
 it("retries a failed install and offers the installed agent without restarting", async () => {
   let installed = false;
   let attempts = 0;
+  let finishInstall: (() => void) | undefined;
   const agent = () => ({
     id: "new-provider",
     name: "New Provider",
@@ -1155,7 +1157,12 @@ it("retries a failed install and offers the installed agent without restarting",
     if (command === "install_agent") {
       attempts++;
       if (attempts === 1) throw "설치 실패. 다시 시도해주세요.";
-      installed = true;
+      await new Promise<void>((resolve) => {
+        finishInstall = () => {
+          installed = true;
+          resolve();
+        };
+      });
     }
     if (command === "select_working_folder") {
       expect(args).toEqual({ agentId: "new-provider" });
@@ -1174,7 +1181,11 @@ it("retries a failed install and offers the installed agent without restarting",
   await userEvent.click(
     screen.getByRole("button", { name: "New Provider 설치" }),
   );
-  expect(await screen.findByText(/설치됨 · 1.12.0/)).toBeTruthy();
+  expect(
+    await screen.findByRole("button", { name: "New Provider 설치 중" }),
+  ).toHaveProperty("disabled", true);
+  finishInstall?.();
+  expect(await screen.findByText("설치됨")).toBeTruthy();
   await userEvent.click(
     screen.getByRole("button", { name: "스레드로 돌아가기" }),
   );
@@ -1187,8 +1198,7 @@ it("retries a failed install and offers the installed agent without restarting",
   });
 });
 
-it("shows new registry agents and unsupported reasons while keeping cached installations on refresh failure", async () => {
-  let fail = false;
+it("shows simplified agent cards while keeping cached installations on automatic refresh failure", async () => {
   const agents = [
     {
       id: "new-provider",
@@ -1223,9 +1233,8 @@ it("shows new registry agents and unsupported reasons while keeping cached insta
   ];
   vi.mocked(invoke).mockImplementation(async (command) => {
     if (command === "prepared_agents") return [];
-    if (command === "refresh_agent_catalog" && fail) throw "Registry 갱신 실패";
-    if (command === "agent_catalog" || command === "refresh_agent_catalog")
-      return agents;
+    if (command === "refresh_agent_catalog") throw "Registry 갱신 실패";
+    if (command === "agent_catalog") return agents;
   });
   render(() => <App />);
   await userEvent.click(screen.getByRole("button", { name: "에이전트 관리" }));
@@ -1236,17 +1245,44 @@ it("shows new registry agents and unsupported reasons while keeping cached insta
   expect(
     screen.getByRole("button", { name: "UV Provider 설치" }),
   ).toHaveProperty("disabled", true);
-  expect(screen.getByText("지원하지 않는 배포 형식입니다.")).toBeTruthy();
-  expect(
-    screen.getByRole("button", { name: "External auth · 미지원 인증" }),
-  ).toHaveProperty("disabled", true);
-  fail = true;
-  await userEvent.click(screen.getByRole("button", { name: "목록 새로고침" }));
   expect(await screen.findByRole("alert")).toHaveProperty(
     "textContent",
     "Registry 갱신 실패",
   );
-  expect(screen.getByText("설치됨 · 2.0.0")).toBeTruthy();
+  expect(screen.getByText("설치됨")).toBeTruthy();
+  expect(
+    screen.getByRole("button", { name: "Removed Provider 삭제" }),
+  ).toBeTruthy();
+  for (const removed of [
+    "공식 ACP Registry",
+    "목록 새로고침",
+    "에이전트를 설치하고 로그인한 뒤 작업 폴더에서 스레드를 시작하세요.",
+    "npm · new-provider@1.0.0",
+    "지원하지 않는 배포 형식입니다.",
+    "External auth · 미지원 인증",
+    "ACP 연결",
+    "인증",
+    "스레드 실행",
+    "설치되지 않음",
+  ]) {
+    expect(screen.queryByText(removed)).toBeNull();
+  }
+  expect(invoke).toHaveBeenCalledWith("refresh_agent_catalog");
+  const search = screen.getByRole("searchbox", {
+    name: "에이전트 이름 검색",
+  });
+  await userEvent.type(search, "uv");
+  expect(screen.getByRole("heading", { name: "UV Provider" })).toBeTruthy();
+  expect(screen.queryByRole("heading", { name: "New Provider" })).toBeNull();
+  expect(
+    screen.queryByRole("heading", { name: "Removed Provider" }),
+  ).toBeNull();
+  await userEvent.clear(search);
+  await userEvent.type(search, "missing");
+  expect(screen.getByRole("status")).toHaveProperty(
+    "textContent",
+    "검색 결과가 없습니다.",
+  );
 });
 
 it("confirms uninstall, supports cancel and retry, and removes the agent from new thread choices", async () => {
@@ -1293,10 +1329,6 @@ it("confirms uninstall, supports cancel and retry, and removes the agent from ne
     await screen.findByRole("button", { name: "New Provider 삭제" }),
   );
   await userEvent.click(screen.getByRole("button", { name: "삭제 확인" }));
-  expect(await screen.findByText(/삭제 완료/)).toBeTruthy();
-  expect(
-    screen.queryByRole("button", { name: "New Provider 삭제" }),
-  ).toBeNull();
   expect(
     await screen.findByRole("button", { name: "New Provider 설치" }),
   ).toBeTruthy();
