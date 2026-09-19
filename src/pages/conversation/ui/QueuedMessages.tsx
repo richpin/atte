@@ -23,7 +23,7 @@ export function QueuedMessages(props: {
                 <button
                   type="button"
                   aria-expanded={expanded()}
-                  class={`min-w-0 flex-1 text-left ${expanded() ? "whitespace-pre-wrap break-words" : "truncate"}`}
+                  class={`min-w-0 flex-1 text-left focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-accent ${expanded() ? "whitespace-pre-wrap break-words" : "truncate"}`}
                   onClick={() => setExpanded((value) => !value)}
                 >
                   {messages().get(id)}
@@ -32,7 +32,7 @@ export function QueuedMessages(props: {
                   type="button"
                   aria-label={`대기 메시지 삭제: ${messages().get(id)}`}
                   disabled={deleting()}
-                  class="shrink-0 rounded p-1 text-muted hover:text-ink disabled:opacity-40"
+                  class="shrink-0 rounded p-1 text-muted hover:text-ink focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-accent disabled:opacity-40"
                   onClick={async () => {
                     setDeleting(true);
                     try {

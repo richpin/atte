@@ -107,7 +107,7 @@ export function ConversationPage(props: {
           <button
             type="button"
             aria-label="사이드바 열기"
-            class="rounded p-1 text-muted"
+            class="rounded p-1 text-muted focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-accent"
             onClick={() => setSidebarOpen(true)}
           >
             ◧
@@ -136,7 +136,7 @@ export function ConversationPage(props: {
           새 대화 에이전트
           <select
             aria-label="새 대화 에이전트"
-            class="ml-2 rounded border border-line bg-panel p-1"
+            class="ml-2 rounded border border-line bg-panel p-1 focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-accent"
             value={agentId()}
             onChange={(event) => setSelectedAgent(event.currentTarget.value)}
           >
@@ -147,7 +147,7 @@ export function ConversationPage(props: {
         </label>
         <button
           type="button"
-          class="ml-auto shrink-0 rounded-lg border border-line px-3 py-1.5 text-xs hover:bg-panel disabled:opacity-50"
+          class="ml-auto shrink-0 rounded-lg border border-line px-3 py-1.5 text-xs hover:bg-panel focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-accent disabled:opacity-50"
           disabled={
             agentsFailed() || selecting() || agents.loading || connecting()
           }
@@ -157,7 +157,7 @@ export function ConversationPage(props: {
         </button>
         <button
           type="button"
-          class="shrink-0 text-xs text-muted"
+          class="shrink-0 text-xs text-muted focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-accent"
           onClick={props.onManage}
         >
           에이전트 관리
@@ -234,7 +234,11 @@ export function ConversationPage(props: {
               </Show>
               <Show when={streamError()}>
                 <p role="alert">대화 상태를 구독할 수 없습니다.</p>
-                <button type="button" onClick={retrySubscription}>
+                <button
+                  type="button"
+                  class="focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-accent"
+                  onClick={retrySubscription}
+                >
                   상태 다시 불러오기
                 </button>
               </Show>
@@ -246,7 +250,11 @@ export function ConversationPage(props: {
                 )}
               </Show>
               <Show when={conversation()?.failure === "authenticationRequired"}>
-                <button type="button" onClick={props.onManage}>
+                <button
+                  type="button"
+                  class="focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-accent"
+                  onClick={props.onManage}
+                >
                   로그인 안내 열기
                 </button>
               </Show>
@@ -261,7 +269,11 @@ export function ConversationPage(props: {
                     ))
                 }
               >
-                <button type="button" onClick={props.onManage}>
+                <button
+                  type="button"
+                  class="focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-accent"
+                  onClick={props.onManage}
+                >
                   설치·인증 관리 열기
                 </button>
               </Show>
@@ -284,7 +296,7 @@ export function ConversationPage(props: {
               >
                 <button
                   type="button"
-                  class="rounded-lg bg-accent px-4 py-2 text-sm text-white disabled:opacity-50"
+                  class="rounded-lg bg-accent px-4 py-2 text-sm text-white focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-accent disabled:opacity-50"
                   disabled={
                     connecting() || conversation()?.status === "connecting"
                   }
@@ -302,7 +314,7 @@ export function ConversationPage(props: {
                 )}
               </Show>
             </ConversationHistory>
-            <div class="mx-auto mb-6 w-full max-w-3xl shrink-0 px-6">
+            <div class="mx-auto mb-6 w-full max-w-4xl shrink-0 px-6">
               <QueuedMessages
                 messages={conversation()?.queuedMessages ?? []}
                 onDelete={deleteQueued}
@@ -320,7 +332,7 @@ export function ConversationPage(props: {
                     <textarea
                       aria-label="메시지"
                       aria-describedby="connection-note"
-                      class="w-full resize-none bg-transparent text-sm disabled:cursor-not-allowed"
+                      class="w-full resize-none bg-transparent text-sm outline-none disabled:cursor-not-allowed"
                       disabled={
                         sending() ||
                         !["sessionReady", "running", "cancelling"].includes(
@@ -363,7 +375,7 @@ export function ConversationPage(props: {
                   <button
                     type={showStop() ? "button" : "submit"}
                     aria-label={showStop() ? "현재 작업 중단" : "전송"}
-                    class="rounded-lg bg-accent px-4 py-2 text-white disabled:opacity-40"
+                    class="grid size-8 shrink-0 place-items-center rounded-full bg-accent text-white focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-accent disabled:opacity-40"
                     disabled={
                       showStop() ? stopping() : !canSend() || !message().trim()
                     }
@@ -371,7 +383,29 @@ export function ConversationPage(props: {
                       if (showStop()) void cancel();
                     }}
                   >
-                    {showStop() ? "중단" : "전송"}
+                    <Show
+                      when={showStop()}
+                      fallback={
+                        <svg
+                          aria-hidden="true"
+                          width="18"
+                          height="18"
+                          viewBox="0 0 24 24"
+                          fill="none"
+                          stroke="currentColor"
+                          stroke-width="2.25"
+                          stroke-linecap="round"
+                          stroke-linejoin="round"
+                        >
+                          <path d="M12 19V5m-7 7 7-7 7 7" />
+                        </svg>
+                      }
+                    >
+                      <span
+                        aria-hidden="true"
+                        class="size-3 rounded-[2px] bg-current"
+                      />
+                    </Show>
                   </button>
                 </div>
               </form>

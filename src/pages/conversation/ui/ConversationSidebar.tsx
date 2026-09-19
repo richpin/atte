@@ -36,7 +36,7 @@ export function ConversationSidebar(props: {
         <button
           type="button"
           aria-label="사이드바 닫기"
-          class="rounded p-1 text-muted hover:bg-canvas"
+          class="rounded p-1 text-muted hover:bg-canvas focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-accent"
           onClick={props.onClose}
         >
           ◧
@@ -47,7 +47,11 @@ export function ConversationSidebar(props: {
           <p role="alert" class="text-sm">
             대화 목록을 불러올 수 없습니다.
           </p>
-          <button type="button" onClick={props.onRetry}>
+          <button
+            type="button"
+            class="focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-accent"
+            onClick={props.onRetry}
+          >
             목록 다시 불러오기
           </button>
         </Show>
@@ -64,7 +68,7 @@ export function ConversationSidebar(props: {
                   type="button"
                   aria-label={`프로젝트 ${group.name}`}
                   aria-expanded={!collapsed().has(group.folder)}
-                  class="flex min-w-0 flex-1 items-center gap-2 rounded px-2 py-2 text-left text-sm hover:bg-canvas"
+                  class="flex min-w-0 flex-1 items-center gap-2 rounded px-2 py-2 text-left text-sm hover:bg-canvas focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-accent"
                   onClick={() =>
                     setCollapsed((previous) => {
                       const next = new Set(previous);
@@ -83,7 +87,7 @@ export function ConversationSidebar(props: {
                   type="button"
                   aria-label={`${group.name}에 새 대화`}
                   disabled={props.creating}
-                  class="shrink-0 rounded px-2 py-1 text-muted hover:bg-canvas disabled:opacity-40"
+                  class="shrink-0 rounded px-2 py-1 text-muted hover:bg-canvas focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-accent disabled:opacity-40"
                   onClick={() => props.onCreate(group.folder)}
                 >
                   +
@@ -97,7 +101,7 @@ export function ConversationSidebar(props: {
                       aria-current={
                         props.selected === entry.id ? "page" : undefined
                       }
-                      class="mb-1 flex w-full items-center gap-2 rounded-lg py-2 pr-2 pl-7 text-left text-sm hover:bg-canvas aria-[current=page]:bg-canvas"
+                      class="mb-1 flex w-full items-center gap-2 rounded-lg py-2 pr-2 pl-7 text-left text-sm hover:bg-canvas focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-accent aria-[current=page]:bg-canvas"
                       onClick={() => props.onSelect(entry.id)}
                     >
                       <span class="min-w-0 flex-1 truncate">

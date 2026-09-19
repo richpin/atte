@@ -115,7 +115,7 @@ export function AgentManagementPage(props: {
         <h1 class="text-sm font-medium">에이전트 관리</h1>
         <button
           type="button"
-          class="ml-auto rounded-lg border border-line px-3 py-1.5 text-xs"
+          class="ml-auto rounded-lg border border-line px-3 py-1.5 text-xs focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-accent"
           onClick={props.onBack}
         >
           대화로 돌아가기
@@ -127,7 +127,11 @@ export function AgentManagementPage(props: {
         </p>
         <div class="flex items-center justify-between text-xs text-muted">
           <span>공식 ACP Registry</span>
-          <button type="button" onClick={refresh}>
+          <button
+            type="button"
+            class="focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-accent"
+            onClick={refresh}
+          >
             목록 새로고침
           </button>
         </div>
@@ -208,7 +212,7 @@ export function AgentManagementPage(props: {
                     type="button"
                     aria-label={`${agent.name} 설치`}
                     disabled={!agent.distribution || work[agent.id]?.busy}
-                    class="rounded-lg bg-accent px-4 py-2 text-white disabled:opacity-40"
+                    class="rounded-lg bg-accent px-4 py-2 text-white focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-accent disabled:opacity-40"
                     onClick={() => run(agent.id, "install")}
                   >
                     설치
@@ -218,7 +222,7 @@ export function AgentManagementPage(props: {
                   <button
                     type="button"
                     disabled={work[agent.id]?.busy}
-                    class="rounded-lg border border-line px-4 py-2 disabled:opacity-40"
+                    class="rounded-lg border border-line px-4 py-2 focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-accent disabled:opacity-40"
                     onClick={() => run(agent.id, "inspect")}
                   >
                     연결·인증 방법 확인
@@ -229,7 +233,7 @@ export function AgentManagementPage(props: {
                         type="button"
                         title={method.description ?? undefined}
                         disabled={!method.supported || work[agent.id]?.busy}
-                        class="rounded-lg bg-accent px-4 py-2 text-white disabled:opacity-40"
+                        class="rounded-lg bg-accent px-4 py-2 text-white focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-accent disabled:opacity-40"
                         onClick={() => run(agent.id, "login", method.id)}
                       >
                         {method.name}

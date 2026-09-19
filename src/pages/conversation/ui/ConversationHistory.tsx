@@ -44,13 +44,13 @@ export function ConversationHistory(props: {
   });
 
   return (
-    <div class="relative mx-auto min-h-0 w-full max-w-3xl flex-1">
+    <div class="relative min-h-0 w-full flex-1">
       <section
         ref={viewport}
         aria-label="대화 기록"
         // biome-ignore lint/a11y/noNoninteractiveTabindex: Scrollable history needs keyboard access.
         tabIndex={0}
-        class="h-full overflow-y-auto overscroll-contain [overflow-anchor:none]"
+        class="h-full overflow-y-auto overscroll-contain focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-accent [overflow-anchor:none]"
         onWheel={(event) => {
           if (event.deltaY < 0) following = false;
         }}
@@ -80,7 +80,7 @@ export function ConversationHistory(props: {
           type="button"
           aria-label="최신 내용으로 이동"
           title="최신 내용으로 이동"
-          class="absolute bottom-3 left-1/2 flex size-9 -translate-x-1/2 items-center justify-center rounded-full border border-line bg-canvas text-ink shadow-sm hover:bg-panel"
+          class="absolute bottom-3 left-1/2 flex size-9 -translate-x-1/2 items-center justify-center rounded-full border border-line bg-canvas text-ink shadow-sm hover:bg-panel focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-accent"
           onClick={followLatest}
         >
           <svg

@@ -10,7 +10,7 @@ export function UninstallAgentDialog(props: {
       <AlertDialog.Trigger
         disabled={props.disabled}
         aria-label={`${props.name} 삭제`}
-        class="rounded-lg border border-line px-4 py-2 disabled:opacity-40"
+        class="rounded-lg border border-line px-4 py-2 focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-accent disabled:opacity-40"
       >
         삭제
       </AlertDialog.Trigger>
@@ -27,13 +27,13 @@ export function UninstallAgentDialog(props: {
           <div class="flex justify-end gap-3 text-sm">
             <AlertDialog.CloseButton
               aria-label="취소"
-              class="rounded-lg border border-line px-4 py-2"
+              class="rounded-lg border border-line px-4 py-2 focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-accent"
             >
               취소
             </AlertDialog.CloseButton>
             <AlertDialog.CloseButton
               aria-label="삭제 확인"
-              class="rounded-lg bg-accent px-4 py-2 text-white"
+              class="rounded-lg bg-accent px-4 py-2 text-white focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-accent"
               onClick={props.onConfirm}
             >
               삭제 확인
