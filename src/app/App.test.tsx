@@ -503,7 +503,9 @@ it("loads selected history once and keeps newer list metadata when an older thre
   });
   expect(await screen.findAllByText("과거 답변")).toHaveLength(1);
   receive({ ...saved, revision: 1 });
-  expect(screen.getByRole("button", { name: "복원한 제목" })).toBeTruthy();
+  expect(
+    await screen.findByRole("button", { name: "복원한 제목" }),
+  ).toBeTruthy();
   expect(screen.queryByRole("button", { name: "저장된 제목" })).toBeNull();
   await userEvent.type(screen.getByRole("textbox"), "작성 중인 질문");
   await userEvent.click(screen.getByRole("button", { name: "복원한 제목" }));
@@ -938,6 +940,27 @@ it("sends with Enter, inserts a newline with Shift+Enter, and preserves IME comp
   expect(
     requests.mock.calls.filter(([command]) => command === "send_message"),
   ).toHaveLength(1);
+});
+
+it("focuses the message input when the conversation becomes ready", async () => {
+  const connecting = {
+    id: "draft-1",
+    workingFolder: "/project",
+    agentId: "codex",
+    status: "connecting",
+    revision: 1,
+    turns: [],
+  };
+  requests.mockResolvedValue(connecting);
+  render(() => <App />);
+  await userEvent.click(screen.getByRole("button", { name: "폴더 선택" }));
+
+  const input = screen.getByRole("textbox");
+  expect(document.activeElement).not.toBe(input);
+
+  receive({ ...connecting, status: "sessionReady", revision: 2 });
+
+  await waitFor(() => expect(document.activeElement).toBe(input));
 });
 
 it("sends once, renders streaming text and completion, and admits the next message", async () => {

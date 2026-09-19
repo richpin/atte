@@ -25,6 +25,7 @@ export function ThreadPage(props: {
     thread,
     selecting,
     history,
+    listLoading,
     listError,
     reloadList,
     connecting,
@@ -68,6 +69,7 @@ export function ThreadPage(props: {
     },
   );
   const [selectedAgent, setSelectedAgent] = createSignal("");
+  let messageInput: HTMLTextAreaElement | undefined;
   const agentId = () =>
     agents()?.some((agent) => agent.id === selectedAgent())
       ? selectedAgent()
@@ -97,6 +99,15 @@ export function ThreadPage(props: {
       () => [props.active, agents.loading, agentId(), pendingFolder()] as const,
       ([active, loading, agent, folder]) => {
         if (active && !loading && agent && folder) void createInFolder(folder);
+      },
+    ),
+  );
+
+  createEffect(
+    on(
+      () => [props.active, thread()?.id, thread()?.status] as const,
+      ([active, , status]) => {
+        if (active && status === "sessionReady") messageInput?.focus();
       },
     ),
   );
@@ -169,7 +180,7 @@ export function ThreadPage(props: {
           <ThreadSidebar
             threads={history() ?? []}
             selected={thread()?.id}
-            loading={history.loading}
+            loading={listLoading()}
             failed={listError()}
             creating={selecting() || agents.loading || agentsFailed()}
             onRetry={() => void reloadList()}
@@ -326,6 +337,7 @@ export function ThreadPage(props: {
                   when={thread()?.permissions?.[0]}
                   fallback={
                     <textarea
+                      ref={messageInput}
                       aria-label="메시지"
                       aria-describedby="connection-note"
                       class="w-full resize-none bg-transparent text-sm outline-none disabled:cursor-not-allowed"

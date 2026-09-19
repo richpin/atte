@@ -6,10 +6,15 @@ use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
     path::{Path, PathBuf},
-    sync::{Arc, Mutex},
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc, Mutex,
+    },
 };
 use tokio::sync::{mpsc, oneshot};
 use uuid::Uuid;
+
+static LAST_PROMPT_AT: AtomicU64 = AtomicU64::new(0);
 
 /// A local thread. Creation does not establish an agent session.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -20,6 +25,7 @@ pub struct Thread {
     pub title: String,
     pub created_at: u64,
     pub updated_at: u64,
+    pub last_prompt_at: u64,
     pub interrupted: bool,
     pub storage_error: Option<String>,
     /// Absolute working directory.
@@ -58,6 +64,8 @@ pub struct ThreadMetadata {
     pub remote_session_id: Option<String>,
     pub created_at: u64,
     pub updated_at: u64,
+    #[serde(default)]
+    pub last_prompt_at: u64,
     pub status: ThreadStatus,
     pub failure: Option<ConnectionFailure>,
     pub interrupted: bool,
@@ -73,6 +81,7 @@ impl Thread {
             remote_session_id: self.remote_session_id.clone(),
             created_at: self.created_at,
             updated_at: self.updated_at,
+            last_prompt_at: self.last_prompt_at,
             status: self.status.clone(),
             failure: self.failure.clone(),
             interrupted: self.interrupted,
@@ -261,6 +270,12 @@ impl Threads {
         let mut entries = HashMap::new();
         let list = Arc::new(Mutex::new(list::ThreadList::default()));
         for saved in store.threads()? {
+            let last_prompt_at = if saved.last_prompt_at == 0 {
+                saved.updated_at.saturating_mul(1_000)
+            } else {
+                saved.last_prompt_at
+            };
+            LAST_PROMPT_AT.fetch_max(last_prompt_at, Ordering::Relaxed);
             let interrupted = saved.interrupted
                 || matches!(
                     saved.status,
@@ -276,6 +291,7 @@ impl Threads {
                 remote_session_id: saved.remote_session_id,
                 created_at: saved.created_at,
                 updated_at: saved.updated_at,
+                last_prompt_at,
                 interrupted,
                 storage_error: None,
                 status: ThreadStatus::Disconnected,
@@ -454,11 +470,13 @@ impl Threads {
                 "존재하는 작업 폴더를 선택해주세요.".into(),
             ));
         }
+        let created_at = now();
         let draft = Thread {
             id: Uuid::new_v4(),
             title: "새 스레드".into(),
-            created_at: now(),
-            updated_at: now(),
+            created_at,
+            updated_at: created_at,
+            last_prompt_at: next_prompt_at(),
             interrupted: false,
             storage_error: None,
             working_folder: folder.canonicalize().map_err(|_| {
@@ -714,6 +732,7 @@ impl Threads {
                 text,
             });
             current.save_queue(queue)?;
+            current.thread.last_prompt_at = next_prompt_at();
             current.publish();
             return Ok(());
         }
@@ -733,6 +752,7 @@ impl Threads {
             })
             .map_err(|_| unavailable())?;
         current.thread.status = ThreadStatus::Running;
+        current.thread.last_prompt_at = next_prompt_at();
         current.thread.failure = None;
         current.thread.interrupted = false;
         if current.thread.title == "새 스레드" {
@@ -1016,6 +1036,25 @@ fn now() -> u64 {
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs()
+}
+
+fn now_millis() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis()
+        .try_into()
+        .unwrap_or(u64::MAX)
+}
+
+fn next_prompt_at() -> u64 {
+    let wall_clock = now_millis();
+    let previous = LAST_PROMPT_AT
+        .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |previous| {
+            Some(wall_clock.max(previous.saturating_add(1)))
+        })
+        .unwrap_or_else(|previous| previous);
+    wall_clock.max(previous.saturating_add(1))
 }
 
 /// Ordered subscription item. Text chunks carry only their delta, not history.

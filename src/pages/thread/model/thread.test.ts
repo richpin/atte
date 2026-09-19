@@ -1,5 +1,6 @@
+import { QueryClient } from "@tanstack/solid-query";
 import { invoke } from "@tauri-apps/api/core";
-import { createRoot } from "solid-js";
+import { createRoot, onCleanup } from "solid-js";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createThreadModel } from "./thread";
 import type { Thread, ThreadMetadata, ThreadUpdate } from "./types";
@@ -29,6 +30,7 @@ function thread(id: string, changes: Partial<Thread> = {}): Thread {
     agentId: "codex",
     createdAt: 1,
     updatedAt: 1,
+    lastPromptAt: 1,
     interrupted: false,
     storageError: null,
     status: "sessionReady",
@@ -61,7 +63,12 @@ function stream(id: string, index = 0) {
 function setup() {
   return createRoot((cleanup) => {
     dispose = cleanup;
-    return createThreadModel();
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    queryClient.mount();
+    onCleanup(() => queryClient.unmount());
+    return createThreadModel(queryClient);
   });
 }
 
@@ -146,6 +153,7 @@ it("keeps the displayed thread when it is selected again during another lookup",
 it("rejects older snapshots and snapshots for another thread", async () => {
   const model = setup();
   await model.openThread("A");
+  await vi.waitFor(() => expect(model.listLoading()).toBe(false));
   const receive = stream("A");
   receive({
     kind: "thread",
@@ -160,7 +168,7 @@ it("rejects older snapshots and snapshots for another thread", async () => {
     thread: thread("B", { revision: 6 }),
   });
   expect(model.thread()?.title).toBe("new");
-  expect(model.history()?.[0]?.title).toBe("new");
+  await vi.waitFor(() => expect(model.history()[0]?.title).toBe("new"));
 });
 
 const running = (id: string) =>
@@ -243,8 +251,7 @@ it.each(["list", "selected"])(
     if (source === "list") list([latest]);
     else stream("A")({ kind: "thread", thread: latest });
     pending.resolve([thread("A", { title: "old title" })]);
-    await vi.waitFor(() => expect(model.history.loading).toBe(false));
-    expect(model.history()?.[0]?.title).toBe("new title");
+    await vi.waitFor(() => expect(model.history()[0]?.title).toBe("new title"));
     expect(model.listError()).toBe(false);
   },
 );
@@ -255,9 +262,37 @@ it("preserves subscription metadata after an older list request fails", async ()
   const model = setup();
   list([thread("A", { title: "latest" })]);
   pending.reject(new Error("old list request"));
-  await vi.waitFor(() => expect(model.history.loading).toBe(false));
-  expect(model.history()?.[0]?.title).toBe("latest");
+  await vi.waitFor(() => expect(model.history()[0]?.title).toBe("latest"));
   expect(model.listError()).toBe(false);
+});
+
+it("orders thread metadata by the latest submitted prompt", async () => {
+  const model = setup();
+  list([thread("A", { lastPromptAt: 20 }), thread("B", { lastPromptAt: 10 })]);
+  await vi.waitFor(() =>
+    expect(model.history().map((entry) => entry.id)).toEqual(["A", "B"]),
+  );
+  await model.openThread("B");
+
+  stream("B")({
+    kind: "thread",
+    thread: thread("B", {
+      revision: 2,
+      updatedAt: 999,
+      lastPromptAt: 10,
+    }),
+  });
+  await vi.waitFor(() =>
+    expect(model.history().map((entry) => entry.id)).toEqual(["A", "B"]),
+  );
+
+  stream("B")({
+    kind: "thread",
+    thread: thread("B", { revision: 3, lastPromptAt: 30 }),
+  });
+  await vi.waitFor(() =>
+    expect(model.history().map((entry) => entry.id)).toEqual(["B", "A"]),
+  );
 });
 
 type Model = ReturnType<typeof createThreadModel>;
@@ -446,7 +481,9 @@ it.each(["select_working_folder", "create_thread"])(
     await creating;
     expect(model.thread()?.id).toBe("B");
     expect(model.message()).toBe("B draft");
-    expect(model.history()?.some((entry) => entry.id === "A")).toBe(true);
+    await vi.waitFor(() =>
+      expect(model.history().some((entry) => entry.id === "A")).toBe(true),
+    );
   },
 );
 

@@ -1,7 +1,11 @@
 import {
+  createQuery,
+  type QueryClient,
+  useQueryClient,
+} from "@tanstack/solid-query";
+import {
   createEffect,
   createMemo,
-  createResource,
   createSignal,
   on,
   onCleanup,
@@ -23,12 +27,22 @@ import {
 } from "../api/threads";
 import type { Thread, ThreadMetadata, ThreadUpdate } from "./types";
 
+const threadListQueryKey = ["threads"] as const;
+
+function sortThreads(entries: ThreadMetadata[]) {
+  return entries.toSorted(
+    (left, right) =>
+      right.lastPromptAt - left.lastPromptAt || left.id.localeCompare(right.id),
+  );
+}
+
 /** Owns synchronization for one thread view; call inside a Solid owner. */
-export function createThreadModel() {
+export function createThreadModel(queryClient?: QueryClient) {
+  const client = useQueryClient(queryClient);
   const [thread, setThread] = createSignal<Thread>();
   const [error, setError] = createSignal<string>();
   const [selecting, setSelecting] = createSignal(false);
-  const [listError, setListError] = createSignal(false);
+  const [listSubscriptionError, setListSubscriptionError] = createSignal(false);
   let disposed = false;
   const deleted = new Set<string>();
   let selection = 0;
@@ -38,32 +52,40 @@ export function createThreadModel() {
     selection++;
     view++;
   });
-  let listVersion = 0;
-  const [history, { refetch: reloadList, mutate: updateList }] = createResource(
-    async (): Promise<ThreadMetadata[]> => {
-      const version = listVersion;
-      try {
-        setListError(false);
-        const entries = (await listThreads()).filter(
-          (entry) => !deleted.has(entry.id),
-        );
-        return version === listVersion ? entries : (history() ?? entries);
-      } catch {
-        if (version !== listVersion || disposed) return history() ?? [];
-        setListError(true);
-        return [];
-      }
-    },
+  const historyQuery = createQuery(
+    () => ({
+      queryKey: threadListQueryKey,
+      queryFn: async () =>
+        (await listThreads()).filter((entry) => !deleted.has(entry.id)),
+      retry: false,
+      staleTime: Number.POSITIVE_INFINITY,
+    }),
+    () => client,
   );
+  const history = createMemo(() => historyQuery.data ?? []);
+  const listLoading = () => historyQuery.isFetching;
+  const listError = () => listSubscriptionError() || historyQuery.isError;
+  const reloadList = () => {
+    setListSubscriptionError(false);
+    return historyQuery.refetch();
+  };
+
+  function replaceThreadList(entries: ThreadMetadata[]) {
+    void client.cancelQueries({ queryKey: threadListQueryKey });
+    client.setQueryData(
+      threadListQueryKey,
+      sortThreads(entries.filter((entry) => !deleted.has(entry.id))),
+    );
+  }
+
   onMount(() => {
     onCleanup(
       subscribeThreadList(
         (entries) => {
-          listVersion++;
-          updateList(entries.filter((entry) => !deleted.has(entry.id)));
-          setListError(false);
+          replaceThreadList(entries);
+          setListSubscriptionError(false);
         },
-        () => setListError(true),
+        () => setListSubscriptionError(true),
       ),
     );
   });
@@ -98,14 +120,13 @@ export function createThreadModel() {
       current?.id === updatedThread.id &&
       updatedThread.revision >= current.revision
     ) {
-      remember(updatedThread);
+      updateThreadInList(updatedThread);
       setThread(updatedThread);
     }
   }
 
-  function remember(updatedThread: Thread) {
+  function updateThreadInList(updatedThread: Thread) {
     if (deleted.has(updatedThread.id)) return;
-    listVersion++;
     const {
       id,
       title,
@@ -115,6 +136,7 @@ export function createThreadModel() {
       remoteSessionId,
       createdAt,
       updatedAt,
+      lastPromptAt,
       failure,
       interrupted,
     } = updatedThread;
@@ -127,13 +149,17 @@ export function createThreadModel() {
       remoteSessionId,
       createdAt,
       updatedAt,
+      lastPromptAt,
       failure,
       interrupted,
     };
-    updateList((previous) => [
-      metadata,
-      ...(previous ?? []).filter((entry) => entry.id !== id),
-    ]);
+    void client.cancelQueries({ queryKey: threadListQueryKey });
+    client.setQueryData<ThreadMetadata[]>(threadListQueryKey, (previous) =>
+      sortThreads([
+        metadata,
+        ...(previous ?? []).filter((entry) => entry.id !== id),
+      ]),
+    );
   }
 
   // A command belongs to the displayed view, even when the same thread
@@ -311,7 +337,7 @@ export function createThreadModel() {
       const draft = await selectWorkingFolder(agentId);
       if (draft) {
         if (disposed) return;
-        remember(draft);
+        updateThreadInList(draft);
         if (attempt === selection) display(draft);
       }
     } catch (cause) {
@@ -335,7 +361,7 @@ export function createThreadModel() {
     try {
       const draft = await createThread(folder, agentId);
       if (disposed) return;
-      remember(draft);
+      updateThreadInList(draft);
       if (attempt !== selection) return;
       display(draft);
     } catch (cause) {
@@ -349,8 +375,8 @@ export function createThreadModel() {
   async function removeThread(id: string) {
     await deleteThreadCommand(id);
     deleted.add(id);
-    listVersion++;
-    updateList((previous) =>
+    void client.cancelQueries({ queryKey: threadListQueryKey });
+    client.setQueryData<ThreadMetadata[]>(threadListQueryKey, (previous) =>
       (previous ?? []).filter((entry) => entry.id !== id),
     );
     if (thread()?.id !== id) return;
@@ -372,6 +398,7 @@ export function createThreadModel() {
     error,
     selecting,
     history,
+    listLoading,
     listError,
     reloadList,
     connecting,

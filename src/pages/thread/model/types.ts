@@ -17,6 +17,7 @@ export interface Thread {
   title: string;
   createdAt: number;
   updatedAt: number;
+  lastPromptAt: number;
   interrupted: boolean;
   storageError: string | null;
   workingFolder: string;
@@ -54,6 +55,7 @@ export type ThreadMetadata = Pick<
   | "remoteSessionId"
   | "createdAt"
   | "updatedAt"
+  | "lastPromptAt"
   | "failure"
   | "interrupted"
 >;

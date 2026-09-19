@@ -47,10 +47,10 @@ Registry 갱신은 `registry_metadata`만 트랜잭션으로 교체한다. 목�
 | 컬럼 | SQL 타입 | 의미 |
 | --- | --- | --- |
 | `id` | TEXT PRIMARY KEY NOT NULL | Atte가 발급한 스레드 UUID |
-| `metadata` | TEXT NOT NULL | `ThreadMetadata` JSON: 제목, 작업 폴더, 고정 에이전트 ID, 원격 세션 ID, 생성·수정 Unix 초, 마지막 상태·오류, 중단 여부와 스레드 ID |
+| `metadata` | TEXT NOT NULL | `ThreadMetadata` JSON: 제목, 작업 폴더, 고정 에이전트 ID, 원격 세션 ID, 생성·수정 Unix 초, 단조 증가하는 마지막 프롬프트 Unix 밀리초, 마지막 상태·오류, 중단 여부와 스레드 ID |
 | `queued_messages` | TEXT NOT NULL DEFAULT '[]' | 제출 순서의 `{id, text}` JSON 배열 |
 
-메타데이터 저장 interface는 본문을 포함하지 않는 `ThreadMetadata`만 받고 `metadata`만 갱신한다. 큐 저장은 `queued_messages`만 갱신하며, 스레드 행이 아직 없으면 메타데이터와 함께 생성한다. 전송된 메시지 본문·도구 출력·승인 이력·실행 핸들·인증 정보는 이 테이블에 저장하지 않는다. 제목은 첫 메시지의 앞 60자를 사용한다. 스레드 생성과 상태 변경 시 메타데이터를 저장하고, 응답 텍스트 delta는 메모리에만 반영한다. 저장 오류는 현재 스레드 상태의 `storageError`로 표시한다.
+메타데이터 저장 interface는 본문을 포함하지 않는 `ThreadMetadata`만 받고 `metadata`만 갱신한다. 큐 저장은 `queued_messages`만 갱신하며, 스레드 행이 아직 없으면 메타데이터와 함께 생성한다. 전송된 메시지 본문·도구 출력·승인 이력·실행 핸들·인증 정보는 이 테이블에 저장하지 않는다. 제목은 첫 메시지의 앞 60자를 사용한다. 스레드 생성과 상태 변경 시 메타데이터를 저장하고, 응답 텍스트 delta는 메모리에만 반영한다. `lastPromptAt`은 생성 시 초기화하고, 이후 즉시 전송하거나 실행 중 대기열에 넣은 사용자 입력을 앱이 정상적으로 수락할 때만 갱신한다. 목록은 이 값을 내림차순으로 정렬한다. 저장 오류는 현재 스레드 상태의 `storageError`로 표시한다.
 
 재실행 시 메타데이터로 목록을 만들고 연결 상태는 `disconnected`로 복원한다. 이전 실행 중·승인 대기·중단 처리 상태는 중단 여부로 남기며 승인 조작이나 prompt를 되살리지 않는다. 사용자가 스레드를 선택하면 `session/load`를 우선 사용하고 전체 replay 성공 후 메모리의 본문을 교체한다. 실패한 부분 replay는 표시하지 않는다. `resume`만 지원하면 본문 없이 기존 맥락을 이어간다는 안내를 표시한다. 에이전트 부재 시 전체 본문을 읽을 수 있는 디스크 사본은 없다.
 

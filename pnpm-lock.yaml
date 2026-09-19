@@ -11,6 +11,9 @@ importers:
       '@kobalte/core':
         specifier: ^0.13.14
         version: 0.13.14(solid-js@1.9.15)
+      '@tanstack/solid-query':
+        specifier: ^5.103.1
+        version: 5.103.1(solid-js@1.9.15)
       '@tauri-apps/api':
         specifier: ^2
         version: 2.11.1
@@ -602,6 +605,14 @@ packages:
     resolution: {integrity: sha512-yYU8cogLeSh/ms2jh8Fj7jaba/EWa7Ja6GoUqYZaraEuCI5YS6ms6ObZgjjedm+jm6XZjdNRWBpPP6Z86oOxcw==}
     peerDependencies:
       vite: ^5.2.0 || ^6 || ^7 || ^8
+
+  '@tanstack/query-core@5.103.1':
+    resolution: {integrity: sha512-rms8HqTGp6zA00dM+cUQ2eBcgzNJefuu5CAMB37i/6MiGT1zulPOytCFu2a0qjLqVR2n1jENPj9woqFQNuCzWA==}
+
+  '@tanstack/solid-query@5.103.1':
+    resolution: {integrity: sha512-QqVhd9ujRC84G+W5ZU0E5u021ZVlUiq5nLcAfzHfc3TBbzo9/hkqbv1RmBzuBHUB/5L388Jg6CJZrHawgy1HJw==}
+    peerDependencies:
+      solid-js: ^1.6.0
 
   '@tauri-apps/api@2.11.1':
     resolution: {integrity: sha512-M2FPuYND2m+wh5hfW9ZpSdxMPdEJovPBWwoHJmwUpysTYNHaOkVFN419m/K0LIgjb/7KU2vBgsUepJWugQCvAA==}
@@ -2123,6 +2134,13 @@ snapshots:
       '@tailwindcss/oxide': 4.3.3
       tailwindcss: 4.3.3
       vite: 8.3.0(@types/node@26.5.1)(jiti@2.7.0)
+
+  '@tanstack/query-core@5.103.1': {}
+
+  '@tanstack/solid-query@5.103.1(solid-js@1.9.15)':
+    dependencies:
+      '@tanstack/query-core': 5.103.1
+      solid-js: 1.9.15
 
   '@tauri-apps/api@2.11.1': {}
 
