@@ -25,13 +25,13 @@ export function ThreadComposer(props: {
   const { t } = useI18n();
 
   return (
-    <div class="mx-auto mb-6 w-full max-w-4xl shrink-0 px-6">
+    <div class="max-h-thread-composer mx-auto flex w-full max-w-4xl flex-col overflow-hidden px-6">
       <QueuedMessage
         messages={props.thread.queuedMessages ?? []}
         onDelete={props.onDeleteQueued}
       />
       <form
-        class="max-h-[60dvh] overflow-y-auto rounded-2xl border border-line bg-panel p-4"
+        class="max-h-thread-composer-form shrink-0 overflow-y-auto overscroll-contain rounded-2xl border border-line bg-panel p-4"
         onSubmit={(event) => {
           event.preventDefault();
           props.onSend();
@@ -108,7 +108,10 @@ export function ThreadComposer(props: {
           </button>
         </div>
       </form>
-      <p id="connection-note" class="mt-2 text-center text-xs text-muted">
+      <p
+        id="connection-note"
+        class="mt-2 shrink-0 text-center text-xs text-muted"
+      >
         {props.thread.status === "running"
           ? t("thread.composer.running")
           : t("thread.composer.ready")}

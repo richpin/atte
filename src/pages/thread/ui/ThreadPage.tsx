@@ -1,3 +1,4 @@
+import { makeResizeObserver } from "@solid-primitives/resize-observer";
 import { type TranslationKey, useI18n } from "shared/i18n";
 import { LanguageMenu } from "shared/ui";
 import {
@@ -53,6 +54,13 @@ export function ThreadPage(props: {
   } = model;
   const [agentsFailed, setAgentsFailed] = createSignal(false);
   const [sidebarOpen, setSidebarOpen] = createSignal(true);
+  const [composerHeight, setComposerHeight] = createSignal(0);
+  let composerOverlay: HTMLDivElement | undefined;
+  const { observe: observeComposer } = makeResizeObserver((entries) => {
+    const entry = entries.find(({ target }) => target === composerOverlay);
+    if (entry) setComposerHeight(entry.contentRect.height);
+  });
+  const composerInset = () => composerHeight() + 32;
   const [pendingFolder, setPendingFolder] = createSignal<string>();
   const error = () =>
     model.error() ?? (agentsFailed() ? t("thread.error.agents") : undefined);
@@ -204,135 +212,151 @@ export function ThreadPage(props: {
               </section>
             }
           >
-            <ThreadTimeline followKey={`${thread()?.id}:${activeTurn()}`}>
-              <Show when={thread()?.status === "connecting"}>
-                <p role="status">
-                  {thread()?.remoteSessionId
-                    ? t("thread.restoring")
-                    : t("thread.connecting")}
-                </p>
-              </Show>
-              <Show when={thread()?.interrupted}>
-                <p role="status">{t("thread.interrupted")}</p>
-              </Show>
-              <Show when={thread()?.storageError}>
-                {(message) => <p role="alert">{content(message())}</p>}
-              </Show>
-              <Show
-                when={
-                  !thread()?.turns?.length &&
-                  thread()?.status === "sessionReady" &&
-                  !thread()?.notice
-                }
+            <div class="relative min-h-0 flex-1">
+              <ThreadTimeline
+                followKey={`${thread()?.id}:${activeTurn()}`}
+                bottomInset={composerInset()}
               >
-                <h2 class="text-lg font-medium">{t("thread.ready")}</h2>
-                <Show when={thread()?.status === "disconnected"}>
-                  <p class="text-sm text-muted">{t("thread.notConnected")}</p>
+                <Show when={thread()?.status === "connecting"}>
+                  <p role="status">
+                    {thread()?.remoteSessionId
+                      ? t("thread.restoring")
+                      : t("thread.connecting")}
+                  </p>
                 </Show>
-              </Show>
-              <Show when={streamError()}>
-                <p role="alert">{t("thread.subscriptionFailed")}</p>
-                <button
-                  type="button"
-                  class="focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-accent"
-                  onClick={retrySubscription}
-                >
-                  {t("thread.reloadStatus")}
-                </button>
-              </Show>
-              <Show when={thread()?.failure}>
-                {(failure) => (
-                  <p role="alert" class="text-sm">
-                    {t(failureKeys[failure()])}
-                  </p>
-                )}
-              </Show>
-              <Show when={thread()?.failure === "authenticationRequired"}>
-                <button
-                  type="button"
-                  class="focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-accent"
-                  onClick={props.onManage}
-                >
-                  {t("thread.openSignIn")}
-                </button>
-              </Show>
-              <Show
-                when={
-                  thread() &&
-                  (["agentRemoved", "executableNotFound"].includes(
-                    thread()?.failure ?? "",
-                  ) ||
-                    !agents()?.some((agent) => agent.id === thread()?.agentId))
-                }
-              >
-                <button
-                  type="button"
-                  class="focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-accent"
-                  onClick={props.onManage}
-                >
-                  {t("thread.openAgentManagement")}
-                </button>
-              </Show>
-              <Show
-                when={
-                  thread()?.authentication === "unknown" &&
-                  thread()?.status === "sessionReady" &&
-                  !thread()?.turns?.length
-                }
-              >
-                <p class="text-sm text-muted">
-                  {t("thread.authenticationUnknown")}
-                </p>
-              </Show>
-              <Show
-                when={
-                  !connecting() &&
-                  (thread()?.status === "failed" || connectionRejected())
-                }
-              >
-                <button
-                  type="button"
-                  class="rounded-lg bg-accent px-4 py-2 text-sm text-white focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-accent disabled:opacity-50"
-                  disabled={connecting() || thread()?.status === "connecting"}
-                  onClick={connect}
-                >
-                  {t("thread.reconnect")}
-                </button>
-              </Show>
-              <Message turns={thread()?.turns ?? []} />
-              <Show when={thread()?.notice}>
-                {(notice) => (
-                  <p role="status" class="text-sm text-muted">
-                    {content(notice())}
-                  </p>
-                )}
-              </Show>
-            </ThreadTimeline>
-            <Show when={thread()}>
-              {(currentThread) => (
-                <ThreadComposer
-                  active={props.active}
-                  thread={currentThread()}
-                  agentName={
-                    agents()?.find(
-                      (agent) => agent.id === currentThread().agentId,
-                    )?.name ?? currentThread().agentId
+                <Show when={thread()?.interrupted}>
+                  <p role="status">{t("thread.interrupted")}</p>
+                </Show>
+                <Show when={thread()?.storageError}>
+                  {(message) => <p role="alert">{content(message())}</p>}
+                </Show>
+                <Show
+                  when={
+                    !thread()?.turns?.length &&
+                    thread()?.status === "sessionReady" &&
+                    !thread()?.notice
                   }
-                  message={message()}
-                  sending={sending()}
-                  answering={Boolean(answering())}
-                  cancelling={Boolean(cancelling())}
-                  showStop={showStop()}
-                  stopping={stopping()}
-                  canSend={canSend()}
-                  onMessageChange={setMessage}
-                  onSend={() => void send()}
-                  onCancel={() => void cancel()}
-                  onAnswer={answer}
-                  onDeleteQueued={deleteQueued}
-                />
-              )}
-            </Show>
+                >
+                  <h2 class="text-lg font-medium">{t("thread.ready")}</h2>
+                  <Show when={thread()?.status === "disconnected"}>
+                    <p class="text-sm text-muted">{t("thread.notConnected")}</p>
+                  </Show>
+                </Show>
+                <Show when={streamError()}>
+                  <p role="alert">{t("thread.subscriptionFailed")}</p>
+                  <button
+                    type="button"
+                    class="focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-accent"
+                    onClick={retrySubscription}
+                  >
+                    {t("thread.reloadStatus")}
+                  </button>
+                </Show>
+                <Show when={thread()?.failure}>
+                  {(failure) => (
+                    <p role="alert" class="text-sm">
+                      {t(failureKeys[failure()])}
+                    </p>
+                  )}
+                </Show>
+                <Show when={thread()?.failure === "authenticationRequired"}>
+                  <button
+                    type="button"
+                    class="focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-accent"
+                    onClick={props.onManage}
+                  >
+                    {t("thread.openSignIn")}
+                  </button>
+                </Show>
+                <Show
+                  when={
+                    thread() &&
+                    (["agentRemoved", "executableNotFound"].includes(
+                      thread()?.failure ?? "",
+                    ) ||
+                      !agents()?.some(
+                        (agent) => agent.id === thread()?.agentId,
+                      ))
+                  }
+                >
+                  <button
+                    type="button"
+                    class="focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-accent"
+                    onClick={props.onManage}
+                  >
+                    {t("thread.openAgentManagement")}
+                  </button>
+                </Show>
+                <Show
+                  when={
+                    thread()?.authentication === "unknown" &&
+                    thread()?.status === "sessionReady" &&
+                    !thread()?.turns?.length
+                  }
+                >
+                  <p class="text-sm text-muted">
+                    {t("thread.authenticationUnknown")}
+                  </p>
+                </Show>
+                <Show
+                  when={
+                    !connecting() &&
+                    (thread()?.status === "failed" || connectionRejected())
+                  }
+                >
+                  <button
+                    type="button"
+                    class="rounded-lg bg-accent px-4 py-2 text-sm text-white focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-accent disabled:opacity-50"
+                    disabled={connecting() || thread()?.status === "connecting"}
+                    onClick={connect}
+                  >
+                    {t("thread.reconnect")}
+                  </button>
+                </Show>
+                <Message turns={thread()?.turns ?? []} />
+                <Show when={thread()?.notice}>
+                  {(notice) => (
+                    <p role="status" class="text-sm text-muted">
+                      {content(notice())}
+                    </p>
+                  )}
+                </Show>
+              </ThreadTimeline>
+              <div
+                ref={(element) => {
+                  composerOverlay = element;
+                  observeComposer(element);
+                  setComposerHeight(element.getBoundingClientRect().height);
+                }}
+                class="absolute inset-x-0 bottom-4 z-10"
+              >
+                <Show when={thread()}>
+                  {(currentThread) => (
+                    <ThreadComposer
+                      active={props.active}
+                      thread={currentThread()}
+                      agentName={
+                        agents()?.find(
+                          (agent) => agent.id === currentThread().agentId,
+                        )?.name ?? currentThread().agentId
+                      }
+                      message={message()}
+                      sending={sending()}
+                      answering={Boolean(answering())}
+                      cancelling={Boolean(cancelling())}
+                      showStop={showStop()}
+                      stopping={stopping()}
+                      canSend={canSend()}
+                      onMessageChange={setMessage}
+                      onSend={() => void send()}
+                      onCancel={() => void cancel()}
+                      onAnswer={answer}
+                      onDeleteQueued={deleteQueued}
+                    />
+                  )}
+                </Show>
+              </div>
+            </div>
           </Show>
         </div>
       </div>

@@ -14,22 +14,16 @@ export function QueuedMessage(props: {
     <Show when={props.messages.length}>
       <ul
         aria-label={t("thread.queue")}
-        class="mb-2 max-h-40 overflow-y-auto rounded-xl border border-line bg-panel px-3 py-1"
+        class="min-h-thread-queue-row max-h-thread-queue mb-2 shrink overflow-y-auto overscroll-contain rounded-xl border border-line bg-panel px-3 py-1"
       >
         <For each={[...messages().keys()]}>
           {(id) => {
-            const [expanded, setExpanded] = createSignal(false);
             const [deleting, setDeleting] = createSignal(false);
             return (
-              <li class="flex items-start gap-2 py-1.5 text-sm">
-                <button
-                  type="button"
-                  aria-expanded={expanded()}
-                  class={`min-w-0 flex-1 text-left focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-accent ${expanded() ? "whitespace-pre-wrap break-words" : "truncate"}`}
-                  onClick={() => setExpanded((value) => !value)}
-                >
+              <li class="flex h-8 items-center gap-2 text-sm">
+                <span class="min-w-0 flex-1 truncate">
                   {messages().get(id)}
-                </button>
+                </span>
                 <button
                   type="button"
                   aria-label={t("thread.deleteQueued", {

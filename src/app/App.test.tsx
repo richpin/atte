@@ -965,6 +965,60 @@ it("focuses the message input when the conversation becomes ready", async () => 
   await waitFor(() => expect(document.activeElement).toBe(input));
 });
 
+it("lays the composer over the full-height timeline and reserves its measured height", async () => {
+  const observers: Array<{
+    callback: ResizeObserverCallback;
+    targets: Element[];
+  }> = [];
+  vi.stubGlobal(
+    "ResizeObserver",
+    class {
+      readonly record: (typeof observers)[number];
+      constructor(callback: ResizeObserverCallback) {
+        this.record = { callback, targets: [] };
+        observers.push(this.record);
+      }
+      observe(target: Element) {
+        this.record.targets.push(target);
+      }
+      unobserve() {}
+      disconnect() {}
+    },
+  );
+  const ready = {
+    id: "layout",
+    workingFolder: "/project",
+    agentId: "codex",
+    status: "sessionReady",
+    revision: 1,
+    turns: [],
+    permissions: [],
+    queuedMessages: [],
+  };
+  requests.mockResolvedValue(ready);
+  render(() => <App />);
+  await userEvent.click(screen.getByRole("button", { name: "폴더 선택" }));
+
+  const viewport = screen.getByRole("region", { name: "스레드 타임라인" });
+  const form = document.querySelector("form");
+  expect(form).not.toBeNull();
+  const overlay = form?.parentElement?.parentElement as HTMLElement;
+  expect(overlay.classList).toContain("absolute");
+  expect(viewport.parentElement?.classList).toContain("h-full");
+  const observer = observers.find(({ targets }) => targets.includes(overlay));
+  expect(observer).toBeDefined();
+  observer?.callback(
+    [
+      {
+        target: overlay,
+        contentRect: { height: 160 },
+      } as unknown as ResizeObserverEntry,
+    ],
+    {} as ResizeObserver,
+  );
+  expect(viewport.style.scrollPaddingBottom).toBe("192px");
+});
+
 it("sends once, renders streaming text and completion, and admits the next message", async () => {
   const ready = {
     id: "draft-1",
@@ -1069,18 +1123,12 @@ it("queues input above the composer and preserves it after stopping until delete
     queue.compareDocumentPosition(screen.getByRole("textbox")) &
       Node.DOCUMENT_POSITION_FOLLOWING,
   ).toBeTruthy();
-  const expand = screen.getByRole("button", {
-    name: "next instruction with details",
-  });
-  expect(expand.getAttribute("aria-expanded")).toBe("false");
-  await userEvent.click(expand);
-  expect(expand.getAttribute("aria-expanded")).toBe("true");
-  receive(structuredClone(queued));
+  expect(screen.getByText("next instruction with details")).toBeTruthy();
   expect(
-    screen
-      .getByRole("button", { name: "next instruction with details" })
-      .getAttribute("aria-expanded"),
-  ).toBe("true");
+    screen.queryByRole("button", { name: "next instruction with details" }),
+  ).toBeNull();
+  receive(structuredClone(queued));
+  expect(screen.getByText("next instruction with details")).toBeTruthy();
   requests.mockResolvedValue({
     ...queued,
     revision: 3,
@@ -1103,9 +1151,7 @@ it("queues input above the composer and preserves it after stopping until delete
     id: "queue",
     message: "q1",
   });
-  expect(
-    screen.queryByRole("button", { name: "next instruction with details" }),
-  ).toBeNull();
+  expect(screen.queryByText("next instruction with details")).toBeNull();
 });
 
 it("keeps the message on send failure and displays permission cancellation", async () => {
