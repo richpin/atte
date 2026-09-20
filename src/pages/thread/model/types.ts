@@ -33,7 +33,6 @@ export interface Thread {
   remoteSessionId: string | null;
   authentication: "unknown" | "required" | "authenticated";
   failure: ConnectionFailure | null;
-  revision: number;
   turns: Turn[];
   notice: string | null;
   permissions: PermissionRequest[];
@@ -84,7 +83,6 @@ export type ThreadUpdate =
   | {
       kind: "textDelta";
       threadId: string;
-      revision: number;
       turnId: string;
       text: string;
     };

@@ -1577,17 +1577,14 @@ async fn streams_ordered_turns_and_sends_followups_in_the_same_session() {
     threads.connect(draft.id).unwrap();
     settle(&threads, draft.id).await;
     let mut stream = subscribe(&threads, draft.id);
-    let initial = stream.recv().await.unwrap();
+    let _initial = stream.recv().await.unwrap();
     threads.send_message(draft.id, "hello".into()).unwrap();
-    let mut revision = initial.revision;
     let mut texts = Vec::new();
     loop {
         let next = tokio::time::timeout(Duration::from_secs(5), stream.recv())
             .await
             .unwrap()
             .unwrap();
-        assert_eq!(next.revision, revision + 1);
-        revision = next.revision;
         texts.push(next.turns[0].response.clone());
         if next.status == ThreadStatus::SessionReady {
             break;
@@ -1655,7 +1652,6 @@ async fn resubscription_is_coherent_and_detaching_does_not_stop_a_turn() {
     let mut resumed = subscribe(&threads, draft.id);
     assert_eq!(resumed.recv().await.unwrap(), completed);
     assert_eq!(completed.turns[0].response, "Hello world");
-    assert_eq!(completed.revision, first.revision + 2);
     threads.shutdown().await;
 }
 
@@ -1933,7 +1929,7 @@ async fn real_codex_streams_and_continues_without_file_changes() {
                         assert_eq!(turn.stop_reason.as_deref(), Some("end_turn"));
                         assert!(turn.response.contains("cobalt-73"), "{}", turn.response);
                         assert!(streamed > 0);
-                        println!("turn {}: {streamed} streamed revisions; response: {}", next.turns.len(), turn.response);
+                        println!("turn {}: {streamed} streamed chunks; response: {}", next.turns.len(), turn.response);
                         break;
                     }
                 }
@@ -1965,7 +1961,6 @@ impl TranscriptSubscription {
             ThreadUpdate::Thread { thread } => self.thread = Some(*thread),
             ThreadUpdate::TextDelta {
                 thread_id,
-                revision,
                 turn_id,
                 text,
             } => {
@@ -1974,11 +1969,9 @@ impl TranscriptSubscription {
                     .as_mut()
                     .expect("initial thread precedes deltas");
                 assert_eq!(thread_id, thread.id);
-                assert_eq!(revision, thread.revision + 1);
                 let turn = thread.turns.last_mut().unwrap();
                 assert_eq!(turn_id, turn.id);
                 turn.response.push_str(&text);
-                thread.revision = revision;
             }
         }
         self.thread.clone()

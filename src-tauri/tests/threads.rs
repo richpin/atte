@@ -296,6 +296,7 @@ fn serializes_full_updates_with_a_thread_payload() {
     .unwrap();
     assert_eq!(value["kind"], "thread");
     assert_eq!(value["thread"]["id"], thread.id.to_string());
+    assert!(value["thread"].get("revision").is_none());
 }
 
 #[test]
@@ -304,11 +305,11 @@ fn serializes_text_deltas_with_a_thread_id() {
     let turn_id = uuid::Uuid::new_v4();
     let value = serde_json::to_value(ThreadUpdate::TextDelta {
         thread_id,
-        revision: 3,
         turn_id,
         text: "delta".into(),
     })
     .unwrap();
     assert_eq!(value["kind"], "textDelta");
     assert_eq!(value["threadId"], thread_id.to_string());
+    assert!(value.get("revision").is_none());
 }

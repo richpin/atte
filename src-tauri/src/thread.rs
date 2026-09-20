@@ -39,7 +39,6 @@ pub struct Thread {
     /// Connection success is not proof of authentication.
     pub authentication: AuthenticationStatus,
     pub failure: Option<ConnectionFailure>,
-    pub revision: u64,
     pub turns: Vec<Turn>,
     pub notice: Option<String>,
     pub permissions: Vec<PermissionRequest>,
@@ -297,7 +296,6 @@ impl Threads {
                 status: ThreadStatus::Disconnected,
                 authentication: AuthenticationStatus::Unknown,
                 failure: saved.failure,
-                revision: 0,
                 turns: Vec::new(),
                 notice: None,
                 permissions: Vec::new(),
@@ -487,7 +485,6 @@ impl Threads {
             remote_session_id: None,
             authentication: AuthenticationStatus::Unknown,
             failure: None,
-            revision: 0,
             turns: Vec::new(),
             notice: None,
             permissions: Vec::new(),
@@ -691,7 +688,7 @@ impl Threads {
         Ok(thread)
     }
 
-    /// Atomically subscribes to a thread and every subsequent revision.
+    /// Atomically subscribes to a thread and every subsequent update.
     /// Dropping the receiver does not stop the thread.
     pub fn subscribe(
         &self,
@@ -1017,7 +1014,6 @@ impl ThreadState {
                 .err()
                 .map(|error| error.to_string());
         }
-        self.thread.revision += 1;
         if let Ok(mut list) = self.list.lock() {
             list.publish(self.thread.metadata());
         }
@@ -1067,7 +1063,6 @@ pub enum ThreadUpdate {
     TextDelta {
         #[serde(rename = "threadId")]
         thread_id: Uuid,
-        revision: u64,
         #[serde(rename = "turnId")]
         turn_id: Uuid,
         text: String,
@@ -1242,10 +1237,8 @@ impl RuntimeUpdates {
         if let Some(last) = state.thread.turns.last_mut() {
             last.response.push_str(&text);
         }
-        state.thread.revision += 1;
         let change = ThreadUpdate::TextDelta {
             thread_id: state.thread.id,
-            revision: state.thread.revision,
             turn_id: turn,
             text,
         };

@@ -26,22 +26,24 @@ export function ThreadPage(props: {
   const model = createThreadModel();
   const {
     thread,
+    selectedThreadId,
     selecting,
     history,
     listLoading,
     listError,
     reloadList,
     connecting,
-    connectionRejected,
-    message,
-    setMessage,
-    sending,
-    answering,
-    cancelling,
-    activeTurn,
+    connectFailed,
+    draft,
+    setDraft,
+    answerPending,
+    cancelPending,
+    activeTurnId,
     showStop,
     stopping,
-    streamError,
+    subscriptionError,
+    retryExhausted,
+    actionsEnabled,
     canSend,
     openThread,
     send,
@@ -126,19 +128,19 @@ export function ThreadPage(props: {
         </Show>
         <span class="font-semibold tracking-tight">atte</span>
         <Show when={thread()}>
-          {(draft) => (
+          {(currentThread) => (
             <>
               <h1 class="max-w-64 truncate text-sm font-medium">
-                {content(draft().title) || t("common.newThread")}
+                {content(currentThread().title) || t("common.newThread")}
               </h1>
               <span
                 class="min-w-0 flex-1 truncate text-xs text-muted"
-                title={draft().workingFolder}
+                title={currentThread().workingFolder}
               >
-                {draft().workingFolder}
+                {currentThread().workingFolder}
               </span>
               <span role="status" class="shrink-0 text-xs text-muted">
-                {t(statusKeys[draft().status])}
+                {t(statusKeys[currentThread().status])}
               </span>
             </>
           )}
@@ -179,7 +181,7 @@ export function ThreadPage(props: {
         <Show when={sidebarOpen()}>
           <ThreadSidebar
             threads={history() ?? []}
-            selected={thread()?.id}
+            selected={selectedThreadId()}
             loading={listLoading()}
             failed={listError()}
             creating={selecting() || agents.loading || agentsFailed()}
@@ -201,6 +203,20 @@ export function ThreadPage(props: {
               </p>
             )}
           </Show>
+          <Show when={subscriptionError()}>
+            <div class="mx-6 mt-4 flex items-center gap-3 rounded-lg border border-line bg-panel p-3 text-sm">
+              <p role="alert">{t("thread.subscriptionFailed")}</p>
+              <Show when={retryExhausted()}>
+                <button
+                  type="button"
+                  class="focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-accent"
+                  onClick={retrySubscription}
+                >
+                  {t("thread.reconnect")}
+                </button>
+              </Show>
+            </div>
+          </Show>
           <Show
             when={thread()}
             fallback={
@@ -214,7 +230,7 @@ export function ThreadPage(props: {
           >
             <div class="relative min-h-0 flex-1">
               <ThreadTimeline
-                followKey={`${thread()?.id}:${activeTurn()}`}
+                followKey={`${thread()?.id}:${activeTurnId()}`}
                 bottomInset={composerInset()}
               >
                 <Show when={thread()?.status === "connecting"}>
@@ -241,16 +257,6 @@ export function ThreadPage(props: {
                   <Show when={thread()?.status === "disconnected"}>
                     <p class="text-sm text-muted">{t("thread.notConnected")}</p>
                   </Show>
-                </Show>
-                <Show when={streamError()}>
-                  <p role="alert">{t("thread.subscriptionFailed")}</p>
-                  <button
-                    type="button"
-                    class="focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-accent"
-                    onClick={retrySubscription}
-                  >
-                    {t("thread.reloadStatus")}
-                  </button>
                 </Show>
                 <Show when={thread()?.failure}>
                   {(failure) => (
@@ -301,7 +307,7 @@ export function ThreadPage(props: {
                 <Show
                   when={
                     !connecting() &&
-                    (thread()?.status === "failed" || connectionRejected())
+                    (thread()?.status === "failed" || connectFailed())
                   }
                 >
                   <button
@@ -340,14 +346,14 @@ export function ThreadPage(props: {
                           (agent) => agent.id === currentThread().agentId,
                         )?.name ?? currentThread().agentId
                       }
-                      message={message()}
-                      sending={sending()}
-                      answering={Boolean(answering())}
-                      cancelling={Boolean(cancelling())}
+                      draft={draft()}
+                      answerPending={answerPending()}
+                      cancelPending={cancelPending()}
                       showStop={showStop()}
                       stopping={stopping()}
+                      actionsEnabled={actionsEnabled()}
                       canSend={canSend()}
-                      onMessageChange={setMessage}
+                      onDraftChange={setDraft}
                       onSend={() => void send()}
                       onCancel={() => void cancel()}
                       onAnswer={answer}

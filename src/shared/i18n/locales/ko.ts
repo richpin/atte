@@ -75,7 +75,6 @@ export const ko = {
     ready: "스레드가 준비되었습니다",
     notConnected: "아직 에이전트에 연결되지 않았습니다.",
     subscriptionFailed: "스레드 상태를 구독할 수 없습니다.",
-    reloadStatus: "상태 다시 불러오기",
     openSignIn: "로그인 안내 열기",
     openAgentManagement: "설치·인증 관리 열기",
     authenticationUnknown: "인증 상태는 아직 확인되지 않았습니다.",

@@ -9,14 +9,14 @@ export function ThreadComposer(props: {
   active: boolean;
   thread: Thread;
   agentName: string;
-  message: string;
-  sending: boolean;
-  answering: boolean;
-  cancelling: boolean;
+  draft: string;
+  answerPending: boolean;
+  cancelPending: boolean;
   showStop: boolean;
   stopping: boolean;
+  actionsEnabled: boolean;
   canSend: boolean;
-  onMessageChange: (message: string) => void;
+  onDraftChange: (message: string) => void;
   onSend: () => void;
   onCancel: () => void;
   onAnswer: (request: string, option: string) => void;
@@ -28,6 +28,7 @@ export function ThreadComposer(props: {
     <div class="max-h-thread-composer mx-auto flex w-full max-w-4xl flex-col overflow-hidden px-6">
       <QueuedMessage
         messages={props.thread.queuedMessages ?? []}
+        disabled={!props.actionsEnabled}
         onDelete={props.onDeleteQueued}
       />
       <form
@@ -41,19 +42,14 @@ export function ThreadComposer(props: {
           when={props.thread.permissions?.[0]}
           fallback={
             <PromptInput
-              value={props.message}
-              disabled={
-                props.sending ||
-                !["sessionReady", "running", "cancelling"].includes(
-                  props.thread.status,
-                )
-              }
+              value={props.draft}
+              disabled={!props.canSend}
               focusKey={
                 props.active && props.thread.status === "sessionReady"
                   ? props.thread.id
                   : undefined
               }
-              onInput={props.onMessageChange}
+              onInput={props.onDraftChange}
               onSubmit={props.onSend}
             />
           }
@@ -62,7 +58,11 @@ export function ThreadComposer(props: {
             <PermissionInput
               request={request()}
               workingFolder={props.thread.workingFolder}
-              disabled={props.answering || props.cancelling}
+              disabled={
+                !props.actionsEnabled ||
+                props.answerPending ||
+                props.cancelPending
+              }
               onAnswer={props.onAnswer}
             />
           )}
@@ -75,8 +75,8 @@ export function ThreadComposer(props: {
             class="grid size-8 shrink-0 place-items-center rounded-full bg-accent text-white focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-accent disabled:opacity-40"
             disabled={
               props.showStop
-                ? props.stopping
-                : !props.canSend || !props.message.trim()
+                ? !props.actionsEnabled || props.stopping
+                : !props.canSend || !props.draft.trim()
             }
             onClick={() => {
               if (props.showStop) props.onCancel();

@@ -14,6 +14,7 @@ it("keeps messages on one line in a ten-row scroll region", () => {
           id: `queued-${index + 1}`,
           text: `Queued message ${index + 1}`,
         }))}
+        disabled={false}
         onDelete={async () => {}}
       />
     </I18nProvider>
@@ -38,7 +39,11 @@ it("appends new messages without following the bottom", () => {
   );
   render(() => (
     <I18nProvider>
-      <QueuedMessage messages={messages()} onDelete={async () => {}} />
+      <QueuedMessage
+        messages={messages()}
+        disabled={false}
+        onDelete={async () => {}}
+      />
     </I18nProvider>
   ));
   const queue = screen.getByRole("list", { name: "대기 메시지" });

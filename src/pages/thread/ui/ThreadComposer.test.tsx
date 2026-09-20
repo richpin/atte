@@ -26,7 +26,6 @@ function readyThread(): Thread {
     remoteSessionId: "session-1",
     authentication: "authenticated",
     failure: null,
-    revision: 1,
     turns: [],
     notice: null,
     permissions: [],
@@ -44,14 +43,14 @@ it("switches from PromptInput to PermissionInput when approval is requested", ()
         active={false}
         thread={thread()}
         agentName="Agent"
-        message=""
-        sending={false}
-        answering={false}
-        cancelling={false}
+        draft=""
+        answerPending={false}
+        cancelPending={false}
         showStop={false}
         stopping={false}
+        actionsEnabled={true}
         canSend={true}
-        onMessageChange={() => {}}
+        onDraftChange={() => {}}
         onSend={() => {}}
         onCancel={() => {}}
         onAnswer={onAnswer}
@@ -95,14 +94,14 @@ it("submits PromptInput with Enter", () => {
         active={false}
         thread={readyThread()}
         agentName="Agent"
-        message="Run tests"
-        sending={false}
-        answering={false}
-        cancelling={false}
+        draft="Run tests"
+        answerPending={false}
+        cancelPending={false}
         showStop={false}
         stopping={false}
+        actionsEnabled={true}
         canSend={true}
-        onMessageChange={() => {}}
+        onDraftChange={() => {}}
         onSend={onSend}
         onCancel={() => {}}
         onAnswer={() => {}}
@@ -115,4 +114,54 @@ it("submits PromptInput with Enter", () => {
     key: "Enter",
   });
   expect(onSend).toHaveBeenCalledOnce();
+});
+
+it("disables every thread mutation while the subscription is unavailable", () => {
+  const current = {
+    ...readyThread(),
+    status: "waitingForApproval" as const,
+    turns: [{ id: "turn", message: "hello", response: "", stopReason: null }],
+    permissions: [
+      {
+        id: "permission",
+        title: "Run command?",
+        details: "pnpm test",
+        options: [{ id: "allow", name: "Allow" }],
+      },
+    ],
+    queuedMessages: [{ id: "queued", text: "next" }],
+  };
+
+  render(() => (
+    <I18nProvider>
+      <ThreadComposer
+        active={false}
+        thread={current}
+        agentName="Agent"
+        draft="draft"
+        answerPending={false}
+        cancelPending={false}
+        showStop={true}
+        stopping={false}
+        actionsEnabled={false}
+        canSend={false}
+        onDraftChange={() => {}}
+        onSend={() => {}}
+        onCancel={() => {}}
+        onAnswer={() => {}}
+        onDeleteQueued={async () => {}}
+      />
+    </I18nProvider>
+  ));
+
+  expect(screen.getByRole("button", { name: "Allow" })).toHaveProperty(
+    "disabled",
+    true,
+  );
+  expect(
+    screen.getByRole("button", { name: "Stop current task" }),
+  ).toHaveProperty("disabled", true);
+  expect(
+    screen.getByRole("button", { name: /Delete queued message/ }),
+  ).toHaveProperty("disabled", true);
 });

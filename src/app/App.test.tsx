@@ -19,9 +19,21 @@ vi.mock("@tauri-apps/api/core", () => ({
 let receiveUpdate: (update: Record<string, unknown>) => void;
 const receive = (thread: Record<string, unknown>) =>
   receiveUpdate({ kind: "thread", thread });
+let pendingSnapshots: Map<string, Record<string, unknown>>;
+function subscribeWith(
+  args: unknown,
+  snapshot: Record<string, unknown>,
+  token = "subscription-1",
+) {
+  receiveUpdate = (args as { channel: { onmessage: typeof receiveUpdate } })
+    .channel.onmessage;
+  queueMicrotask(() => receive(snapshot));
+  return Promise.resolve(token);
+}
 afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
+  vi.useRealTimers();
 });
 
 it("shows registry icons and falls back for missing or failed images", async () => {
@@ -79,6 +91,7 @@ it("shows registry icons and falls back for missing or failed images", async () 
 });
 const requests = vi.fn();
 beforeEach(() => {
+  pendingSnapshots = new Map();
   vi.stubGlobal(
     "ResizeObserver",
     class {
@@ -88,7 +101,7 @@ beforeEach(() => {
     },
   );
   vi.resetAllMocks();
-  vi.mocked(invoke).mockImplementation((command, args) => {
+  vi.mocked(invoke).mockImplementation(async (command, args) => {
     if (command === "subscribe_thread_list")
       return Promise.resolve("list-subscription");
     if (command === "list_threads") return Promise.resolve([]);
@@ -97,10 +110,41 @@ beforeEach(() => {
     if (command === "subscribe_thread") {
       receiveUpdate = (args as { channel: { onmessage: typeof receiveUpdate } })
         .channel.onmessage;
-      return Promise.resolve("subscription-1");
+      const id = (args as { id: string }).id;
+      const snapshot =
+        pendingSnapshots.get(id) ??
+        ((await requests("subscription_snapshot", { id })) as
+          | Record<string, unknown>
+          | undefined);
+      if (snapshot?.id === id) queueMicrotask(() => receive(snapshot));
+      return "subscription-1";
     }
-    if (command === "unsubscribe_thread") return Promise.resolve();
-    return requests(command, args);
+    if (command === "unsubscribe_thread") return;
+    const result = await requests(command, args);
+    if (
+      ["select_working_folder", "create_thread"].includes(command) &&
+      result &&
+      typeof result === "object" &&
+      "id" in result
+    ) {
+      const snapshot = result as Record<string, unknown> & { id: string };
+      pendingSnapshots.set(snapshot.id, snapshot);
+      return snapshot.id;
+    }
+    if (
+      [
+        "connect_thread",
+        "send_message",
+        "delete_queued_message",
+        "cancel_turn",
+        "answer_permission",
+      ].includes(command)
+    ) {
+      if (result && typeof result === "object" && "id" in result)
+        queueMicrotask(() => receive(result as Record<string, unknown>));
+      return;
+    }
+    return result;
   });
 });
 
@@ -121,7 +165,6 @@ it("groups threads by folder, collapses projects and creates within the selected
     workingFolder: "/work/project",
     agentId: "codex",
     status: "sessionReady",
-    revision: 0,
     turns: [],
     permissions: [],
     queuedMessages: [],
@@ -136,15 +179,17 @@ it("groups threads by folder, collapses projects and creates within the selected
         .channel.onmessage;
       return "list";
     }
-    if (command === "create_thread")
-      return {
+    if (command === "create_thread") {
+      const created = {
         ...saved,
         id: "new",
         title: "새 스레드",
         status: "disconnected",
       };
-    if (command === "connect_thread")
-      return { ...saved, id: "new", title: "새 스레드", revision: 1 };
+      pendingSnapshots.set(created.id, created);
+      return created.id;
+    }
+    if (command === "connect_thread") return;
     return original?.(command, args);
   });
   render(() => <App />);
@@ -233,7 +278,6 @@ it("keeps confirmation open while deleting the selected thread and ignores late 
     status: "sessionReady",
     remoteSessionId: null,
     authentication: "authenticated",
-    revision: 1,
     turns: [],
     permissions: [],
     queuedMessages: [],
@@ -244,7 +288,7 @@ it("keeps confirmation open while deleting the selected thread and ignores late 
   const original = vi.mocked(invoke).getMockImplementation();
   vi.mocked(invoke).mockImplementation((command, args) => {
     if (command === "list_threads") return Promise.resolve([selected, other]);
-    if (command === "get_thread") return Promise.resolve(selected);
+    if (command === "subscribe_thread") return subscribeWith(args, selected);
     if (command === "subscribe_thread_list") {
       receiveList = (args as { channel: { onmessage: typeof receiveList } })
         .channel.onmessage;
@@ -297,7 +341,6 @@ it("does not reopen a deleted thread when an overlapping open finishes late", as
     agentId: "codex",
     status: "disconnected",
     remoteSessionId: null,
-    revision: 0,
     turns: [],
     permissions: [],
     queuedMessages: [],
@@ -306,10 +349,12 @@ it("does not reopen a deleted thread when an overlapping open finishes late", as
   const original = vi.mocked(invoke).getMockImplementation();
   vi.mocked(invoke).mockImplementation((command, args) => {
     if (command === "list_threads") return Promise.resolve([saved]);
-    if (command === "get_thread")
-      return new Promise<typeof saved>((resolve) => {
-        finishOpen = resolve;
-      });
+    if (command === "subscribe_thread") {
+      receiveUpdate = (args as { channel: { onmessage: typeof receiveUpdate } })
+        .channel.onmessage;
+      finishOpen = (thread) => receive(thread);
+      return Promise.resolve("late-open");
+    }
     if (command === "delete_thread") return Promise.resolve();
     return original?.(command, args) ?? Promise.resolve();
   });
@@ -340,7 +385,6 @@ it("preserves the selected thread and draft when deleting another thread", async
     agentId: "codex",
     status: "sessionReady",
     authentication: "authenticated",
-    revision: 1,
     turns: [],
     permissions: [],
     queuedMessages: [],
@@ -349,7 +393,7 @@ it("preserves the selected thread and draft when deleting another thread", async
   const original = vi.mocked(invoke).getMockImplementation();
   vi.mocked(invoke).mockImplementation((command, args) => {
     if (command === "list_threads") return Promise.resolve([current, other]);
-    if (command === "get_thread") return Promise.resolve(current);
+    if (command === "subscribe_thread") return subscribeWith(args, current);
     if (command === "delete_thread") return Promise.resolve();
     return original?.(command, args) ?? Promise.resolve();
   });
@@ -416,23 +460,25 @@ it("keeps the saved list accessible without agents and restores on selection onl
     remoteSessionId: "remote-7",
     turns: [],
     permissions: [],
-    revision: 0,
     failure: null,
   };
   vi.mocked(invoke).mockImplementation(async (command, args) => {
     if (command === "prepared_agents" || command === "agent_catalog") return [];
     if (command === "list_threads") return [saved];
-    if (command === "get_thread") return saved;
-    if (command === "connect_thread")
-      return {
-        ...saved,
-        status: "failed",
-        failure: "agentRemoved",
-        revision: 1,
-      };
+    if (command === "connect_thread") {
+      queueMicrotask(() =>
+        receive({
+          ...saved,
+          status: "failed",
+          failure: "agentRemoved",
+        }),
+      );
+      return;
+    }
     if (command === "subscribe_thread") {
       receiveUpdate = (args as { channel: { onmessage: typeof receiveUpdate } })
         .channel.onmessage;
+      queueMicrotask(() => receive(saved));
       return "subscription";
     }
   });
@@ -468,15 +514,16 @@ it("loads selected history once and keeps newer list metadata when an older thre
     remoteSessionId: "remote-7",
     turns: [],
     permissions: [],
-    revision: 0,
     failure: null,
   };
   const original = vi.mocked(invoke).getMockImplementation();
   vi.mocked(invoke).mockImplementation((command, args) => {
     if (command === "list_threads") return Promise.resolve([saved]);
-    if (command === "get_thread") return Promise.resolve(saved);
-    if (command === "connect_thread")
-      return Promise.resolve({ ...saved, status: "connecting", revision: 1 });
+    if (command === "subscribe_thread") return subscribeWith(args, saved);
+    if (command === "connect_thread") {
+      queueMicrotask(() => receive({ ...saved, status: "connecting" }));
+      return Promise.resolve();
+    }
     return original?.(command, args) ?? Promise.resolve();
   });
   render(() => <App />);
@@ -492,7 +539,6 @@ it("loads selected history once and keeps newer list metadata when an older thre
     ...saved,
     title: "복원한 제목",
     status: "sessionReady",
-    revision: 3,
     turns: [
       {
         id: "old-turn",
@@ -503,7 +549,6 @@ it("loads selected history once and keeps newer list metadata when an older thre
     ],
   });
   expect(await screen.findAllByText("과거 답변")).toHaveLength(1);
-  receive({ ...saved, revision: 1 });
   expect(
     await screen.findByRole("button", { name: "복원한 제목" }),
   ).toBeTruthy();
@@ -511,11 +556,6 @@ it("loads selected history once and keeps newer list metadata when an older thre
   await userEvent.type(screen.getByRole("textbox"), "작성 중인 질문");
   await userEvent.click(screen.getByRole("button", { name: "복원한 제목" }));
   expect(screen.getByRole("textbox")).toHaveProperty("value", "작성 중인 질문");
-  expect(
-    vi
-      .mocked(invoke)
-      .mock.calls.filter(([command]) => command === "get_thread"),
-  ).toHaveLength(1);
   expect(
     vi
       .mocked(invoke)
@@ -538,35 +578,33 @@ it("returns from setup to the same thread and resumes only after an explicit ret
     remoteSessionId: "same-remote",
     turns: [],
     permissions: [],
-    revision: 0,
     failure: null,
   };
   let attempts = 0;
   const original = vi.mocked(invoke).getMockImplementation();
   vi.mocked(invoke).mockImplementation((command, args) => {
     if (command === "list_threads") return Promise.resolve([saved]);
-    if (command === "get_thread") return Promise.resolve(saved);
+    if (command === "subscribe_thread") return subscribeWith(args, saved);
     if (command === "agent_catalog" || command === "refresh_agent_catalog")
       return Promise.resolve([]);
     if (command === "connect_thread") {
       expect(args).toEqual({ id: saved.id });
       attempts++;
-      return Promise.resolve(
+      const snapshot =
         attempts === 1
           ? {
               ...saved,
               status: "failed",
               failure: "authenticationRequired",
-              revision: 1,
             }
           : {
               ...saved,
               status: "sessionReady",
-              revision: 2,
               notice:
                 "기존 맥락을 재개했습니다. 이 에이전트는 이전 메시지 표시를 지원하지 않습니다.",
-            },
-      );
+            };
+      queueMicrotask(() => receive(snapshot));
+      return Promise.resolve();
     }
     return original?.(command, args) ?? Promise.resolve();
   });
@@ -596,7 +634,6 @@ it("returns from setup to the same thread and resumes only after an explicit ret
 
 it("automatically connects a new thread and disables sending while connecting", async () => {
   const draft = {
-    revision: 0,
     turns: [],
     authentication: "unknown",
     id: "draft-1",
@@ -606,7 +643,7 @@ it("automatically connects a new thread and disables sending while connecting", 
   };
   requests
     .mockResolvedValueOnce(draft)
-    .mockResolvedValueOnce({ ...draft, status: "connecting", revision: 1 });
+    .mockResolvedValueOnce({ ...draft, status: "connecting" });
   render(() => <App />);
   await userEvent.click(screen.getByRole("button", { name: "폴더 선택" }));
   expect(await screen.findByTitle("/Users/test/작업")).toBeTruthy();
@@ -657,14 +694,12 @@ it("keeps the current thread when another folder selection is cancelled", async 
   requests
     .mockResolvedValueOnce({
       id: "draft-1",
-      revision: 0,
       workingFolder: "/Users/test/project",
       agentId: "codex",
       status: "disconnected",
     })
     .mockResolvedValueOnce({
       id: "draft-1",
-      revision: 1,
       workingFolder: "/Users/test/project",
       agentId: "codex",
       status: "sessionReady",
@@ -705,7 +740,6 @@ it("connects the fixed agent and displays backend readiness separately from auth
   requests.mockImplementation(async (command) => {
     if (command === "select_working_folder")
       return {
-        revision: 0,
         turns: [],
         authentication: "unknown",
         id: "draft-1",
@@ -715,7 +749,6 @@ it("connects the fixed agent and displays backend readiness separately from auth
       };
     if (command === "connect_thread")
       return {
-        revision: 0,
         turns: [],
         authentication: "unknown",
         id: "draft-1",
@@ -740,7 +773,6 @@ it("connects the fixed agent and displays backend readiness separately from auth
     workingFolder: "/project",
     agentId: "codex",
     status: "sessionReady",
-    revision: 2,
     turns: [],
     authentication: "unknown",
   });
@@ -756,7 +788,6 @@ it("connects the fixed agent and displays backend readiness separately from auth
 
 it("shows authentication failures and retries only when requested", async () => {
   const draft = {
-    revision: 0,
     turns: [],
     authentication: "unknown",
     id: "draft-1",
@@ -800,7 +831,6 @@ it("shows authentication failures and retries only when requested", async () => 
 
 it("shows process exit after readiness without reconnecting automatically", async () => {
   const draft = {
-    revision: 0,
     turns: [],
     authentication: "unknown",
     id: "draft-1",
@@ -823,7 +853,6 @@ it("shows process exit after readiness without reconnecting automatically", asyn
     agentId: "codex",
     status: "failed",
     failure: "processExited",
-    revision: 3,
     turns: [],
   });
   expect((await screen.findByRole("alert")).textContent).toContain(
@@ -835,6 +864,7 @@ it("shows process exit after readiness without reconnecting automatically", asyn
 });
 
 it("keeps the existing thread's agent fixed when selecting a target for the next one", async () => {
+  const original = vi.mocked(invoke).getMockImplementation();
   vi.mocked(invoke).mockImplementation((command, args) =>
     command === "list_threads"
       ? Promise.resolve([])
@@ -843,10 +873,9 @@ it("keeps the existing thread's agent fixed when selecting a target for the next
             { id: "codex", name: "Codex" },
             { id: "fixture", name: "Fixture" },
           ])
-        : requests(command, args),
+        : (original?.(command, args) ?? Promise.resolve()),
   );
   requests.mockResolvedValue({
-    revision: 0,
     turns: [],
     authentication: "unknown",
     id: "draft-1",
@@ -915,7 +944,6 @@ it("sends with Enter, inserts a newline with Shift+Enter, and preserves IME comp
     workingFolder: "/project",
     agentId: "codex",
     status: "sessionReady",
-    revision: 2,
     turns: [],
   };
   requests.mockResolvedValue(ready);
@@ -950,7 +978,6 @@ it("focuses the message input when the conversation becomes ready", async () => 
     workingFolder: "/project",
     agentId: "codex",
     status: "connecting",
-    revision: 1,
     turns: [],
   };
   requests.mockResolvedValue(connecting);
@@ -960,7 +987,7 @@ it("focuses the message input when the conversation becomes ready", async () => 
   const input = screen.getByRole("textbox");
   expect(document.activeElement).not.toBe(input);
 
-  receive({ ...connecting, status: "sessionReady", revision: 2 });
+  receive({ ...connecting, status: "sessionReady" });
 
   await waitFor(() => expect(document.activeElement).toBe(input));
 });
@@ -990,7 +1017,6 @@ it("lays the composer over the full-height timeline and reserves its measured he
     workingFolder: "/project",
     agentId: "codex",
     status: "sessionReady",
-    revision: 1,
     turns: [],
     permissions: [],
     queuedMessages: [],
@@ -1025,7 +1051,6 @@ it("sends once, renders streaming text and completion, and admits the next messa
     workingFolder: "/project",
     agentId: "codex",
     status: "sessionReady",
-    revision: 2,
     turns: [],
   };
   requests.mockResolvedValue(ready);
@@ -1038,20 +1063,7 @@ it("sends once, renders streaming text and completion, and admits the next messa
   requests.mockImplementation((command) =>
     command === "send_message"
       ? new Promise((resolve) => {
-          finish = () =>
-            resolve({
-              ...ready,
-              status: "running",
-              revision: 3,
-              turns: [
-                {
-                  id: "turn-1",
-                  message: "hello",
-                  response: "Hi",
-                  stopReason: null,
-                },
-              ],
-            });
+          finish = () => resolve(undefined);
         })
       : Promise.resolve(ready),
   );
@@ -1065,7 +1077,7 @@ it("sends once, renders streaming text and completion, and admits the next messa
     response: "Hi",
     stopReason: null,
   };
-  receive({ ...ready, status: "running", revision: 3, turns: [turn] });
+  receive({ ...ready, status: "running", turns: [turn] });
   finish();
   expect(await screen.findByText("Hi")).toBeTruthy();
   expect(screen.queryByRole("button", { name: "전송" })).toBeNull();
@@ -1073,13 +1085,10 @@ it("sends once, renders streaming text and completion, and admits the next messa
   expect((button as HTMLButtonElement).disabled).toBe(false);
   receive({
     ...ready,
-    revision: 4,
     turns: [{ ...turn, response: "Hi there", stopReason: "end_turn" }],
   });
   expect(await screen.findByText("Hi there")).toBeTruthy();
   expect(screen.getByText("완료")).toBeTruthy();
-  receive({ ...ready, status: "running", revision: 3, turns: [turn] });
-  expect(screen.queryByText("Hi", { exact: true })).toBeNull();
   await userEvent.type(input, "next");
   expect((button as HTMLButtonElement).disabled).toBe(false);
 });
@@ -1091,7 +1100,6 @@ it("queues input above the composer and preserves it after stopping until delete
     workingFolder: "/project",
     agentId: "codex",
     status: "running",
-    revision: 1,
     turns: [
       { id: "turn", message: "first", response: "Working", stopReason: null },
     ],
@@ -1103,7 +1111,6 @@ it("queues input above the composer and preserves it after stopping until delete
   await userEvent.click(screen.getByRole("button", { name: "폴더 선택" }));
   const queued = {
     ...active,
-    revision: 2,
     queuedMessages: [
       { id: "q1", text: "next instruction with details" },
       { id: "q2", text: "last instruction" },
@@ -1131,7 +1138,6 @@ it("queues input above the composer and preserves it after stopping until delete
   expect(screen.getByText("next instruction with details")).toBeTruthy();
   requests.mockResolvedValue({
     ...queued,
-    revision: 3,
     status: "sessionReady",
   });
   await userEvent.click(screen.getByRole("button", { name: "현재 작업 중단" }));
@@ -1140,7 +1146,6 @@ it("queues input above the composer and preserves it after stopping until delete
   ).toHaveLength(2);
   requests.mockResolvedValue({
     ...queued,
-    revision: 4,
     status: "sessionReady",
     queuedMessages: [queued.queuedMessages[1]],
   });
@@ -1160,7 +1165,6 @@ it("keeps the message on send failure and displays permission cancellation", asy
     workingFolder: "/project",
     agentId: "codex",
     status: "sessionReady",
-    revision: 2,
     turns: [],
   };
   requests.mockImplementation(async (command) => {
@@ -1180,7 +1184,6 @@ it("keeps the message on send failure and displays permission cancellation", asy
   );
   receive({
     ...ready,
-    revision: 3,
     notice: "승인 UI가 아직 지원되지 않아 도구 실행 요청을 취소했습니다.",
   });
   expect(screen.getByText(/도구 실행 요청을 취소/)).toBeTruthy();
@@ -1192,7 +1195,6 @@ it("ignores updates after unmount and unsubscribes even when registration finish
     workingFolder: "/project",
     agentId: "codex",
     status: "sessionReady",
-    revision: 2,
     turns: [],
   };
   let register!: (token: string) => void;
@@ -1215,20 +1217,19 @@ it("ignores updates after unmount and unsubscribes even when registration finish
   view.unmount();
   register("late-subscription");
   await Promise.resolve();
-  receive({ ...ready, revision: 3, notice: "should not appear" });
+  receive({ ...ready, notice: "should not appear" });
   expect(screen.queryByText("should not appear")).toBeNull();
   expect(invoke).toHaveBeenCalledWith("unsubscribe_thread", {
     subscription: "late-subscription",
   });
 });
 
-it("appends each text delta once and rejects updates for another thread", async () => {
+it("appends ordered text deltas and rejects updates for another thread", async () => {
   const ready = {
     id: "draft-1",
     workingFolder: "/project",
     agentId: "codex",
     status: "running",
-    revision: 2,
     turns: [{ id: "turn-1", message: "hello", response: "", stopReason: null }],
   };
   requests.mockResolvedValue(ready);
@@ -1237,21 +1238,51 @@ it("appends each text delta once and rejects updates for another thread", async 
   const delta = {
     kind: "textDelta",
     threadId: "draft-1",
-    revision: 3,
     turnId: "turn-1",
     text: "Hello",
   };
   receiveUpdate(delta);
-  receiveUpdate(delta);
   receiveUpdate({
     ...delta,
     threadId: "other",
-    revision: 4,
     text: "wrong",
   });
-  receiveUpdate({ ...delta, revision: 4, text: " world" });
+  receiveUpdate({ ...delta, text: " world" });
   expect(screen.getByText("Hello world")).toBeTruthy();
   expect(screen.queryByText(/wrong/)).toBeNull();
+});
+
+it("offers manual reconnection only after five automatic retries", async () => {
+  const ready = {
+    id: "draft-1",
+    workingFolder: "/project",
+    agentId: "codex",
+    status: "sessionReady",
+    turns: [],
+  };
+  requests.mockResolvedValue(ready);
+  render(() => <App />);
+  await userEvent.click(screen.getByRole("button", { name: "폴더 선택" }));
+  await screen.findByRole("textbox");
+  const original = vi.mocked(invoke).getMockImplementation();
+  vi.mocked(invoke).mockImplementation((command, args) =>
+    command === "subscribe_thread"
+      ? Promise.reject(new Error("registration failed"))
+      : (original?.(command, args) ?? Promise.resolve()),
+  );
+  vi.useFakeTimers();
+
+  receiveUpdate({
+    kind: "textDelta",
+    threadId: "draft-1",
+    turnId: "unknown",
+    text: "ignored",
+  });
+
+  expect(screen.queryByRole("button", { name: "다시 연결" })).toBeNull();
+  for (let attempt = 0; attempt < 5; attempt++)
+    await vi.advanceTimersByTimeAsync(5_000);
+  expect(screen.getByRole("button", { name: "다시 연결" })).toBeTruthy();
 });
 
 it("does not disable the new thread when old subscription cleanup fails", async () => {
@@ -1260,7 +1291,6 @@ it("does not disable the new thread when old subscription cleanup fails", async 
     workingFolder: "/project",
     agentId: "codex",
     status: "sessionReady",
-    revision: 2,
     turns: [],
   };
   requests
@@ -1326,7 +1356,6 @@ it("returns from project setup to create in the original folder", async () => {
     workingFolder: "/work/original",
     agentId: "missing",
     status: "disconnected",
-    revision: 0,
     turns: [],
     permissions: [],
     queuedMessages: [],
@@ -1356,22 +1385,28 @@ it("returns from project setup to create in the original folder", async () => {
       installed = true;
       return;
     }
-    if (command === "create_thread")
-      return {
+    if (command === "create_thread") {
+      const created = {
         ...saved,
         id: "new",
         title: "새 스레드",
         agentId: "new-provider",
       };
-    if (command === "connect_thread")
-      return {
-        ...saved,
-        id: "new",
-        title: "새 스레드",
-        agentId: "new-provider",
-        status: "sessionReady",
-        revision: 1,
-      };
+      pendingSnapshots.set(created.id, created);
+      return created.id;
+    }
+    if (command === "connect_thread") {
+      queueMicrotask(() =>
+        receive({
+          ...saved,
+          id: "new",
+          title: "새 스레드",
+          agentId: "new-provider",
+          status: "sessionReady",
+        }),
+      );
+      return;
+    }
     return original?.(command, args);
   });
   render(() => <App />);
@@ -1403,7 +1438,6 @@ it("keeps streaming and the fixed thread while management is open", async () => 
     workingFolder: "/project",
     agentId: "codex",
     status: "running",
-    revision: 2,
     turns: [
       { id: "turn-1", message: "hello", response: "Hi", stopReason: null },
     ],
@@ -1421,7 +1455,6 @@ it("keeps streaming and the fixed thread while management is open", async () => 
   receiveUpdate({
     kind: "textDelta",
     threadId: "draft-1",
-    revision: 3,
     turnId: "turn-1",
     text: " there",
   });
@@ -1655,11 +1688,10 @@ it("keeps thread content after agent removal and offers setup and explicit retry
     workingFolder: "/Users/test/project",
     agentId: "codex",
     status: "disconnected",
-    revision: 0,
   };
   requests
     .mockResolvedValueOnce(draft)
-    .mockResolvedValueOnce({ ...draft, status: "connecting", revision: 1 });
+    .mockResolvedValueOnce({ ...draft, status: "connecting" });
   render(() => <App />);
   await userEvent.click(screen.getByRole("button", { name: "폴더 선택" }));
   await screen.findByText("연결 중…");
@@ -1667,7 +1699,6 @@ it("keeps thread content after agent removal and offers setup and explicit retry
     ...draft,
     status: "failed",
     failure: "agentRemoved",
-    revision: 2,
     authentication: "unknown",
     turns: [
       {
@@ -1693,7 +1724,6 @@ it("replaces the composer with agent choices and restores the draft after one de
     workingFolder: "/project",
     agentId: "codex",
     status: "sessionReady",
-    revision: 2,
     turns: [],
     permissions: [],
   };
@@ -1719,7 +1749,6 @@ it("replaces the composer with agent choices and restores the draft after one de
   receive({
     ...ready,
     status: "waitingForApproval",
-    revision: 4,
     turns: [turn],
     permissions: [permission],
   });
@@ -1747,7 +1776,7 @@ it("replaces the composer with agent choices and restores the draft after one de
   expect(
     requests.mock.calls.filter(([command]) => command === "answer_permission"),
   ).toHaveLength(1);
-  resolve({ ...ready, status: "running", revision: 5, turns: [turn] });
+  resolve({ ...ready, status: "running", turns: [turn] });
   expect(await screen.findByRole("textbox")).toHaveProperty(
     "value",
     "keep this draft",
@@ -1769,7 +1798,6 @@ it.each(["running", "waitingForApproval"])(
       workingFolder: "/project",
       agentId: "codex",
       status,
-      revision: 4,
       turns: [turn],
       permissions:
         status === "waitingForApproval"
@@ -1789,7 +1817,6 @@ it.each(["running", "waitingForApproval"])(
     requests.mockResolvedValue({
       ...waiting,
       status: "cancelling",
-      revision: 5,
       permissions: [],
     });
     await userEvent.click(
@@ -1803,12 +1830,9 @@ it.each(["running", "waitingForApproval"])(
     expect(
       screen.getByRole("button", { name: "현재 작업 중단" }),
     ).toHaveProperty("disabled", true);
-    receive(waiting);
-    expect(screen.queryByRole("button", { name: "Run once" })).toBeNull();
     receive({
       ...waiting,
       status: "sessionReady",
-      revision: 6,
       permissions: [],
       turns: [{ ...turn, stopReason: "cancelled" }],
     });

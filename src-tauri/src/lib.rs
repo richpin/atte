@@ -13,7 +13,7 @@ use std::{
 };
 use tauri::{Manager, State};
 use tauri_plugin_dialog::DialogExt;
-use thread::{Thread, ThreadError, ThreadMetadata, ThreadUpdate, Threads};
+use thread::{ThreadError, ThreadMetadata, ThreadUpdate, Threads};
 use tokio::sync::oneshot;
 use uuid::Uuid;
 
@@ -30,7 +30,7 @@ async fn select_working_folder(
     app: tauri::AppHandle,
     agent_id: String,
     dialog_title: String,
-) -> Result<Option<Thread>, ThreadError> {
+) -> Result<Option<Uuid>, ThreadError> {
     tauri::async_runtime::spawn_blocking(move || {
         let selection = app
             .dialog()
@@ -45,7 +45,7 @@ async fn select_working_folder(
         })?;
         app.state::<Threads>()
             .create_for_agent(&path, &agent_id)
-            .map(Some)
+            .map(|thread| Some(thread.id))
     })
     .await
     .map_err(|_| {
@@ -58,18 +58,15 @@ async fn create_thread(
     folder: String,
     agent_id: String,
     threads: State<'_, Threads>,
-) -> Result<Thread, ThreadError> {
-    threads.create_for_agent(std::path::Path::new(&folder), &agent_id)
+) -> Result<Uuid, ThreadError> {
+    threads
+        .create_for_agent(std::path::Path::new(&folder), &agent_id)
+        .map(|thread| thread.id)
 }
 
 #[tauri::command]
 fn list_threads(threads: State<'_, Threads>) -> Result<Vec<ThreadMetadata>, ThreadError> {
     threads.list()
-}
-
-#[tauri::command]
-fn get_thread(id: Uuid, threads: State<'_, Threads>) -> Result<Thread, ThreadError> {
-    threads.get(id)
 }
 
 #[tauri::command]
@@ -83,8 +80,8 @@ fn prepared_agents(threads: State<'_, Threads>) -> Vec<agent::PreparedAgent> {
 }
 
 #[tauri::command]
-async fn connect_thread(id: Uuid, threads: State<'_, Threads>) -> Result<Thread, ThreadError> {
-    threads.connect(id)
+async fn connect_thread(id: Uuid, threads: State<'_, Threads>) -> Result<(), ThreadError> {
+    threads.connect(id).map(|_| ())
 }
 
 #[tauri::command]
@@ -92,9 +89,8 @@ async fn send_message(
     id: Uuid,
     text: String,
     threads: State<'_, Threads>,
-) -> Result<Thread, ThreadError> {
-    threads.send_message(id, text)?;
-    threads.get(id)
+) -> Result<(), ThreadError> {
+    threads.send_message(id, text)
 }
 
 #[tauri::command]
@@ -102,19 +98,13 @@ async fn delete_queued_message(
     id: Uuid,
     message: Uuid,
     threads: State<'_, Threads>,
-) -> Result<Thread, ThreadError> {
-    threads.delete_queued_message(id, message)?;
-    threads.get(id)
+) -> Result<(), ThreadError> {
+    threads.delete_queued_message(id, message)
 }
 
 #[tauri::command]
-async fn cancel_turn(
-    id: Uuid,
-    turn: Uuid,
-    threads: State<'_, Threads>,
-) -> Result<Thread, ThreadError> {
-    threads.cancel_turn(id, turn)?;
-    threads.get(id)
+async fn cancel_turn(id: Uuid, turn: Uuid, threads: State<'_, Threads>) -> Result<(), ThreadError> {
+    threads.cancel_turn(id, turn)
 }
 
 #[tauri::command]
@@ -123,9 +113,8 @@ async fn answer_permission(
     request: Uuid,
     option: String,
     threads: State<'_, Threads>,
-) -> Result<Thread, ThreadError> {
-    threads.answer_permission(id, request, option)?;
-    threads.get(id)
+) -> Result<(), ThreadError> {
+    threads.answer_permission(id, request, option)
 }
 
 #[tauri::command]
@@ -240,7 +229,6 @@ pub fn run() {
             uninstall_agent,
             authenticate_agent,
             select_working_folder,
-            get_thread,
             delete_thread,
             list_threads,
             create_thread,

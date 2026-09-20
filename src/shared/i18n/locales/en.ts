@@ -68,7 +68,6 @@ export const en = {
     ready: "Thread ready",
     notConnected: "The agent is not connected yet.",
     subscriptionFailed: "Thread updates are unavailable.",
-    reloadStatus: "Reload status",
     openSignIn: "Open sign-in instructions",
     openAgentManagement: "Open installation and authentication",
     authenticationUnknown: "Authentication status has not been checked yet.",

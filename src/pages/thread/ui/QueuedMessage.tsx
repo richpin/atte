@@ -4,6 +4,7 @@ import type { QueuedMessage as QueuedMessageData } from "../model/types";
 
 export function QueuedMessage(props: {
   messages: QueuedMessageData[];
+  disabled: boolean;
   onDelete: (id: string) => Promise<void>;
 }) {
   const { t } = useI18n();
@@ -29,7 +30,7 @@ export function QueuedMessage(props: {
                   aria-label={t("thread.deleteQueued", {
                     message: messages().get(id) ?? "",
                   })}
-                  disabled={deleting()}
+                  disabled={props.disabled || deleting()}
                   class="shrink-0 rounded p-1 text-muted hover:text-ink focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-accent disabled:opacity-40"
                   onClick={async () => {
                     setDeleting(true);

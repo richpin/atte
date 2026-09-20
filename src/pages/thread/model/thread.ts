@@ -12,6 +12,7 @@ import {
   onCleanup,
   onMount,
 } from "solid-js";
+import { createStore, reconcile } from "solid-js/store";
 import {
   answerPermission,
   cancelTurn,
@@ -19,7 +20,6 @@ import {
   createThread,
   deleteQueuedMessage,
   deleteThread as deleteThreadCommand,
-  getThread,
   listThreads,
   selectWorkingFolder,
   sendMessage,
@@ -29,6 +29,8 @@ import {
 import type { Thread, ThreadMetadata, ThreadUpdate } from "./types";
 
 const threadListQueryKey = ["threads"] as const;
+const subscriptionRetryDelay = 5_000;
+const maximumSubscriptionRetries = 5;
 
 function sortThreads(entries: ThreadMetadata[]) {
   return entries.toSorted(
@@ -41,7 +43,9 @@ function sortThreads(entries: ThreadMetadata[]) {
 export function createThreadModel(queryClient?: QueryClient) {
   const { message: localizedMessage, t } = useI18n();
   const client = useQueryClient(queryClient);
-  const [thread, setThread] = createSignal<Thread>();
+  const [state, setState] = createStore<{ thread?: Thread }>({});
+  const thread = () => state.thread;
+  const [selectedThreadId, setSelectedThreadId] = createSignal<string>();
   const [error, setError] = createSignal<string>();
   const [selecting, setSelecting] = createSignal(false);
   const [listSubscriptionError, setListSubscriptionError] = createSignal(false);
@@ -92,38 +96,93 @@ export function createThreadModel(queryClient?: QueryClient) {
     );
   });
 
-  const [connectingId, setConnectingId] = createSignal<string>();
+  const [connectingThreadId, setConnectingThreadId] = createSignal<string>();
   const connecting = () =>
-    Boolean(connectingId()) && connectingId() === thread()?.id;
-  const [connectionRejected, setConnectionRejected] = createSignal(false);
-  const [message, setMessage] = createSignal("");
+    Boolean(connectingThreadId()) && connectingThreadId() === thread()?.id;
+  const [connectFailed, setConnectFailed] = createSignal(false);
+  const [draft, setDraft] = createSignal("");
   const [sending, setSending] = createSignal(false);
-  const [answering, setAnswering] = createSignal<string>();
-  const [cancelling, setCancelling] = createSignal<string>();
-  const activeTurn = () => thread()?.turns?.at(-1)?.id;
+  const [answeringPermissionId, setAnsweringPermissionId] =
+    createSignal<string>();
+  const [cancellingTurnId, setCancellingTurnId] = createSignal<string>();
+  const answerPending = () => Boolean(answeringPermissionId());
+  const cancelPending = () => Boolean(cancellingTurnId());
+  const activeTurnId = () => thread()?.turns?.at(-1)?.id;
   const canCancel = () =>
     ["running", "waitingForApproval"].includes(thread()?.status ?? "");
   const showStop = () => canCancel() || thread()?.status === "cancelling";
-  const stopping = () =>
-    Boolean(cancelling()) || thread()?.status === "cancelling";
-  const [streamError, setStreamError] = createSignal(false);
+  const stopping = () => cancelPending() || thread()?.status === "cancelling";
+  const [subscriptionError, setSubscriptionError] = createSignal(false);
+  const [subscriptionLive, setSubscriptionLive] = createSignal(false);
+  const [retryExhausted, setRetryExhausted] = createSignal(false);
   const [subscriptionAttempt, setSubscriptionAttempt] = createSignal(0);
+  let subscriptionRetries = 0;
+  let subscriptionRetryTimer: ReturnType<typeof setTimeout> | undefined;
+  const clearSubscriptionRetry = () => {
+    if (subscriptionRetryTimer !== undefined)
+      clearTimeout(subscriptionRetryTimer);
+    subscriptionRetryTimer = undefined;
+  };
+  onCleanup(clearSubscriptionRetry);
+  const actionsEnabled = () => subscriptionLive();
   const canSend = () =>
     ["sessionReady", "running", "cancelling"].includes(
       thread()?.status ?? "",
     ) &&
     !sending() &&
-    !streamError();
+    actionsEnabled();
+
+  function isNotFound(cause: unknown) {
+    return (
+      typeof cause === "object" &&
+      cause !== null &&
+      "code" in cause &&
+      cause.code === "notFound"
+    );
+  }
+
+  function subscriptionFailed(cause?: unknown) {
+    setSubscriptionLive(false);
+    setSubscriptionError(true);
+    if (isNotFound(cause)) {
+      clearSubscriptionRetry();
+      setSubscriptionError(false);
+      setRetryExhausted(false);
+      setSelectedThreadId(undefined);
+      setState("thread", undefined);
+      setError(localizedMessage(cause, "thread.error.open"));
+      return;
+    }
+    if (subscriptionRetries >= maximumSubscriptionRetries) {
+      setRetryExhausted(true);
+      return;
+    }
+    subscriptionRetries++;
+    clearSubscriptionRetry();
+    subscriptionRetryTimer = setTimeout(() => {
+      subscriptionRetryTimer = undefined;
+      if (!disposed && selectedThreadId())
+        setSubscriptionAttempt((value) => value + 1);
+    }, subscriptionRetryDelay);
+  }
+
+  function subscriptionReady() {
+    clearSubscriptionRetry();
+    subscriptionRetries = 0;
+    setSubscriptionError(false);
+    setRetryExhausted(false);
+    setSubscriptionLive(true);
+  }
+
+  function reconcileThread(updatedThread: Thread) {
+    setState("thread", reconcile(structuredClone(updatedThread)));
+  }
 
   function applyThread(updatedThread: Thread) {
     if (deleted.has(updatedThread.id)) return;
-    const current = thread();
-    if (
-      current?.id === updatedThread.id &&
-      updatedThread.revision >= current.revision
-    ) {
+    if (selectedThreadId() === updatedThread.id) {
       updateThreadInList(updatedThread);
-      setThread(updatedThread);
+      reconcileThread(updatedThread);
     }
   }
 
@@ -170,72 +229,63 @@ export function createThreadModel(queryClient?: QueryClient) {
     return !disposed && view === expectedView;
   }
 
-  function display(updatedThread: Thread) {
-    if (deleted.has(updatedThread.id)) return;
+  async function openThread(id: string) {
+    if (selectedThreadId() === id || disposed) return;
+    selection++;
     view++;
     setError(undefined);
     setSending(false);
-    setAnswering(undefined);
-    setCancelling(undefined);
-    setConnectingId(undefined);
-    setMessage("");
-    setConnectionRejected(false);
-    setThread(updatedThread);
-    if (updatedThread.status === "disconnected") void connect();
-  }
-
-  async function openThread(id: string) {
-    const attempt = ++selection;
-    if (thread()?.id === id || disposed) return;
-    setError(undefined);
-    try {
-      const updatedThread = await getThread(id);
-      if (attempt !== selection || deleted.has(id)) return;
-      display(updatedThread);
-    } catch (cause) {
-      if (attempt === selection)
-        setError(localizedMessage(cause, "thread.error.open"));
-    }
+    setAnsweringPermissionId(undefined);
+    setCancellingTurnId(undefined);
+    setConnectingThreadId(undefined);
+    setDraft("");
+    setConnectFailed(false);
+    clearSubscriptionRetry();
+    subscriptionRetries = 0;
+    setSubscriptionError(false);
+    setRetryExhausted(false);
+    setSubscriptionLive(false);
+    setState("thread", undefined);
+    setSelectedThreadId(id);
   }
 
   function applyUpdate(update: ThreadUpdate) {
     if (update.kind === "thread") {
+      const firstSnapshot = !thread();
       applyThread(update.thread);
+      if (update.thread.id === selectedThreadId()) subscriptionReady();
+      if (
+        firstSnapshot &&
+        update.thread.id === selectedThreadId() &&
+        update.thread.status === "disconnected"
+      )
+        void connect();
       return;
     }
     const current = thread();
-    if (
-      !current ||
-      update.threadId !== current.id ||
-      update.revision <= current.revision
-    )
+    if (!subscriptionLive() || !current || update.threadId !== current.id)
       return;
-    if (
-      update.revision !== current.revision + 1 ||
-      current.turns.at(-1)?.id !== update.turnId
-    ) {
-      setStreamError(true);
+    if (current.turns.at(-1)?.id !== update.turnId) {
+      subscriptionFailed();
       return;
     }
-    setThread({
-      ...current,
-      revision: update.revision,
-      turns: current.turns.map((turn) =>
-        turn.id === update.turnId
-          ? { ...turn, response: turn.response + update.text }
-          : turn,
-      ),
-    });
+    const turnIndex = current.turns.length - 1;
+    setState(
+      "thread",
+      "turns",
+      turnIndex,
+      "response",
+      (response) => response + update.text,
+    );
   }
 
-  const threadId = createMemo(() => thread()?.id);
   createEffect(
     on(
-      () => [threadId(), subscriptionAttempt()] as const,
+      () => [selectedThreadId(), subscriptionAttempt()] as const,
       ([id]) => {
         if (!id) return;
-        setStreamError(false);
-        onCleanup(subscribeThread(id, applyUpdate, () => setStreamError(true)));
+        setSubscriptionLive(false);
+        onCleanup(subscribeThread(id, applyUpdate, subscriptionFailed));
       },
     ),
   );
@@ -243,15 +293,12 @@ export function createThreadModel(queryClient?: QueryClient) {
   async function send() {
     const expectedView = view;
     const current = thread();
-    if (!current || !canSend() || !message().trim()) return;
+    if (!current || !canSend() || !draft().trim()) return;
     setSending(true);
     setError(undefined);
     try {
-      const updatedThread = await sendMessage(current.id, message());
-      if (isCurrent(expectedView)) {
-        applyThread(updatedThread);
-        setMessage("");
-      }
+      await sendMessage(current.id, draft());
+      if (isCurrent(expectedView)) setDraft("");
     } catch (cause) {
       if (isCurrent(expectedView))
         setError(localizedMessage(cause, "thread.error.send"));
@@ -263,10 +310,9 @@ export function createThreadModel(queryClient?: QueryClient) {
   async function deleteQueued(id: string) {
     const expectedView = view;
     const current = thread();
-    if (!current) return;
+    if (!current || !actionsEnabled()) return;
     try {
-      const updatedThread = await deleteQueuedMessage(current.id, id);
-      if (isCurrent(expectedView)) applyThread(updatedThread);
+      await deleteQueuedMessage(current.id, id);
     } catch (cause) {
       if (isCurrent(expectedView))
         setError(localizedMessage(cause, "thread.error.deleteQueued"));
@@ -276,55 +322,65 @@ export function createThreadModel(queryClient?: QueryClient) {
   async function answer(request: string, option: string) {
     const expectedView = view;
     const current = thread();
-    if (!current || answering() || cancelling()) return;
-    setAnswering(request);
+    if (
+      !current ||
+      !actionsEnabled() ||
+      answeringPermissionId() ||
+      cancellingTurnId()
+    )
+      return;
+    setAnsweringPermissionId(request);
     setError(undefined);
     try {
-      const updated = await answerPermission(current.id, request, option);
-      if (isCurrent(expectedView)) applyThread(updated);
+      await answerPermission(current.id, request, option);
     } catch (cause) {
       if (isCurrent(expectedView))
         setError(localizedMessage(cause, "thread.error.answerPermission"));
     } finally {
-      if (isCurrent(expectedView)) setAnswering(undefined);
+      if (isCurrent(expectedView)) setAnsweringPermissionId(undefined);
     }
   }
 
   async function cancel() {
     const expectedView = view;
     const current = thread();
-    const turn = activeTurn();
-    if (!current || !turn || !canCancel() || cancelling()) return;
-    setCancelling(turn);
+    const turn = activeTurnId();
+    if (
+      !current ||
+      !actionsEnabled() ||
+      !turn ||
+      !canCancel() ||
+      cancellingTurnId()
+    )
+      return;
+    setCancellingTurnId(turn);
     setError(undefined);
     try {
-      const updated = await cancelTurn(current.id, turn);
-      if (isCurrent(expectedView)) applyThread(updated);
+      await cancelTurn(current.id, turn);
     } catch (cause) {
       if (isCurrent(expectedView))
         setError(localizedMessage(cause, "thread.error.cancel"));
     } finally {
-      if (isCurrent(expectedView)) setCancelling(undefined);
+      if (isCurrent(expectedView)) setCancellingTurnId(undefined);
     }
   }
 
   async function connect() {
     const expectedView = view;
-    const draft = thread();
-    if (!draft || connecting()) return;
-    setConnectingId(draft.id);
-    setConnectionRejected(false);
+    const current = thread();
+    if (!current || !actionsEnabled() || connecting()) return;
+    setConnectingThreadId(current.id);
+    setConnectFailed(false);
     setError(undefined);
     try {
-      const updatedThread = await connectThread(draft.id);
-      if (isCurrent(expectedView)) applyThread(updatedThread);
+      await connectThread(current.id);
     } catch (cause) {
       if (isCurrent(expectedView)) {
-        setConnectionRejected(true);
+        setConnectFailed(true);
         setError(localizedMessage(cause, "thread.error.connect"));
       }
     } finally {
-      if (isCurrent(expectedView)) setConnectingId(undefined);
+      if (isCurrent(expectedView)) setConnectingThreadId(undefined);
     }
   }
 
@@ -334,14 +390,13 @@ export function createThreadModel(queryClient?: QueryClient) {
     setError(undefined);
     const attempt = ++selection;
     try {
-      const draft = await selectWorkingFolder(
+      const id = await selectWorkingFolder(
         agentId,
         t("thread.folderDialogTitle"),
       );
-      if (draft) {
+      if (id) {
         if (disposed) return;
-        updateThreadInList(draft);
-        if (attempt === selection) display(draft);
+        if (attempt === selection) await openThread(id);
       }
     } catch (cause) {
       if (attempt !== selection) return;
@@ -357,11 +412,10 @@ export function createThreadModel(queryClient?: QueryClient) {
     setError(undefined);
     const attempt = ++selection;
     try {
-      const draft = await createThread(folder, agentId);
+      const id = await createThread(folder, agentId);
       if (disposed) return;
-      updateThreadInList(draft);
       if (attempt !== selection) return;
-      display(draft);
+      await openThread(id);
     } catch (cause) {
       if (attempt === selection)
         setError(localizedMessage(cause, "thread.error.create"));
@@ -377,22 +431,28 @@ export function createThreadModel(queryClient?: QueryClient) {
     client.setQueryData<ThreadMetadata[]>(threadListQueryKey, (previous) =>
       (previous ?? []).filter((entry) => entry.id !== id),
     );
-    if (thread()?.id !== id) return;
+    if (selectedThreadId() !== id) return;
     selection++;
     view++;
-    setThread(undefined);
+    clearSubscriptionRetry();
+    subscriptionRetries = 0;
+    setSelectedThreadId(undefined);
+    setState("thread", undefined);
     setError(undefined);
     setSending(false);
-    setAnswering(undefined);
-    setCancelling(undefined);
-    setConnectingId(undefined);
-    setMessage("");
-    setConnectionRejected(false);
-    setStreamError(false);
+    setAnsweringPermissionId(undefined);
+    setCancellingTurnId(undefined);
+    setConnectingThreadId(undefined);
+    setDraft("");
+    setConnectFailed(false);
+    setSubscriptionError(false);
+    setSubscriptionLive(false);
+    setRetryExhausted(false);
   }
 
   return {
     thread,
+    selectedThreadId,
     error,
     selecting,
     history,
@@ -400,16 +460,17 @@ export function createThreadModel(queryClient?: QueryClient) {
     listError,
     reloadList,
     connecting,
-    connectionRejected,
-    message,
-    setMessage,
-    sending,
-    answering,
-    cancelling,
-    activeTurn,
+    connectFailed,
+    draft,
+    setDraft,
+    answerPending,
+    cancelPending,
+    activeTurnId,
     showStop,
     stopping,
-    streamError,
+    subscriptionError,
+    retryExhausted,
+    actionsEnabled,
     canSend,
     openThread,
     send,
@@ -420,6 +481,13 @@ export function createThreadModel(queryClient?: QueryClient) {
     selectFolder,
     createInFolder,
     removeThread,
-    retrySubscription: () => setSubscriptionAttempt((value) => value + 1),
+    retrySubscription: () => {
+      clearSubscriptionRetry();
+      subscriptionRetries = 0;
+      setSubscriptionError(false);
+      setRetryExhausted(false);
+      setSubscriptionLive(false);
+      setSubscriptionAttempt((value) => value + 1);
+    },
   };
 }

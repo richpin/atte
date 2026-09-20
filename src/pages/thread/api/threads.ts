@@ -1,7 +1,6 @@
 import { Channel, invoke } from "@tauri-apps/api/core";
 import type {
   PreparedAgent,
-  Thread,
   ThreadMetadata,
   ThreadUpdate,
 } from "../model/types";
@@ -11,7 +10,7 @@ export function listThreads() {
 }
 
 export function selectWorkingFolder(agentId: string, dialogTitle: string) {
-  return invoke<Thread | null>("select_working_folder", {
+  return invoke<string | null>("select_working_folder", {
     agentId,
     dialogTitle,
   });
@@ -22,11 +21,7 @@ export function preparedAgents() {
 }
 
 export function connectThread(id: string) {
-  return invoke<Thread>("connect_thread", { id });
-}
-
-export function getThread(id: string) {
-  return invoke<Thread>("get_thread", { id });
+  return invoke<void>("connect_thread", { id });
 }
 
 export function deleteThread(id: string) {
@@ -34,36 +29,36 @@ export function deleteThread(id: string) {
 }
 
 export function sendMessage(id: string, text: string) {
-  return invoke<Thread>("send_message", { id, text });
+  return invoke<void>("send_message", { id, text });
 }
 
 export function deleteQueuedMessage(id: string, message: string) {
-  return invoke<Thread>("delete_queued_message", { id, message });
+  return invoke<void>("delete_queued_message", { id, message });
 }
 
 export function createThread(folder: string, agentId: string) {
-  return invoke<Thread>("create_thread", { folder, agentId });
+  return invoke<string>("create_thread", { folder, agentId });
 }
 
 export function cancelTurn(id: string, turn: string) {
-  return invoke<Thread>("cancel_turn", { id, turn });
+  return invoke<void>("cancel_turn", { id, turn });
 }
 
 export function answerPermission(id: string, request: string, option: string) {
-  return invoke<Thread>("answer_permission", { id, request, option });
+  return invoke<void>("answer_permission", { id, request, option });
 }
 
 export function subscribeThread(
   id: string,
   receive: (update: ThreadUpdate) => void,
-  failed: () => void,
+  failed: (cause: unknown) => void,
 ): () => void {
   return subscribe("subscribe_thread", { id }, receive, failed);
 }
 
 export function subscribeThreadList(
   receive: (entries: ThreadMetadata[]) => void,
-  failed: () => void,
+  failed: (cause: unknown) => void,
 ): () => void {
   return subscribe("subscribe_thread_list", {}, receive, failed);
 }
@@ -72,7 +67,7 @@ function subscribe<T>(
   command: string,
   args: Record<string, string>,
   receive: (update: T) => void,
-  failed: () => void,
+  failed: (cause: unknown) => void,
 ): () => void {
   const channel = new Channel<T>();
   let disposed = false;
@@ -81,8 +76,8 @@ function subscribe<T>(
     if (!disposed) receive(update);
   };
   const unsubscribe = (subscription: string) => {
-    void invoke("unsubscribe_thread", { subscription }).catch(() => {
-      if (!disposed) failed();
+    void invoke("unsubscribe_thread", { subscription }).catch((cause) => {
+      if (!disposed) failed(cause);
     });
   };
   void invoke<string>(command, { ...args, channel })
@@ -90,8 +85,8 @@ function subscribe<T>(
       if (disposed) unsubscribe(token);
       else subscription = token;
     })
-    .catch(() => {
-      if (!disposed) failed();
+    .catch((cause) => {
+      if (!disposed) failed(cause);
     });
   return () => {
     disposed = true;
