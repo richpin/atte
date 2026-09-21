@@ -15,6 +15,22 @@ fn send(output: &mut impl Write, message: Value) -> io::Result<()> {
     output.flush()
 }
 
+fn auth_status() -> Value {
+    if env::var_os("AUTH_FILE").is_some_and(|path| std::path::Path::new(&path).exists()) {
+        json!({
+            "kind": "account",
+            "label": env::var("ACCOUNT_LABEL").unwrap_or_else(|_| "Fixture account".into()),
+            "account": {
+                "email": env::var("ACCOUNT_EMAIL").ok(),
+                "organization": env::var("ACCOUNT_ORGANIZATION").ok(),
+                "plan": env::var("ACCOUNT_PLAN").ok(),
+            }
+        })
+    } else {
+        json!({"kind": "none", "label": "Not logged in"})
+    }
+}
+
 // Also reap the descendant on normal EOF; the cleanup test kills the process group.
 struct Descendant(Child);
 
@@ -107,7 +123,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 if mode == "init-error" {
                     error = Some(json!({"code": -32603, "message": "initialize rejected"}));
                 }
-                json!({"protocolVersion": if mode == "wrong-version" { 99 } else { 1 }, "agentCapabilities": if mode == "resume-only" {json!({"sessionCapabilities":{"resume":{}}})} else if mode == "no-resume" {json!({})} else {json!({"loadSession":true})}, "authMethods": if mode == "future-auth" { json!([{"id":"future-method","name":"Future auth","type":"future_protocol"}]) } else if mode == "key-auth" { json!([{"id": "api-key", "name": "API Key"}]) } else if env::var_os("AUTH_FILE").is_some() { json!([{ "id": "fixture-login", "name": "Fixture login" }, { "id": "fixture-denied", "name": "Denied login" }]) } else { json!([]) }})
+                let mut agent_capabilities = if mode == "resume-only" {
+                    json!({"sessionCapabilities":{"resume":{}}})
+                } else if mode == "no-resume" {
+                    json!({})
+                } else {
+                    json!({"loadSession":true})
+                };
+                if mode.starts_with("account-") && mode != "account-no-logout" {
+                    agent_capabilities["auth"] = json!({"logout": {}});
+                }
+                if mode.starts_with("account-") && mode != "account-unadvertised-status" {
+                    agent_capabilities["_meta"] = json!({"authStatus": {}});
+                }
+                json!({"protocolVersion": if mode == "wrong-version" { 99 } else { 1 }, "agentCapabilities": agent_capabilities, "authMethods": if mode == "future-auth" { json!([{"id":"future-method","name":"Future auth","type":"future_protocol"}]) } else if mode == "key-auth" { json!([{"id": "api-key", "name": "API Key"}]) } else if env::var_os("AUTH_FILE").is_some() { json!([{ "id": "fixture-login", "name": "Fixture login" }, { "id": "fixture-denied", "name": "Denied login" }]) } else { json!([]) }})
             }
             "authenticate" => {
                 if request["params"]["methodId"] == "fixture-denied" {
@@ -133,6 +162,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     env::var_os("AUTH_FILE").ok_or("auth file missing")?,
                     "authenticated",
                 )?;
+                json!({})
+            }
+            "logout" => {
+                if mode == "account-logout-fails" {
+                    error = Some(json!({"code": -32603, "message": "logout rejected"}));
+                } else if let Some(path) = env::var_os("AUTH_FILE") {
+                    fs::remove_file(path)?;
+                }
                 json!({})
             }
             "session/new" => {
@@ -340,6 +377,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             response["result"] = result;
         }
         send(&mut output, response)?;
+        if (method == "initialize" || method == "authenticate" || method == "logout")
+            && mode.starts_with("account-")
+        {
+            send(
+                &mut output,
+                json!({"jsonrpc": "2.0", "method": "_auth/status_update", "params": {"authStatus": auth_status()}}),
+            )?;
+        }
         if method == "session/prompt" && mode == "prompt-auth-exit" {
             process::exit(15);
         }

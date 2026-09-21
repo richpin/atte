@@ -2217,6 +2217,245 @@ it("shows simplified agent cards while keeping cached installations on automatic
   );
 });
 
+it("shows only confirmed account fields and capability-gated logout actions", async () => {
+  const authentication = (
+    authenticated: boolean,
+    logout: boolean,
+    email: string | null,
+    plan: string | null,
+  ) => ({
+    connected: authenticated,
+    authenticated,
+    required: false,
+    logout,
+    email,
+    plan,
+    methods: [],
+  });
+  const agents = [
+    {
+      id: "complete",
+      name: "Complete",
+      authentication: authentication(true, true, "complete@example.com", "Pro"),
+    },
+    {
+      id: "email-only",
+      name: "Email only",
+      authentication: authentication(true, true, "email@example.com", null),
+    },
+    {
+      id: "plan-only",
+      name: "Plan only",
+      authentication: authentication(true, false, null, "Team"),
+    },
+    {
+      id: "logout-only",
+      name: "Logout only",
+      authentication: authentication(true, true, null, null),
+    },
+    {
+      id: "unverified",
+      name: "Unverified",
+      authentication: authentication(
+        false,
+        true,
+        "hidden@example.com",
+        "Enterprise",
+      ),
+    },
+  ].map((agent) => ({
+    ...agent,
+    installed: true,
+    description: "Fixture agent",
+    accountLabel: "Never render this",
+    organization: "Hidden organization",
+  }));
+  vi.mocked(invoke).mockImplementation(async (command) => {
+    if (command === "prepared_agents") return [];
+    if (command === "agent_catalog" || command === "refresh_agent_catalog")
+      return agents;
+  });
+
+  render(() => <App />);
+  await userEvent.click(screen.getByRole("button", { name: "에이전트 관리" }));
+
+  expect(await screen.findByText("complete@example.com")).toBeTruthy();
+  expect(screen.getByText("email@example.com")).toBeTruthy();
+  expect(screen.getByText("Pro")).toBeTruthy();
+  expect(screen.getByText("Team")).toBeTruthy();
+  expect(screen.queryByText("hidden@example.com")).toBeNull();
+  expect(screen.queryByText("Enterprise")).toBeNull();
+  expect(screen.queryByText("Never render this")).toBeNull();
+  expect(screen.queryByText("Hidden organization")).toBeNull();
+  for (const name of ["Complete", "Email only", "Logout only"]) {
+    expect(
+      screen.getByRole("button", { name: `${name} 로그아웃` }),
+    ).toBeTruthy();
+  }
+  for (const name of ["Plan only", "Unverified"]) {
+    expect(
+      screen.queryByRole("button", { name: `${name} 로그아웃` }),
+    ).toBeNull();
+  }
+});
+
+it("confirms logout, blocks duplicates, preserves failures, and clears only after success", async () => {
+  const account = {
+    connected: true,
+    authenticated: true,
+    required: false,
+    logout: true,
+    email: "user@example.com",
+    plan: "Pro",
+    methods: [],
+  };
+  let authenticated = true;
+  let attempts = 0;
+  const first = deferred<void>();
+  vi.mocked(invoke).mockImplementation(async (command, args) => {
+    if (command === "prepared_agents") return [];
+    if (command === "agent_catalog" || command === "refresh_agent_catalog")
+      return [
+        {
+          id: "codex",
+          name: "Codex",
+          installed: true,
+          description: "Fixture agent",
+          authentication: authenticated
+            ? account
+            : { ...account, authenticated: false, email: null, plan: null },
+        },
+      ];
+    if (command === "logout_agent") {
+      expect(args).toEqual({ id: "codex" });
+      attempts++;
+      if (attempts === 1) return first.promise;
+      authenticated = false;
+      return;
+    }
+  });
+
+  render(() => <App />);
+  await userEvent.click(screen.getByRole("button", { name: "에이전트 관리" }));
+  await userEvent.click(
+    await screen.findByRole("button", { name: "Codex 로그아웃" }),
+  );
+  expect(screen.getByRole("alertdialog").textContent).toContain("Codex");
+  await userEvent.click(screen.getByRole("button", { name: "취소" }));
+  expect(attempts).toBe(0);
+
+  await userEvent.click(screen.getByRole("button", { name: "Codex 로그아웃" }));
+  await userEvent.click(screen.getByRole("button", { name: "로그아웃 확인" }));
+  expect(
+    await screen.findByRole("button", { name: "Codex 로그아웃 중" }),
+  ).toHaveProperty("disabled", true);
+  expect(attempts).toBe(1);
+  first.reject("로그아웃 실패");
+  expect((await screen.findByRole("alert")).textContent).toContain(
+    "로그아웃 실패",
+  );
+  expect(screen.getByText("user@example.com")).toBeTruthy();
+  expect(screen.getByText("Pro")).toBeTruthy();
+
+  await userEvent.click(screen.getByRole("button", { name: "Codex 로그아웃" }));
+  await userEvent.click(screen.getByRole("button", { name: "로그아웃 확인" }));
+  await waitFor(() => {
+    expect(screen.queryByText("user@example.com")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Codex 로그아웃" })).toBeNull();
+  });
+  expect(attempts).toBe(2);
+});
+
+it("keeps an existing thread after logout and follows a later authentication-required update", async () => {
+  const ready = {
+    id: "logout-thread",
+    title: "Existing thread",
+    workingFolder: "/project",
+    agentId: "codex",
+    status: "sessionReady",
+    authentication: "authenticated",
+    failure: null,
+    turns: [
+      {
+        id: "turn-1",
+        message: "Question",
+        response: "Preserved response",
+        stopReason: "end_turn",
+      },
+    ],
+    permissions: [],
+    queuedMessages: [],
+  };
+  requests.mockResolvedValue(ready);
+  let authenticated = true;
+  const original = vi.mocked(invoke).getMockImplementation();
+  vi.mocked(invoke).mockImplementation(async (command, args) => {
+    if (command === "agent_catalog" || command === "refresh_agent_catalog")
+      return [
+        {
+          id: "codex",
+          name: "Codex",
+          installed: true,
+          authentication: {
+            connected: authenticated,
+            authenticated,
+            required: false,
+            logout: authenticated,
+            email: authenticated ? "thread@example.com" : null,
+            plan: null,
+            methods: [],
+          },
+        },
+      ];
+    if (command === "logout_agent") {
+      authenticated = false;
+      return;
+    }
+    if (command === "authenticate_agent") {
+      expect(args).toEqual({ id: "codex", method: null });
+      return {
+        connected: true,
+        authenticated: false,
+        required: true,
+        methods: [
+          {
+            id: "chat-gpt",
+            name: "ChatGPT",
+            description: null,
+            terminal: false,
+            supported: true,
+          },
+        ],
+      };
+    }
+    return original?.(command, args);
+  });
+
+  render(() => <App />);
+  await userEvent.click(screen.getByRole("button", { name: "폴더 선택" }));
+  expect(await screen.findByText("Preserved response")).toBeTruthy();
+  await userEvent.click(screen.getByRole("button", { name: "에이전트 관리" }));
+  await userEvent.click(
+    await screen.findByRole("button", { name: "Codex 로그아웃" }),
+  );
+  await userEvent.click(screen.getByRole("button", { name: "로그아웃 확인" }));
+  await userEvent.click(
+    await screen.findByRole("button", { name: "스레드로 돌아가기" }),
+  );
+  expect(screen.getByText("Preserved response")).toBeTruthy();
+  expect(screen.getByRole("textbox")).toHaveProperty("disabled", false);
+
+  receive({
+    ...ready,
+    status: "failed",
+    authentication: "required",
+    failure: "authenticationRequired",
+  });
+
+  expect(await screen.findByRole("button", { name: "ChatGPT" })).toBeTruthy();
+  expect(screen.getByText("Preserved response")).toBeTruthy();
+});
+
 it("confirms uninstall, supports cancel and retry, and removes the agent from new thread choices", async () => {
   let installed = true;
   let attempts = 0;

@@ -3,6 +3,9 @@ mod process;
 mod replay;
 use crate::{
     agent::AgentDefinition,
+    agent_management::authentication::{
+        supports_auth_status, AuthStatus, AuthStatusUpdate, AuthenticationObservation,
+    },
     thread::{ConnectionFailure, PermissionOption, PermissionRequest, Prompt, RuntimeUpdates},
 };
 use agent_client_protocol::{
@@ -24,7 +27,7 @@ use std::{
     path::PathBuf,
     process::Stdio,
     sync::{
-        atomic::{AtomicU32, Ordering},
+        atomic::{AtomicBool, AtomicU32, Ordering},
         Arc, Mutex,
     },
     time::Duration,
@@ -73,6 +76,8 @@ pub(crate) async fn run(
     mut commands: mpsc::UnboundedReceiver<RuntimeCommand>,
     mut stop: oneshot::Receiver<()>,
     pid: Arc<AtomicU32>,
+    authentication: Arc<Mutex<HashMap<String, crate::thread::AuthenticationStatus>>>,
+    authentication_observations: Arc<Mutex<HashMap<String, AuthenticationObservation>>>,
 ) -> bool {
     let launch = tokio::select! {
         _ = &mut stop => return true,
@@ -138,6 +143,13 @@ pub(crate) async fn run(
     let participants = Arc::new(Mutex::new(HashMap::<Uuid, RuntimeUpdates>::new()));
     let permission_routes = routes.clone();
     let notification_routes = routes.clone();
+    let auth_status_supported = Arc::new(AtomicBool::new(false));
+    let pending_auth_status = Arc::new(Mutex::new(None::<AuthStatus>));
+    let auth_status_enabled = auth_status_supported.clone();
+    let auth_status_pending = pending_auth_status.clone();
+    let auth_status_evidence = authentication.clone();
+    let auth_status_observations = authentication_observations.clone();
+    let auth_status_agent = agent.id.clone();
     let mut protocol = Box::pin(Client.builder()
         .on_receive_request(async move |request: RequestPermissionRequest, responder, cx| {
             let decision = permission_routes.lock().ok().and_then(|mut routes| {
@@ -188,6 +200,21 @@ pub(crate) async fn run(
             }
             Ok(())
         }, agent_client_protocol::on_receive_notification!())
+        .on_receive_notification(async move |notification: AuthStatusUpdate, _cx| {
+            let status = notification.auth_status;
+            if let Ok(mut pending) = auth_status_pending.lock() {
+                *pending = Some(status.clone());
+            }
+            if auth_status_enabled.load(Ordering::Acquire) {
+                record_auth_status(
+                    &auth_status_agent,
+                    &status,
+                    &auth_status_evidence,
+                    &auth_status_observations,
+                );
+            }
+            Ok(())
+        }, agent_client_protocol::on_receive_notification!())
         .connect_with(ByteStreams::new(stdin.compat_write(), stdout.compat()), async |connection: ConnectionTo<Agent>| {
             let initialized = match tokio::time::timeout(Duration::from_secs(30), connection.send_request(InitializeRequest::new(ProtocolVersion::V1)).block_task()).await {
                 Ok(Ok(initialized)) if initialized.protocol_version == ProtocolVersion::V1 => initialized,
@@ -195,6 +222,31 @@ pub(crate) async fn run(
                 Ok(Err(error)) => return Ok(classify(error, ConnectionFailure::InitializationFailed)),
                 Err(_) => return Ok(ConnectionFailure::TimedOut),
             };
+            let logout = initialized.agent_capabilities.auth.logout.is_some();
+            if let Ok(mut observations) = authentication_observations.lock() {
+                observations.insert(
+                    agent.id.clone(),
+                    AuthenticationObservation {
+                        logout,
+                        ..AuthenticationObservation::default()
+                    },
+                );
+            }
+            if supports_auth_status(&initialized.agent_capabilities) {
+                auth_status_supported.store(true, Ordering::Release);
+                if let Some(status) = pending_auth_status
+                    .lock()
+                    .ok()
+                    .and_then(|status| status.clone())
+                {
+                    record_auth_status(
+                        &agent.id,
+                        &status,
+                        &authentication,
+                        &authentication_observations,
+                    );
+                }
+            }
             let (finished, mut completions) = mpsc::unbounded_channel();
             loop {
                 tokio::select! {
@@ -312,6 +364,32 @@ pub(crate) async fn run(
         }
     }
     reaped
+}
+
+fn record_auth_status(
+    agent_id: &str,
+    status: &AuthStatus,
+    authentication: &Mutex<HashMap<String, crate::thread::AuthenticationStatus>>,
+    observations: &Mutex<HashMap<String, AuthenticationObservation>>,
+) {
+    let logout = observations
+        .lock()
+        .ok()
+        .and_then(|observations| observations.get(agent_id).map(|value| value.logout))
+        .unwrap_or(false);
+    if let Ok(mut observations) = observations.lock() {
+        observations.insert(agent_id.into(), status.observation(logout));
+    }
+    if let Ok(mut authentication) = authentication.lock() {
+        authentication.insert(
+            agent_id.into(),
+            if status.authenticated() {
+                crate::thread::AuthenticationStatus::Authenticated
+            } else {
+                crate::thread::AuthenticationStatus::Unknown
+            },
+        );
+    }
 }
 
 async fn run_session(

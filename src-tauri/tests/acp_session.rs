@@ -2712,6 +2712,191 @@ async fn unknown_authentication_type_is_not_treated_as_agent_login() {
     ));
 }
 
+#[tokio::test]
+async fn negotiated_account_status_and_logout_preserve_existing_threads() {
+    use atte_lib::{
+        agent_management::AgentManagement,
+        storage::{Installation, Store},
+    };
+    let root = tempfile::tempdir().unwrap();
+    let login = root.path().join("login");
+    let mut agent = mock_agent();
+    agent.id = "codex".into();
+    agent
+        .env
+        .insert("FIXTURE_MODE".into(), "account-auth".into());
+    agent
+        .env
+        .insert("AUTH_FILE".into(), login.to_string_lossy().into_owned());
+    agent
+        .env
+        .insert("ACCOUNT_EMAIL".into(), "person@example.com".into());
+    agent.env.insert("ACCOUNT_PLAN".into(), "Pro".into());
+    agent
+        .env
+        .insert("ACCOUNT_LABEL".into(), "Do not display".into());
+    agent
+        .env
+        .insert("ACCOUNT_ORGANIZATION".into(), "Hidden org".into());
+    std::fs::write(&login, "authenticated").unwrap();
+    Store::open(&root.path().join("atte.sqlite"))
+        .unwrap()
+        .save_installation(&Installation {
+            definition: agent,
+            version: "1.12.0".into(),
+            artifact: root.path().into(),
+        })
+        .unwrap();
+    let management = AgentManagement::open(root.path()).unwrap();
+    let threads = Threads::new(vec![]);
+    management.restore(&threads).unwrap();
+    let draft = threads.create(root.path()).unwrap();
+    threads.connect(draft.id).unwrap();
+    settle(&threads, draft.id).await;
+    threads
+        .send_message(draft.id, "confirm account".into())
+        .unwrap();
+    let before = settle(&threads, draft.id).await;
+    let account = &management.catalog(&threads).unwrap()[0].authentication;
+    assert!(account.authenticated);
+    assert!(account.logout);
+    assert_eq!(account.email.as_deref(), Some("person@example.com"));
+    assert_eq!(account.plan.as_deref(), Some("Pro"));
+
+    management.logout("codex", &threads).await.unwrap();
+
+    let account = &management.catalog(&threads).unwrap()[0].authentication;
+    assert!(!account.authenticated);
+    assert!(account.email.is_none());
+    assert!(account.plan.is_none());
+    assert_eq!(threads.get(draft.id).unwrap(), before);
+    threads.shutdown().await;
+}
+
+#[tokio::test]
+async fn logout_is_capability_gated_and_failure_keeps_account_evidence() {
+    use atte_lib::{
+        agent_management::{AgentManagement, ManagementError},
+        storage::{Installation, Store},
+    };
+    for (mode, expected) in [
+        ("account-no-logout", ManagementError::UnsupportedLogout),
+        ("account-logout-fails", ManagementError::Logout),
+    ] {
+        let root = tempfile::tempdir().unwrap();
+        let login = root.path().join("login");
+        let log = root.path().join("requests");
+        let mut agent = mock_agent();
+        agent.id = "codex".into();
+        agent.env.insert("FIXTURE_MODE".into(), mode.into());
+        agent
+            .env
+            .insert("AUTH_FILE".into(), login.to_string_lossy().into_owned());
+        agent
+            .env
+            .insert("REQUEST_LOG".into(), log.to_string_lossy().into_owned());
+        agent
+            .env
+            .insert("ACCOUNT_EMAIL".into(), "kept@example.com".into());
+        std::fs::write(&login, "authenticated").unwrap();
+        Store::open(&root.path().join("atte.sqlite"))
+            .unwrap()
+            .save_installation(&Installation {
+                definition: agent,
+                version: "1.12.0".into(),
+                artifact: root.path().into(),
+            })
+            .unwrap();
+        let management = AgentManagement::open(root.path()).unwrap();
+        let threads = Threads::new(vec![]);
+        management.restore(&threads).unwrap();
+        management
+            .authenticate("codex", None, &threads)
+            .await
+            .unwrap();
+
+        let error = management.logout("codex", &threads).await.unwrap_err();
+
+        assert_eq!(
+            std::mem::discriminant(&error),
+            std::mem::discriminant(&expected)
+        );
+        let account = &management.catalog(&threads).unwrap()[0].authentication;
+        assert!(account.authenticated);
+        assert_eq!(account.email.as_deref(), Some("kept@example.com"));
+        let requests = std::fs::read_to_string(log).unwrap();
+        assert_eq!(
+            requests.matches("logout").count(),
+            usize::from(mode != "account-no-logout")
+        );
+        threads.shutdown().await;
+    }
+}
+
+#[tokio::test]
+async fn unadvertised_account_status_metadata_is_ignored() {
+    use atte_lib::agent_management::authentication::inspect;
+    let root = tempfile::tempdir().unwrap();
+    let login = root.path().join("login");
+    let mut agent = mock_agent();
+    agent
+        .env
+        .insert("FIXTURE_MODE".into(), "account-unadvertised-status".into());
+    agent
+        .env
+        .insert("AUTH_FILE".into(), login.to_string_lossy().into_owned());
+    agent
+        .env
+        .insert("ACCOUNT_EMAIL".into(), "ignored@example.com".into());
+    std::fs::write(login, "authenticated").unwrap();
+
+    let account = inspect(&agent, root.path(), None).await.unwrap();
+
+    assert!(account.email.is_none());
+    assert!(account.plan.is_none());
+}
+
+#[tokio::test]
+async fn account_email_and_plan_are_independent_optional_extension_fields() {
+    use atte_lib::agent_management::authentication::inspect;
+    for (email, plan) in [
+        (Some("both@example.com"), Some("Pro")),
+        (Some("email@example.com"), None),
+        (None, Some("Team")),
+        (None, None),
+    ] {
+        let root = tempfile::tempdir().unwrap();
+        let login = root.path().join("login");
+        let mut agent = mock_agent();
+        agent
+            .env
+            .insert("FIXTURE_MODE".into(), "account-auth".into());
+        agent
+            .env
+            .insert("AUTH_FILE".into(), login.to_string_lossy().into_owned());
+        agent
+            .env
+            .insert("ACCOUNT_LABEL".into(), "Ignored label".into());
+        agent
+            .env
+            .insert("ACCOUNT_ORGANIZATION".into(), "Ignored org".into());
+        if let Some(email) = email {
+            agent.env.insert("ACCOUNT_EMAIL".into(), email.into());
+        }
+        if let Some(plan) = plan {
+            agent.env.insert("ACCOUNT_PLAN".into(), plan.into());
+        }
+        std::fs::write(login, "authenticated").unwrap();
+
+        let account = inspect(&agent, root.path(), None).await.unwrap();
+
+        assert!(account.authenticated);
+        assert!(account.logout);
+        assert_eq!(account.email.as_deref(), email);
+        assert_eq!(account.plan.as_deref(), plan);
+    }
+}
+
 #[cfg(unix)]
 #[tokio::test]
 async fn removing_one_agent_stops_its_running_turn_and_preserves_other_agents() {

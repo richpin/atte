@@ -144,6 +144,17 @@ export const ko = {
     uninstallDescription:
       "이 에이전트의 모든 연결과 진행 중인 작업을 종료하고 설치 파일을 삭제합니다. 스레드 내용, 작업 폴더와 로그인 정보는 유지됩니다.",
     confirmUninstall: "삭제 확인",
+    email: "이메일",
+    plan: "요금제",
+    logout: "로그아웃",
+    loggingOut: "로그아웃 중…",
+    logoutLabel: "{{ name }} 로그아웃",
+    logoutPendingLabel: "{{ name }} 로그아웃 중",
+    logoutTitle: "{{ name }}에서 로그아웃할까요?",
+    logoutDescription:
+      "기존 스레드와 실행 중인 작업은 에이전트가 달리 알리기 전까지 그대로 유지됩니다.",
+    confirmLogout: "로그아웃 확인",
+    logoutFailed: "로그아웃하지 못했습니다. 다시 시도해주세요.",
   },
   backend: {
     appClosing: "앱을 종료하고 있습니다.",

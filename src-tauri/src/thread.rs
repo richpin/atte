@@ -1,6 +1,7 @@
 //! Durable thread identity and in-memory content, independent of desktop transport.
 mod list;
 use crate::agent::{prepared_codex, AgentDefinition, PreparedAgent};
+use crate::agent_management::authentication::AuthenticationObservation;
 use crate::storage::{StorageError, Store};
 use serde::{Deserialize, Serialize};
 use std::{
@@ -174,6 +175,7 @@ pub struct Threads {
     shutdown: CancellationToken,
     runtime_stop_failures: AtomicU64,
     authentication: Arc<Mutex<HashMap<String, AuthenticationStatus>>>,
+    authentication_observations: Arc<Mutex<HashMap<String, AuthenticationObservation>>>,
     state: Mutex<State>,
 }
 
@@ -223,6 +225,8 @@ fn runtime_for(
     handle: &tokio::runtime::Handle,
     agent: AgentDefinition,
     folder: PathBuf,
+    authentication: Arc<Mutex<HashMap<String, AuthenticationStatus>>>,
+    authentication_observations: Arc<Mutex<HashMap<String, AuthenticationObservation>>>,
 ) -> mpsc::UnboundedSender<crate::agent_runtime::RuntimeCommand> {
     if let Some(runtime) = state.runtimes.iter().find(|runtime| {
         same_agent_definition(&runtime.agent, &agent)
@@ -244,6 +248,8 @@ fn runtime_for(
         receiver,
         stopped,
         pid.clone(),
+        authentication,
+        authentication_observations,
     ));
     state.runtimes.push(Runtime {
         agent,
@@ -282,6 +288,7 @@ impl Threads {
             shutdown: CancellationToken::new(),
             runtime_stop_failures: AtomicU64::new(0),
             authentication: Arc::default(),
+            authentication_observations: Arc::default(),
             state: Mutex::new(State::default()),
         }
     }
@@ -403,6 +410,24 @@ impl Threads {
     pub(crate) fn record_authentication(&self, agent_id: &str, status: AuthenticationStatus) {
         if let Ok(mut authentication) = self.authentication.lock() {
             authentication.insert(agent_id.into(), status);
+        }
+    }
+
+    pub(crate) fn authentication_observation(
+        &self,
+        agent_id: &str,
+    ) -> Option<AuthenticationObservation> {
+        self.authentication_observations
+            .lock()
+            .ok()?
+            .get(agent_id)
+            .cloned()
+    }
+
+    pub(crate) fn clear_authentication_evidence(&self, agent_id: &str) {
+        self.record_authentication(agent_id, AuthenticationStatus::Unknown);
+        if let Ok(mut observations) = self.authentication_observations.lock() {
+            observations.remove(agent_id);
         }
     }
 
@@ -854,9 +879,16 @@ impl Threads {
                 if let Some(SessionCommands { inputs, runtime }) = removed.runtime.take() {
                     (Some(runtime), Some(inputs))
                 } else if let Some(agent) = agent {
-                    let runtime = tokio::runtime::Handle::try_current()
-                        .ok()
-                        .map(|handle| runtime_for(&mut state, &handle, agent, folder));
+                    let runtime = tokio::runtime::Handle::try_current().ok().map(|handle| {
+                        runtime_for(
+                            &mut state,
+                            &handle,
+                            agent,
+                            folder,
+                            self.authentication.clone(),
+                            self.authentication_observations.clone(),
+                        )
+                    });
                     (runtime, None)
                 } else {
                     (None, None)
@@ -965,7 +997,14 @@ impl Threads {
             prompts: requests,
             cancellations: cancelled,
         };
-        let runtime = runtime_for(&mut state, &handle, agent, folder);
+        let runtime = runtime_for(
+            &mut state,
+            &handle,
+            agent,
+            folder,
+            self.authentication.clone(),
+            self.authentication_observations.clone(),
+        );
         state.entries.get_mut(&id).ok_or_else(not_found)?.runtime = Some(SessionCommands {
             inputs: crate::agent_runtime::SessionInputSenders {
                 prompts,

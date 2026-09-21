@@ -52,6 +52,10 @@ pub enum ManagementError {
     AuthenticationCancelled,
     #[error("에이전트가 제공한 이 인증 방식은 아직 지원하지 않습니다.")]
     UnsupportedAuthentication,
+    #[error("이 에이전트는 로그아웃을 지원하지 않습니다.")]
+    UnsupportedLogout,
+    #[error("로그아웃하지 못했습니다. 다시 시도해주세요.")]
+    Logout,
     #[error("진행 중인 작업이 있습니다. 완료 후 다시 시도해주세요.")]
     Busy,
     #[error("{0}")]
@@ -254,6 +258,15 @@ impl AgentManagement {
                             }
                             state.authenticated = evidence == AuthenticationStatus::Authenticated;
                             state.required = evidence == AuthenticationStatus::Required;
+                            if evidence == AuthenticationStatus::Authenticated {
+                                if let Some(observation) = threads.authentication_observation(id) {
+                                    state.logout = observation.logout;
+                                    if observation.reported {
+                                        state.email = observation.email;
+                                        state.plan = observation.plan;
+                                    }
+                                }
+                            }
                         }
                         state
                     },
@@ -577,6 +590,33 @@ impl AgentManagement {
             cancellation.cancel();
             finished.await;
         }
+    }
+
+    pub async fn logout(&self, id: &str, threads: &Threads) -> Result<(), ManagementError> {
+        let _operation = self.begin(id)?;
+        let mut installation = self
+            .store
+            .installations()?
+            .into_iter()
+            .find(|installation| {
+                installation.definition.id == id
+                    && crate::installation::has_launch_files(installation)
+            })
+            .ok_or(ManagementError::Install)?;
+        installation.definition.node_runtime = self
+            .node_runtimes
+            .lock()
+            .map_err(|_| ManagementError::Connection)?
+            .get(id)
+            .cloned()
+            .or_else(|| Some(self.runtime.clone()));
+        authentication::logout(&installation.definition, &self.root).await?;
+        self.authentication
+            .lock()
+            .map_err(|_| ManagementError::Connection)?
+            .remove(id);
+        threads.clear_authentication_evidence(id);
+        Ok(())
     }
 
     fn begin(&self, id: &str) -> Result<Operation<'_>, ManagementError> {

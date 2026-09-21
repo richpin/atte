@@ -248,6 +248,7 @@ pub fn run() {
             uninstall_agent,
             authenticate_agent,
             cancel_agent_authentication,
+            logout_agent,
             select_working_folder,
             delete_thread,
             list_threads,
@@ -369,4 +370,21 @@ async fn cancel_agent_authentication(
         .cancel_authentication(&id)
         .await
         .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+async fn logout_agent(
+    threads: State<'_, Threads>,
+    id: String,
+    management: State<'_, agent_management::AgentManagement>,
+    lifecycle: State<'_, lifecycle::Lifecycle>,
+) -> Result<(), String> {
+    lifecycle
+        .operation(async {
+            management
+                .logout(&id, &threads)
+                .await
+                .map_err(|error| error.to_string())
+        })
+        .await
 }

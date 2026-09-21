@@ -4,7 +4,7 @@ use agent_client_protocol::{
     schema::{
         v1::{
             AuthCapabilities, AuthMethod, AuthenticateRequest, ClientCapabilities,
-            InitializeRequest, InitializeResponse,
+            InitializeRequest, InitializeResponse, LogoutRequest,
         },
         ProtocolVersion,
     },
@@ -45,7 +45,68 @@ pub struct Authentication {
     pub connected: bool,
     pub authenticated: bool,
     pub required: bool,
+    pub logout: bool,
+    pub email: Option<String>,
+    pub plan: Option<String>,
     pub methods: Vec<LoginMethod>,
+}
+
+#[derive(Clone, Debug, Default)]
+pub(crate) struct AuthenticationObservation {
+    pub logout: bool,
+    pub reported: bool,
+    pub email: Option<String>,
+    pub plan: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+struct AuthStatusAccount {
+    email: Option<String>,
+    plan: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub(crate) struct AuthStatus {
+    kind: String,
+    account: Option<AuthStatusAccount>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, agent_client_protocol::JsonRpcNotification)]
+#[notification(method = "_auth/status_update")]
+pub(crate) struct AuthStatusUpdate {
+    #[serde(rename = "authStatus")]
+    pub(crate) auth_status: AuthStatus,
+}
+
+impl AuthStatus {
+    pub(crate) fn authenticated(&self) -> bool {
+        matches!(
+            self.kind.as_str(),
+            "account" | "api_key" | "gateway" | "external"
+        )
+    }
+
+    pub(crate) fn observation(&self, logout: bool) -> AuthenticationObservation {
+        let account = (self.kind == "account")
+            .then_some(self.account.as_ref())
+            .flatten();
+        AuthenticationObservation {
+            logout,
+            reported: true,
+            email: account.and_then(|account| account.email.clone()),
+            plan: account.and_then(|account| account.plan.clone()),
+        }
+    }
+}
+
+pub(crate) fn supports_auth_status(
+    capabilities: &agent_client_protocol::schema::v1::AgentCapabilities,
+) -> bool {
+    capabilities
+        .meta
+        .as_ref()
+        .and_then(|meta| meta.get("authStatus"))
+        .is_some_and(serde_json::Value::is_object)
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -72,6 +133,40 @@ pub(crate) async fn inspect_cancellable(
     method: Option<&str>,
     cancellation: CancellationToken,
 ) -> Result<Authentication, ManagementError> {
+    run(
+        agent,
+        folder,
+        AuthenticationAction::Inspect(method),
+        cancellation,
+    )
+    .await
+}
+
+pub(crate) async fn logout(
+    agent: &AgentDefinition,
+    folder: &Path,
+) -> Result<Authentication, ManagementError> {
+    run(
+        agent,
+        folder,
+        AuthenticationAction::Logout,
+        CancellationToken::new(),
+    )
+    .await
+}
+
+#[derive(Clone, Copy)]
+enum AuthenticationAction<'a> {
+    Inspect(Option<&'a str>),
+    Logout,
+}
+
+async fn run(
+    agent: &AgentDefinition,
+    folder: &Path,
+    action: AuthenticationAction<'_>,
+    cancellation: CancellationToken,
+) -> Result<Authentication, ManagementError> {
     let launch = super::node_runtime::resolve_launch(agent).await?;
     let mut command = Command::new(launch.program);
     command
@@ -91,75 +186,132 @@ pub(crate) async fn inspect_cancellable(
     let mut group = ProcessGroup::new(child.id());
     let stdin = child.stdin.take().ok_or(ManagementError::Connection)?;
     let stdout = child.stdout.take().ok_or(ManagementError::Connection)?;
-    let protocol = Client.builder().connect_with(
-        ByteStreams::new(stdin.compat_write(), stdout.compat()),
-        async |connection: ConnectionTo<Agent>| {
-            let result = async {
-                let capabilities = ClientCapabilities::new()
-                    .auth(AuthCapabilities::new().terminal(cfg!(target_os = "macos")));
-                let raw = connection
-                    .send_request(InspectInitialize(
-                        InitializeRequest::new(ProtocolVersion::V1)
-                            .client_capabilities(capabilities),
-                    ))
-                    .block_task()
-                    .await
-                    .map_err(|_| ManagementError::Connection)?;
-                let initialized: InitializeResponse =
-                    serde_json::from_value(raw.clone()).map_err(|_| ManagementError::Connection)?;
-                if initialized.protocol_version != ProtocolVersion::V1 {
-                    return Err(ManagementError::Connection);
-                }
-                let mut state = Authentication {
-                    connected: true,
-                    authenticated: false,
-                    required: false,
-                    methods: initialized
-                        .auth_methods
-                        .iter()
-                        .map(|method| LoginMethod {
-                            id: method.id().to_string(),
-                            name: method.name().to_owned(),
-                            description: method.description().map(str::to_owned),
-                            supported: supported(method, &raw),
-                            terminal: matches!(method, AuthMethod::Terminal(_)),
-                        })
-                        .collect(),
-                };
-                if let Some(id) = method {
-                    let selected = initialized
-                        .auth_methods
-                        .iter()
-                        .find(|method| method.id().to_string() == id)
-                        .ok_or(ManagementError::Authentication)?;
-                    if !supported(selected, &raw) {
-                        return Err(ManagementError::UnsupportedAuthentication);
+    let (auth_status_sender, mut auth_status) = tokio::sync::watch::channel(None::<AuthStatus>);
+    let protocol = Client
+        .builder()
+        .on_receive_notification(
+            async move |notification: AuthStatusUpdate, _cx| {
+                auth_status_sender.send_replace(Some(notification.auth_status));
+                Ok(())
+            },
+            agent_client_protocol::on_receive_notification!(),
+        )
+        .connect_with(
+            ByteStreams::new(stdin.compat_write(), stdout.compat()),
+            async |connection: ConnectionTo<Agent>| {
+                let result = async {
+                    let capabilities = ClientCapabilities::new()
+                        .auth(AuthCapabilities::new().terminal(cfg!(target_os = "macos")));
+                    let raw = connection
+                        .send_request(InspectInitialize(
+                            InitializeRequest::new(ProtocolVersion::V1)
+                                .client_capabilities(capabilities),
+                        ))
+                        .block_task()
+                        .await
+                        .map_err(|_| ManagementError::Connection)?;
+                    let initialized: InitializeResponse = serde_json::from_value(raw.clone())
+                        .map_err(|_| ManagementError::Connection)?;
+                    if initialized.protocol_version != ProtocolVersion::V1 {
+                        return Err(ManagementError::Connection);
                     }
-                    match selected {
-                        AuthMethod::Agent(_) => {
-                            connection
-                                .send_request(AuthenticateRequest::new(selected.id().clone()))
-                                .block_task()
-                                .await
-                                .map_err(|_| ManagementError::Authentication)?;
-                        }
-                        AuthMethod::Terminal(terminal) => {
-                            terminal_login(agent, terminal, folder).await?
-                        }
-                        _ => return Err(ManagementError::UnsupportedAuthentication),
+                    let logout = initialized.agent_capabilities.auth.logout.is_some();
+                    let auth_status_supported =
+                        supports_auth_status(&initialized.agent_capabilities);
+                    if auth_status_supported && auth_status.borrow().is_none() {
+                        let _ = tokio::time::timeout(Duration::from_secs(1), auth_status.changed())
+                            .await;
                     }
-                    state.authenticated = true;
+                    let mut state = Authentication {
+                        connected: true,
+                        authenticated: false,
+                        required: false,
+                        logout,
+                        email: None,
+                        plan: None,
+                        methods: initialized
+                            .auth_methods
+                            .iter()
+                            .map(|method| LoginMethod {
+                                id: method.id().to_string(),
+                                name: method.name().to_owned(),
+                                description: method.description().map(str::to_owned),
+                                supported: supported(method, &raw),
+                                terminal: matches!(method, AuthMethod::Terminal(_)),
+                            })
+                            .collect(),
+                    };
+                    if auth_status_supported {
+                        if let Some(status) = auth_status.borrow().as_ref() {
+                            state.authenticated = status.authenticated();
+                            let observation = status.observation(logout);
+                            state.email = observation.email;
+                            state.plan = observation.plan;
+                        }
+                    }
+                    if let AuthenticationAction::Inspect(Some(id)) = action {
+                        let selected = initialized
+                            .auth_methods
+                            .iter()
+                            .find(|method| method.id().to_string() == id)
+                            .ok_or(ManagementError::Authentication)?;
+                        if !supported(selected, &raw) {
+                            return Err(ManagementError::UnsupportedAuthentication);
+                        }
+                        if auth_status_supported {
+                            auth_status.borrow_and_update();
+                        }
+                        match selected {
+                            AuthMethod::Agent(_) => {
+                                connection
+                                    .send_request(AuthenticateRequest::new(selected.id().clone()))
+                                    .block_task()
+                                    .await
+                                    .map_err(|_| ManagementError::Authentication)?;
+                            }
+                            AuthMethod::Terminal(terminal) => {
+                                terminal_login(agent, terminal, folder).await?
+                            }
+                            _ => return Err(ManagementError::UnsupportedAuthentication),
+                        }
+                        state.authenticated = true;
+                        if auth_status_supported {
+                            if !auth_status.has_changed().unwrap_or(false) {
+                                let _ = tokio::time::timeout(
+                                    Duration::from_secs(1),
+                                    auth_status.changed(),
+                                )
+                                .await;
+                            }
+                            if let Some(status) = auth_status.borrow().as_ref() {
+                                let observation = status.observation(logout);
+                                state.email = observation.email;
+                                state.plan = observation.plan;
+                            }
+                        }
+                    } else if matches!(action, AuthenticationAction::Logout) {
+                        if !logout {
+                            return Err(ManagementError::UnsupportedLogout);
+                        }
+                        connection
+                            .send_request(LogoutRequest::new())
+                            .block_task()
+                            .await
+                            .map_err(|_| ManagementError::Logout)?;
+                        state.authenticated = false;
+                        state.email = None;
+                        state.plan = None;
+                    }
+                    Ok(state)
                 }
-                Ok(state)
-            }
-            .await;
-            Ok(result)
-        },
-    );
+                .await;
+                Ok(result)
+            },
+        );
     let result = tokio::select! {
         () = cancellation.cancelled() => None,
         result = tokio::time::timeout(
-            Duration::from_secs(if method.is_some() { 600 } else { 30 }),
+            Duration::from_secs(if matches!(action, AuthenticationAction::Inspect(Some(_))) { 600 } else { 30 }),
             protocol,
         ) => Some(result),
     };

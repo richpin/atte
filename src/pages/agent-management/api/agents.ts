@@ -17,3 +17,7 @@ export function install(id: string) {
 export function uninstall(id: string) {
   return invoke<void>("uninstall_agent", { id });
 }
+
+export function logout(id: string) {
+  return invoke<void>("logout_agent", { id });
+}

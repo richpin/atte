@@ -2,6 +2,9 @@ export interface Authentication {
   connected: boolean;
   authenticated: boolean;
   required: boolean;
+  logout: boolean;
+  email: string | null;
+  plan: string | null;
   methods: {
     id: string;
     name: string;

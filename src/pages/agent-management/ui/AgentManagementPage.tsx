@@ -2,8 +2,15 @@ import { useI18n } from "shared/i18n";
 import { AgentIcon } from "shared/ui";
 import { createResource, createSignal, For, Show } from "solid-js";
 import { createStore, reconcile } from "solid-js/store";
-import { catalog, install, refreshCatalog, uninstall } from "../api/agents";
+import {
+  catalog,
+  install,
+  logout,
+  refreshCatalog,
+  uninstall,
+} from "../api/agents";
 
+import { LogoutAgentDialog } from "./LogoutAgentDialog";
 import { UninstallAgentDialog } from "./UninstallAgentDialog";
 
 export function AgentManagementPage(props: {
@@ -16,6 +23,9 @@ export function AgentManagementPage(props: {
   const [search, setSearch] = createSignal("");
   const [work, setWork] = createStore<
     Record<string, { busy: boolean; operation: "install" | "uninstall" }>
+  >({});
+  const [logoutWork, setLogoutWork] = createStore<
+    Record<string, { pending: boolean; error?: string }>
   >({});
   const [agents, { mutate }] = createResource(
     () => props.active,
@@ -81,6 +91,39 @@ export function AgentManagementPage(props: {
     }
   }
 
+  async function logoutAgent(id: string) {
+    if (logoutWork[id]?.pending) return;
+    setLogoutWork(id, { pending: true });
+    try {
+      await logout(id);
+      mutate((current) =>
+        current?.map((agent) =>
+          agent.id === id
+            ? {
+                ...agent,
+                authentication: {
+                  ...agent.authentication,
+                  connected: false,
+                  authenticated: false,
+                  required: false,
+                  logout: false,
+                  email: null,
+                  plan: null,
+                },
+              }
+            : agent,
+        ),
+      );
+    } catch (cause) {
+      setLogoutWork(id, {
+        pending: false,
+        error: message(cause, "agents.logoutFailed"),
+      });
+      return;
+    }
+    setLogoutWork(id, { pending: false });
+  }
+
   return (
     <main class="min-h-dvh bg-canvas text-ink">
       <header class="flex h-14 items-center gap-4 border-b border-line px-6">
@@ -134,6 +177,51 @@ export function AgentManagementPage(props: {
                   <div class="min-w-0 space-y-1">
                     <h2 class="font-medium">{agent.name}</h2>
                     <p class="text-sm text-muted">{agent.description}</p>
+                    <Show
+                      when={
+                        agent.authentication.authenticated &&
+                        (agent.authentication.email ||
+                          agent.authentication.plan ||
+                          agent.authentication.logout)
+                      }
+                    >
+                      <div class="space-y-2 pt-3 text-sm">
+                        <Show when={agent.authentication.email}>
+                          {(email) => (
+                            <p>
+                              <span class="text-muted">
+                                {t("agents.email")}:{" "}
+                              </span>
+                              {email()}
+                            </p>
+                          )}
+                        </Show>
+                        <Show when={agent.authentication.plan}>
+                          {(plan) => (
+                            <p>
+                              <span class="text-muted">
+                                {t("agents.plan")}:{" "}
+                              </span>
+                              {plan()}
+                            </p>
+                          )}
+                        </Show>
+                        <Show when={agent.authentication.logout}>
+                          <LogoutAgentDialog
+                            name={agent.name}
+                            pending={logoutWork[agent.id]?.pending ?? false}
+                            onConfirm={() => void logoutAgent(agent.id)}
+                          />
+                        </Show>
+                        <Show when={logoutWork[agent.id]?.error}>
+                          {(logoutError) => (
+                            <p role="alert" class="text-sm text-danger">
+                              {logoutError()}
+                            </p>
+                          )}
+                        </Show>
+                      </div>
+                    </Show>
                   </div>
                 </div>
                 <div class="flex shrink-0 items-center gap-3 text-sm">

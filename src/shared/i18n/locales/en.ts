@@ -137,6 +137,17 @@ export const en = {
     uninstallDescription:
       "This will stop all connections and active tasks for this agent, then delete its installed files. Thread history, working folders, and sign-in information will be kept.",
     confirmUninstall: "Confirm uninstall",
+    email: "Email",
+    plan: "Plan",
+    logout: "Log out",
+    loggingOut: "Logging out…",
+    logoutLabel: "Log out of {{ name }}",
+    logoutPendingLabel: "Logging out of {{ name }}",
+    logoutTitle: "Log out of {{ name }}?",
+    logoutDescription:
+      "Existing threads and running tasks will remain unchanged until the agent reports otherwise.",
+    confirmLogout: "Confirm logout",
+    logoutFailed: "Logout failed. Try again.",
   },
   backend: {
     appClosing: "The app is closing.",
