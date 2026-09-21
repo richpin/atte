@@ -1,23 +1,32 @@
-//! Removal is restricted to direct children of the app's managed agent directory.
+//! Removal is restricted to legacy artifacts or immutable agent installation directories.
 use std::{io, path::Path};
 
 pub(crate) fn validate(root: &Path, artifact: &Path) -> io::Result<()> {
     let invalid = || io::Error::other("설치 파일의 위치를 확인할 수 없습니다.");
-    let parent = artifact.parent().ok_or_else(invalid)?;
-    if artifact.file_name().is_none_or(|name| name == "runtime")
-        || artifact
-            .components()
-            .any(|part| matches!(part, std::path::Component::ParentDir))
+    let agents = root.canonicalize()?.join("agents");
+    let normalized = match artifact.canonicalize() {
+        Ok(path) => path,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            let parent = artifact.parent().ok_or_else(invalid)?;
+            let parent = parent.canonicalize().unwrap_or_else(|_| parent.to_owned());
+            parent.join(artifact.file_name().ok_or_else(invalid)?)
+        }
+        Err(error) => return Err(error),
+    };
+    let relative = normalized.strip_prefix(&agents).map_err(|_| invalid())?;
+    let components: Vec<_> = relative.components().collect();
+    if !(components.len() == 1 || components.len() == 2)
+        || components
+            .first()
+            .is_some_and(|part| part.as_os_str() == "runtime")
+        || components.iter().any(|part| {
+            matches!(part, std::path::Component::ParentDir)
+                || part.as_os_str().to_string_lossy().starts_with(".staging-")
+        })
     {
         return Err(invalid());
     }
-    let expected = root.canonicalize()?.join("agents");
-    let same_parent = match parent.canonicalize() {
-        Ok(actual) => actual == expected,
-        Err(error) if error.kind() == io::ErrorKind::NotFound => parent == root.join("agents"),
-        Err(_) => false,
-    };
-    if !same_parent {
+    if !normalized.starts_with(&agents) {
         return Err(invalid());
     }
     Ok(())

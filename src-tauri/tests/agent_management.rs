@@ -12,9 +12,11 @@ fn installation_survives_reopening_the_store() {
         definition: AgentDefinition {
             id: "codex-acp".into(),
             name: "Codex".into(),
+            launch_kind: Default::default(),
             command: "/installed/node".into(),
             args: vec!["/installed/adapter.js".into()],
             env: Default::default(),
+            node_runtime: None,
         },
         version: "1.12.0".into(),
         artifact: root.path().join("codex-acp"),
@@ -75,10 +77,65 @@ use atte_lib::{
     },
     thread::Threads,
 };
-use std::path::Path;
+use std::{
+    path::Path,
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    },
+};
 
 struct ControlledInstaller {
     fail: bool,
+}
+
+struct CountingInstaller {
+    count: AtomicUsize,
+}
+
+struct ConcurrentInstaller {
+    current: AtomicUsize,
+    maximum: AtomicUsize,
+    started: tokio::sync::Notify,
+    release: tokio::sync::Semaphore,
+}
+
+impl Installer for ConcurrentInstaller {
+    fn install<'a>(
+        &'a self,
+        id: &'a str,
+        entry: &'a RegistryAgent,
+        _: &'a Distribution,
+        root: &'a Path,
+        _: &'a (dyn Fn(&str) + Send + Sync),
+    ) -> InstallFuture<'a> {
+        Box::pin(async move {
+            let current = self.current.fetch_add(1, Ordering::SeqCst) + 1;
+            self.maximum.fetch_max(current, Ordering::SeqCst);
+            self.started.notify_waiters();
+            let permit = self.release.acquire().await.unwrap();
+            permit.forget();
+            self.current.fetch_sub(1, Ordering::SeqCst);
+            let artifact = root
+                .join(id)
+                .join(format!(".staging-fixture-{}", uuid::Uuid::new_v4()));
+            std::fs::create_dir_all(&artifact).unwrap();
+            std::fs::write(artifact.join("fixture"), "installation").unwrap();
+            Ok(Installation {
+                definition: AgentDefinition {
+                    id: id.into(),
+                    name: entry.name.clone(),
+                    launch_kind: Default::default(),
+                    command: artifact.join("fixture"),
+                    args: vec![],
+                    env: Default::default(),
+                    node_runtime: None,
+                },
+                version: entry.version.clone(),
+                artifact,
+            })
+        })
+    }
 }
 impl Installer for ControlledInstaller {
     fn install<'a>(
@@ -94,16 +151,53 @@ impl Installer for ControlledInstaller {
             if self.fail {
                 return Err(ManagementError::Install);
             }
-            let artifact = root.join(id);
+            let artifact = root
+                .join(id)
+                .join(format!(".staging-fixture-{}", uuid::Uuid::new_v4()));
             std::fs::create_dir_all(&artifact).unwrap();
             std::fs::write(artifact.join("fixture"), "installation").unwrap();
             Ok(Installation {
                 definition: AgentDefinition {
                     id: id.into(),
                     name: entry.name.clone(),
-                    command: std::env::current_exe().unwrap(),
+                    launch_kind: Default::default(),
+                    command: artifact.join("fixture"),
                     args: vec![],
                     env: Default::default(),
+                    node_runtime: None,
+                },
+                version: entry.version.clone(),
+                artifact,
+            })
+        })
+    }
+}
+
+impl Installer for CountingInstaller {
+    fn install<'a>(
+        &'a self,
+        id: &'a str,
+        entry: &'a RegistryAgent,
+        _: &'a Distribution,
+        root: &'a Path,
+        _: &'a (dyn Fn(&str) + Send + Sync),
+    ) -> InstallFuture<'a> {
+        Box::pin(async move {
+            self.count.fetch_add(1, Ordering::SeqCst);
+            let artifact = root
+                .join(id)
+                .join(format!(".staging-fixture-{}", uuid::Uuid::new_v4()));
+            std::fs::create_dir_all(&artifact).unwrap();
+            std::fs::write(artifact.join("fixture"), "installation").unwrap();
+            Ok(Installation {
+                definition: AgentDefinition {
+                    id: id.into(),
+                    name: entry.name.clone(),
+                    launch_kind: Default::default(),
+                    command: artifact.join("fixture"),
+                    args: vec![],
+                    env: Default::default(),
+                    node_runtime: None,
                 },
                 version: entry.version.clone(),
                 artifact,
@@ -190,6 +284,59 @@ fn registry_selects_platform_binary_or_npm_and_excludes_other_agents() {
     assert!(registry.target("other").is_none());
 }
 
+#[test]
+fn catalog_excludes_uninstalled_agents_without_a_supported_distribution() {
+    let root = tempfile::tempdir().unwrap();
+    let manager = AgentManagement::open(root.path()).unwrap();
+    manager.set_registry(registry()).unwrap();
+
+    let ids: Vec<_> = manager
+        .catalog(&Threads::new(vec![]))
+        .unwrap()
+        .into_iter()
+        .map(|agent| agent.id)
+        .collect();
+
+    assert_eq!(ids, ["antigravity-acp", "claude-acp", "codex-acp"]);
+}
+
+#[test]
+fn unknown_distribution_data_survives_storage_round_trip() {
+    let root = tempfile::tempdir().unwrap();
+    let manager = AgentManagement::open(root.path()).unwrap();
+    manager.set_registry(registry()).unwrap();
+    drop(manager);
+
+    let stored = Store::open(&root.path().join("atte.sqlite"))
+        .unwrap()
+        .agents()
+        .unwrap()
+        .into_iter()
+        .find(|agent| agent.id == "future-runtime")
+        .unwrap()
+        .registry
+        .unwrap();
+    let json = serde_json::to_value(stored).unwrap();
+
+    assert_eq!(
+        json["distribution"]["future"],
+        serde_json::json!({"nested": [true, 7, "preserve-me"]})
+    );
+    let codex = Store::open(&root.path().join("atte.sqlite"))
+        .unwrap()
+        .agents()
+        .unwrap()
+        .into_iter()
+        .find(|agent| agent.id == "codex-acp")
+        .unwrap()
+        .registry
+        .unwrap();
+    assert_eq!(
+        serde_json::to_value(codex).unwrap()["distribution"]["npx"]["futurePolicy"],
+        serde_json::json!({"mode": "preserve"})
+    );
+}
+
 #[tokio::test]
 async fn unknown_registry_agent_survives_offline_restart_and_registry_removal() {
     let root = tempfile::tempdir().unwrap();
@@ -259,6 +406,283 @@ async fn cached_catalog_survives_failed_refresh_and_reuses_a_good_installation()
         .unwrap();
 }
 
+#[tokio::test]
+async fn automatic_update_promotes_when_agent_is_idle_and_removes_previous_installation() {
+    let root = tempfile::tempdir().unwrap();
+    let manager = AgentManagement::open(root.path()).unwrap();
+    let threads = Threads::new(vec![]);
+    manager.set_registry(registry()).unwrap();
+    manager
+        .install(
+            "codex-acp",
+            &threads,
+            &ControlledInstaller { fail: false },
+            &|_| {},
+        )
+        .await
+        .unwrap();
+    let previous = manager
+        .catalog(&threads)
+        .unwrap()
+        .into_iter()
+        .find(|agent| agent.id == "codex-acp")
+        .unwrap()
+        .artifact
+        .unwrap();
+
+    let mut newer = registry();
+    let entry = newer
+        .agents
+        .iter_mut()
+        .find(|entry| entry.id == "codex-acp")
+        .unwrap();
+    entry.version = "2.0.0".into();
+    entry.distribution.npx.as_mut().unwrap().package =
+        "@agentclientprotocol/codex-acp@2.0.0".into();
+    manager.set_registry(newer).unwrap();
+    manager
+        .prepare_updates(&threads, &ControlledInstaller { fail: false })
+        .await
+        .unwrap();
+
+    let updated = manager
+        .catalog(&threads)
+        .unwrap()
+        .into_iter()
+        .find(|agent| agent.id == "codex-acp")
+        .unwrap();
+    assert_eq!(updated.installed_version.as_deref(), Some("2.0.0"));
+    assert_ne!(updated.artifact.as_deref(), Some(previous.as_path()));
+    assert!(!previous.exists());
+}
+
+#[tokio::test]
+async fn same_version_source_change_updates_once() {
+    let root = tempfile::tempdir().unwrap();
+    let manager = AgentManagement::open(root.path()).unwrap();
+    let threads = Threads::new(vec![]);
+    let mut changed = registry();
+    manager.set_registry(changed.clone()).unwrap();
+    manager
+        .install(
+            "codex-acp",
+            &threads,
+            &ControlledInstaller { fail: false },
+            &|_| {},
+        )
+        .await
+        .unwrap();
+    changed.agents[1].distribution.npx.as_mut().unwrap().package =
+        "@agentclientprotocol/codex-acp@repacked".into();
+    manager.set_registry(changed).unwrap();
+    let installer = CountingInstaller {
+        count: AtomicUsize::new(0),
+    };
+
+    manager.prepare_updates(&threads, &installer).await.unwrap();
+    manager.prepare_updates(&threads, &installer).await.unwrap();
+
+    assert_eq!(installer.count.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn automatic_updates_prepare_at_most_three_agents_concurrently() {
+    let root = tempfile::tempdir().unwrap();
+    let manager = Arc::new(AgentManagement::open(root.path()).unwrap());
+    let threads = Arc::new(Threads::new(vec![]));
+    let template = registry().agents[1].clone();
+    let mut initial = Registry::parse(r#"{"version":"1.0.0","agents":[]}"#).unwrap();
+    for index in 0..4 {
+        let mut entry = template.clone();
+        entry.id = format!("agent-{index}");
+        entry.version = "1.0.0".into();
+        entry.distribution.npx.as_mut().unwrap().package = format!("fixture-{index}@1.0.0");
+        initial.agents.push(entry);
+    }
+    manager.set_registry(initial.clone()).unwrap();
+    for index in 0..4 {
+        manager
+            .install(
+                &format!("agent-{index}"),
+                &threads,
+                &ControlledInstaller { fail: false },
+                &|_| {},
+            )
+            .await
+            .unwrap();
+    }
+    for entry in &mut initial.agents {
+        entry.version = "2.0.0".into();
+        entry.distribution.npx.as_mut().unwrap().package = format!("{}@2.0.0", entry.id);
+    }
+    manager.set_registry(initial).unwrap();
+    let installer = Arc::new(ConcurrentInstaller {
+        current: AtomicUsize::new(0),
+        maximum: AtomicUsize::new(0),
+        started: tokio::sync::Notify::new(),
+        release: tokio::sync::Semaphore::new(0),
+    });
+    let task = {
+        let manager = manager.clone();
+        let threads = threads.clone();
+        let installer = installer.clone();
+        tokio::spawn(async move { manager.prepare_updates(&threads, installer.as_ref()).await })
+    };
+    tokio::time::timeout(std::time::Duration::from_secs(2), async {
+        loop {
+            if installer.current.load(Ordering::SeqCst) == 3 {
+                break;
+            }
+            installer.started.notified().await;
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(installer.maximum.load(Ordering::SeqCst), 3);
+    let overlapping = {
+        let manager = manager.clone();
+        let threads = threads.clone();
+        let installer = installer.clone();
+        tokio::spawn(async move { manager.prepare_updates(&threads, installer.as_ref()).await })
+    };
+    assert!(tokio::time::timeout(
+        std::time::Duration::from_millis(100),
+        installer.started.notified()
+    )
+    .await
+    .is_err());
+    assert_eq!(installer.maximum.load(Ordering::SeqCst), 3);
+    installer.release.add_permits(8);
+    task.await.unwrap().unwrap();
+    overlapping.await.unwrap().unwrap();
+    assert_eq!(installer.maximum.load(Ordering::SeqCst), 3);
+}
+
+#[tokio::test]
+async fn failed_repair_preserves_the_selected_installation() {
+    let root = tempfile::tempdir().unwrap();
+    let manager = AgentManagement::open(root.path()).unwrap();
+    let threads = Threads::new(vec![]);
+    manager.set_registry(registry()).unwrap();
+    manager
+        .install(
+            "codex-acp",
+            &threads,
+            &ControlledInstaller { fail: false },
+            &|_| {},
+        )
+        .await
+        .unwrap();
+    let selected = manager
+        .catalog(&threads)
+        .unwrap()
+        .into_iter()
+        .find(|agent| agent.id == "codex-acp")
+        .unwrap();
+    let artifact = selected.artifact.unwrap();
+    std::fs::remove_file(artifact.join("fixture")).unwrap();
+
+    assert!(manager
+        .install(
+            "codex-acp",
+            &threads,
+            &ControlledInstaller { fail: true },
+            &|_| {},
+        )
+        .await
+        .is_err());
+
+    let preserved = manager
+        .catalog(&threads)
+        .unwrap()
+        .into_iter()
+        .find(|agent| agent.id == "codex-acp")
+        .unwrap();
+    assert_eq!(preserved.installed_version.as_deref(), Some("1.12.0"));
+    assert_eq!(preserved.artifact.as_deref(), Some(artifact.as_path()));
+    assert!(artifact.exists());
+}
+
+#[tokio::test]
+async fn reopening_promotes_pending_and_cleans_staging_orphans_but_keeps_runtime() {
+    let root = tempfile::tempdir().unwrap();
+    let manager = AgentManagement::open(root.path()).unwrap();
+    let threads = Threads::new(vec![]);
+    manager.set_registry(registry()).unwrap();
+    manager
+        .install(
+            "codex-acp",
+            &threads,
+            &ControlledInstaller { fail: false },
+            &|_| {},
+        )
+        .await
+        .unwrap();
+    let active = manager
+        .catalog(&threads)
+        .unwrap()
+        .into_iter()
+        .find(|agent| agent.id == "codex-acp")
+        .unwrap()
+        .artifact
+        .unwrap();
+    drop(manager);
+
+    let agent_root = active.parent().unwrap();
+    let pending = agent_root.join(uuid::Uuid::new_v4().to_string());
+    std::fs::create_dir_all(&pending).unwrap();
+    std::fs::copy(active.join("fixture"), pending.join("fixture")).unwrap();
+    let mut manifest: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(active.join("installation.json")).unwrap()).unwrap();
+    manifest["installedVersion"] = "2.0.0".into();
+    std::fs::write(
+        pending.join("installation.json"),
+        serde_json::to_vec_pretty(&manifest).unwrap(),
+    )
+    .unwrap();
+    let orphan = agent_root.join(uuid::Uuid::new_v4().to_string());
+    let staging = agent_root.join(".staging-crashed");
+    std::fs::create_dir_all(&orphan).unwrap();
+    std::fs::create_dir_all(&staging).unwrap();
+    let runtime = root.path().join("agents/runtime/cache");
+    std::fs::create_dir_all(&runtime).unwrap();
+    std::fs::write(runtime.join("keep"), "shared").unwrap();
+    let store = Store::open(&root.path().join("atte.sqlite")).unwrap();
+    store
+        .save_pending(&Installation {
+            definition: AgentDefinition {
+                id: "codex-acp".into(),
+                name: "Codex".into(),
+                launch_kind: Default::default(),
+                command: pending.join("fixture"),
+                args: vec![],
+                env: Default::default(),
+                node_runtime: None,
+            },
+            version: "2.0.0".into(),
+            artifact: pending.clone(),
+        })
+        .unwrap();
+    drop(store);
+
+    let reopened = AgentManagement::open(root.path()).unwrap();
+    let installed = reopened
+        .catalog(&Threads::new(vec![]))
+        .unwrap()
+        .into_iter()
+        .find(|agent| agent.id == "codex-acp")
+        .unwrap();
+    assert_eq!(installed.installed_version.as_deref(), Some("2.0.0"));
+    assert_eq!(installed.artifact.as_deref(), Some(pending.as_path()));
+    assert!(!active.exists());
+    assert!(!orphan.exists());
+    assert!(!staging.exists());
+    assert_eq!(
+        std::fs::read_to_string(runtime.join("keep")).unwrap(),
+        "shared"
+    );
+}
+
 #[test]
 fn catalog_preserves_optional_registry_icons_after_restart() {
     let root = tempfile::tempdir().unwrap();
@@ -266,9 +690,9 @@ fn catalog_preserves_optional_registry_icons_after_restart() {
     let registry = serde_json::from_value(serde_json::json!({
         "version": "1.0.0",
         "agents": [
-            {"id": "with-icon", "name": "With icon", "version": "1", "distribution": {},
+            {"id": "with-icon", "name": "With icon", "version": "1", "distribution": {"npx": {"package": "with-icon@1.0.0"}},
              "icon": "https://cdn.agentclientprotocol.com/registry/v1/latest/example.svg"},
-            {"id": "without-icon", "name": "Without icon", "version": "1", "distribution": {}}
+            {"id": "without-icon", "name": "Without icon", "version": "1", "distribution": {"npx": {"package": "without-icon@1.0.0"}}}
         ]
     }))
     .unwrap();
@@ -324,9 +748,7 @@ async fn unsupported_binary_is_disabled_before_download_without_npm_fallback() {
     let registry = Registry::parse(&serde_json::json!({"version":"1.0.0", "agents":[{"id":"new-agent", "name":"New", "version":"1", "distribution":{"binary":{atte_lib::agent_management::registry::platform():{"archive":"https://fixture/agent.dmg","cmd":"agent"}}, "npx":{"package":"fallback@1"}}}]}).to_string()).unwrap();
     manager.set_registry(registry).unwrap();
     let threads = Threads::new(vec![]);
-    let catalog = manager.catalog(&threads).unwrap();
-    assert!(catalog[0].distribution.is_none());
-    assert!(catalog[0].unavailable_reason.is_some());
+    assert!(manager.catalog(&threads).unwrap().is_empty());
     assert!(matches!(
         manager
             .install(
@@ -338,6 +760,30 @@ async fn unsupported_binary_is_disabled_before_download_without_npm_fallback() {
             .await,
         Err(ManagementError::Unsupported)
     ));
+
+    let artifact = root.path().join("agents/new-agent/installed");
+    std::fs::create_dir_all(&artifact).unwrap();
+    let command = artifact.join("agent");
+    std::fs::write(&command, "installed").unwrap();
+    Store::open(&root.path().join("atte.sqlite"))
+        .unwrap()
+        .save_installation(&Installation {
+            definition: AgentDefinition {
+                id: "new-agent".into(),
+                name: "New".into(),
+                launch_kind: Default::default(),
+                command,
+                args: vec![],
+                env: Default::default(),
+                node_runtime: None,
+            },
+            version: "1".into(),
+            artifact,
+        })
+        .unwrap();
+    let catalog = manager.catalog(&threads).unwrap();
+    assert_eq!(catalog.len(), 1);
+    assert!(catalog[0].distribution.is_none());
 }
 
 struct InterruptedInstaller {
@@ -432,9 +878,11 @@ async fn uninstall_removes_selection_and_files_and_survives_restart() {
             definition: AgentDefinition {
                 id: "new-agent".into(),
                 name: "New".into(),
+                launch_kind: Default::default(),
                 command: artifact.join("agent"),
                 args: vec![],
                 env: Default::default(),
+                node_runtime: None,
             },
             version: "1".into(),
             artifact: artifact.clone(),
@@ -465,9 +913,11 @@ async fn uninstall_removes_files_and_retires_existing_drafts() {
             definition: AgentDefinition {
                 id: "new-agent".into(),
                 name: "New".into(),
+                launch_kind: Default::default(),
                 command: artifact.join("agent"),
                 args: vec![],
                 env: Default::default(),
+                node_runtime: None,
             },
             version: "1".into(),
             artifact: artifact.clone(),
@@ -508,9 +958,11 @@ async fn uninstall_rejects_external_paths_and_shared_runtime_but_handles_missing
                 definition: AgentDefinition {
                     id: "new-agent".into(),
                     name: "New".into(),
+                    launch_kind: Default::default(),
                     command: artifact.join("agent"),
                     args: vec![],
                     env: Default::default(),
+                    node_runtime: None,
                 },
                 version: "1".into(),
                 artifact: artifact.clone(),

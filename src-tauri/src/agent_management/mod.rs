@@ -8,11 +8,13 @@ pub mod registry;
 mod removal;
 
 use crate::{
-    storage::{Installation, Store},
+    storage::Store,
     thread::{AuthenticationStatus, Threads},
 };
 use authentication::Authentication;
-use installer::Installer;
+use futures_util::{stream, StreamExt};
+use installer::{Installer, SystemInstaller};
+use node_runtime::NodeRuntime;
 use registry::{Distribution, Registry};
 use serde::Serialize;
 use std::{
@@ -75,30 +77,47 @@ pub struct ManagedAgent {
 pub struct AgentManagement {
     root: PathBuf,
     store: Arc<Store>,
+    runtime: NodeRuntime,
     refresh_lock: tokio::sync::Mutex<()>,
+    preparation_slots: tokio::sync::Semaphore,
     last_attempt: Mutex<i64>,
     authentication: Mutex<HashMap<String, Authentication>>,
+    node_runtimes: Mutex<HashMap<String, node_runtime::NodeRuntime>>,
     busy: Mutex<HashSet<String>>,
 }
 
 impl AgentManagement {
     pub fn open(root: &Path) -> Result<Self, ManagementError> {
+        Self::open_with_runtime(root, NodeRuntime::default())
+    }
+
+    /// Opens agent management with an injected app-scoped runtime resolver.
+    /// Controlled integration tests use this to make runtime discovery deterministic.
+    pub fn open_with_runtime(root: &Path, runtime: NodeRuntime) -> Result<Self, ManagementError> {
         std::fs::create_dir_all(root).map_err(|_| ManagementError::Install)?;
+        let root = root.canonicalize().map_err(|_| ManagementError::Install)?;
         let store = Store::open(&root.join("atte.sqlite"))?;
+        crate::installation::recover(&root, &store)?;
         let fetched_at = store.registry_fetched_at()?;
         Ok(Self {
-            root: root.into(),
+            root,
             store: Arc::new(store),
+            runtime,
             refresh_lock: tokio::sync::Mutex::new(()),
+            preparation_slots: tokio::sync::Semaphore::new(3),
             last_attempt: Mutex::new(fetched_at),
             authentication: Mutex::new(HashMap::new()),
+            node_runtimes: Mutex::new(HashMap::new()),
             busy: Mutex::new(HashSet::new()),
         })
     }
 
     pub fn restore(&self, threads: &Threads) -> Result<(), ManagementError> {
-        for installation in self.store.installations()? {
-            if usable(&installation) {
+        for mut installation in self.store.installations()? {
+            if crate::installation::has_launch_files(&installation) {
+                if installation.definition.launch_kind == crate::agent::LaunchKind::Node {
+                    installation.definition.node_runtime = Some(self.runtime.clone());
+                }
                 threads
                     .register_agent(installation.definition)
                     .map_err(|_| ManagementError::Install)?;
@@ -112,6 +131,10 @@ impl AgentManagement {
         let threads = Threads::with_store(Vec::new(), self.store.clone())?;
         self.restore(&threads)?;
         Ok(threads)
+    }
+
+    pub(crate) fn installer(&self) -> SystemInstaller {
+        SystemInstaller::new(download::HttpDownloader, self.runtime.clone())
     }
 
     pub fn set_registry(&self, registry: Registry) -> Result<(), ManagementError> {
@@ -177,6 +200,13 @@ impl AgentManagement {
             .map_err(|_| ManagementError::Connection)?;
         Ok(agents
             .iter()
+            .filter(|agent| {
+                agent.installation.is_some()
+                    || agent
+                        .registry
+                        .as_ref()
+                        .is_some_and(|entry| entry.distribution(&registry::platform()).is_some())
+            })
             .map(|agent| {
                 let id = &agent.id;
                 let entry = agent.registry.as_ref();
@@ -200,7 +230,7 @@ impl AgentManagement {
                     installed_version: installation
                         .map(|installation| installation.version.clone()),
                     artifact: installation.map(|installation| installation.artifact.clone()),
-                    installed: installation.is_some_and(usable),
+                    installed: installation.is_some_and(crate::installation::has_launch_files),
                     authentication: {
                         let mut state = authentication.get(id).cloned().unwrap_or_default();
                         if let Some(evidence) = threads.authentication_status(id) {
@@ -231,7 +261,11 @@ impl AgentManagement {
             .into_iter()
             .find(|agent| agent.id == id)
             .ok_or(ManagementError::Registry)?;
-        if let Some(existing) = stored.installation.as_ref().filter(|item| usable(item)) {
+        if let Some(existing) = stored
+            .installation
+            .as_ref()
+            .filter(|item| crate::installation::has_launch_files(item))
+        {
             threads
                 .register_agent(existing.definition.clone())
                 .map_err(|_| ManagementError::Install)?;
@@ -242,21 +276,7 @@ impl AgentManagement {
         let distribution = entry
             .distribution(&registry::platform())
             .ok_or(ManagementError::Unsupported)?;
-        // A broken installation is retired before replacing its files or definition.
-        if let Some(existing) = stored.installation {
-            threads
-                .unregister_agent(id)
-                .await
-                .map_err(|_| ManagementError::Connection)?;
-            let root = self.root.clone();
-            tokio::task::spawn_blocking(move || {
-                crate::installation_files::remove(&root, &existing.artifact)
-            })
-            .await
-            .map_err(|_| ManagementError::Removal)?
-            .map_err(|_| ManagementError::Removal)?;
-            self.store.remove_installation(id)?;
-        }
+        let previous_artifact = stored.installation.map(|existing| existing.artifact);
         let installation = installer
             .install(
                 id,
@@ -266,22 +286,150 @@ impl AgentManagement {
                 progress,
             )
             .await?;
-        if installation.definition.id != id || !usable(&installation) {
+        let installation =
+            crate::installation::commit(&self.root, &entry.version, &distribution, installation)?;
+        if installation.definition.id != id || !crate::installation::has_launch_files(&installation)
+        {
             return Err(ManagementError::Install);
         }
-        if let Err(error) = self.store.save_installation(&installation) {
+        if let Some(runtime) = installation.definition.node_runtime.clone() {
+            self.node_runtimes
+                .lock()
+                .map_err(|_| ManagementError::Install)?
+                .insert(id.into(), runtime);
+        }
+        if let Err(error) = self.store.save_pending(&installation) {
             let _ = crate::installation_files::remove(&self.root, &installation.artifact);
             return Err(error.into());
         }
+        self.store.promote_pending(id)?;
         threads
             .register_agent(installation.definition)
             .map_err(|_| ManagementError::Install)?;
+        if let Some(previous) = previous_artifact {
+            let _ = crate::installation_files::remove(&self.root, &previous);
+        }
         self.authentication
             .lock()
             .map_err(|_| ManagementError::Connection)?
             .remove(id);
         progress("설치 완료");
         Ok(())
+    }
+
+    /// Prepares changed installations without delaying catalog or thread restoration.
+    pub async fn prepare_updates(
+        &self,
+        threads: &Threads,
+        installer: &impl Installer,
+    ) -> Result<(), ManagementError> {
+        let targets: Vec<_> = self
+            .store
+            .agents()?
+            .into_iter()
+            .filter_map(|agent| {
+                let entry = agent.registry.as_ref()?;
+                let distribution = entry.distribution(&registry::platform())?;
+                let installed = agent.installation.as_ref()?;
+                let current = matches_selected_identity(&agent, &entry.version, &distribution);
+                (!current && crate::installation::has_launch_files(installed)).then_some(agent.id)
+            })
+            .collect();
+        stream::iter(targets)
+            .for_each_concurrent(3, |id| async move {
+                if let Err(error) = self.prepare_update(&id, threads, installer).await {
+                    eprintln!("automatic agent update failed for {id}: {error}");
+                }
+            })
+            .await;
+        Ok(())
+    }
+
+    async fn prepare_update(
+        &self,
+        id: &str,
+        threads: &Threads,
+        installer: &impl Installer,
+    ) -> Result<(), ManagementError> {
+        let _slot = self
+            .preparation_slots
+            .acquire()
+            .await
+            .map_err(|_| ManagementError::Busy)?;
+        let _operation = self.begin(id)?;
+        loop {
+            let stored = self
+                .store
+                .agents()?
+                .into_iter()
+                .find(|agent| agent.id == id)
+                .ok_or(ManagementError::Registry)?;
+            let entry = stored.registry.as_ref().ok_or(ManagementError::Registry)?;
+            let distribution = entry
+                .distribution(&registry::platform())
+                .ok_or(ManagementError::Unsupported)?;
+            if matches_selected_identity(&stored, &entry.version, &distribution) {
+                return Ok(());
+            }
+            let prepared = installer
+                .install(id, entry, &distribution, &self.root.join("agents"), &|_| {})
+                .await?;
+            let installation =
+                crate::installation::commit(&self.root, &entry.version, &distribution, prepared)?;
+            let latest = self
+                .store
+                .agents()?
+                .into_iter()
+                .find(|agent| agent.id == id)
+                .and_then(|agent| agent.registry)
+                .and_then(|entry| {
+                    let distribution = entry.distribution(&registry::platform())?;
+                    Some((entry.version, distribution))
+                });
+            if latest.as_ref().is_none_or(|(version, source)| {
+                version != &entry.version || source != &distribution
+            }) {
+                let _ = crate::installation_files::remove(&self.root, &installation.artifact);
+                continue;
+            }
+            let previous_pending = self.store.save_pending(&installation)?;
+            if let Some(previous) = previous_pending.filter(|path| path != &installation.artifact) {
+                let _ = crate::installation_files::remove(&self.root, &previous);
+            }
+            let mut previous_active = None;
+            let promoted = threads
+                .replace_agent_if_idle(id, || {
+                    let (previous, pending) = self
+                        .store
+                        .promote_pending(id)
+                        .map_err(|error| {
+                            crate::thread::ThreadError::Unavailable(error.to_string())
+                        })?
+                        .ok_or_else(|| {
+                            crate::thread::ThreadError::Unavailable(
+                                "준비된 설치본을 찾을 수 없습니다.".into(),
+                            )
+                        })?;
+                    previous_active = previous.map(|item| item.artifact);
+                    let mut definition = pending.definition;
+                    if definition.launch_kind == crate::agent::LaunchKind::Node {
+                        definition.node_runtime = Some(self.runtime.clone());
+                    }
+                    Ok(definition)
+                })
+                .await
+                .map_err(|_| ManagementError::Connection)?;
+            if promoted {
+                if let Some(previous) = previous_active {
+                    let _ = crate::installation_files::remove(&self.root, &previous);
+                }
+                self.authentication
+                    .lock()
+                    .map_err(|_| ManagementError::Connection)?
+                    .remove(id);
+            }
+            return Ok(());
+        }
     }
 
     pub async fn authenticate(
@@ -291,12 +439,22 @@ impl AgentManagement {
         threads: &Threads,
     ) -> Result<Authentication, ManagementError> {
         let _operation = self.begin(id)?;
-        let installation = self
+        let mut installation = self
             .store
             .installations()?
             .into_iter()
-            .find(|installation| installation.definition.id == id && usable(installation))
+            .find(|installation| {
+                installation.definition.id == id
+                    && crate::installation::has_launch_files(installation)
+            })
             .ok_or(ManagementError::Install)?;
+        installation.definition.node_runtime = self
+            .node_runtimes
+            .lock()
+            .map_err(|_| ManagementError::Connection)?
+            .get(id)
+            .cloned()
+            .or_else(|| Some(self.runtime.clone()));
         self.authentication
             .lock()
             .map_err(|_| ManagementError::Connection)?
@@ -334,15 +492,27 @@ impl AgentManagement {
     }
 }
 
-fn usable(installation: &Installation) -> bool {
-    installation.artifact.is_dir()
-        && installation.definition.command.is_file()
-        && installation
-            .definition
-            .args
-            .first()
-            .filter(|arg| Path::new(arg).is_absolute())
-            .is_none_or(|arg| Path::new(arg).is_file())
+fn matches_identity(
+    identity: Option<&crate::installation::Identity>,
+    registry_version: &str,
+    source: &Distribution,
+) -> bool {
+    identity.is_some_and(|identity| {
+        identity.registry_version == registry_version
+            && identity.source_identity.has_same_source_identity(source)
+    })
+}
+
+fn matches_selected_identity(
+    agent: &crate::storage::StoredAgent,
+    registry_version: &str,
+    source: &Distribution,
+) -> bool {
+    matches_identity(
+        agent.installation_identity.as_ref(),
+        registry_version,
+        source,
+    ) || matches_identity(agent.pending_identity.as_ref(), registry_version, source)
 }
 
 struct Operation<'a> {

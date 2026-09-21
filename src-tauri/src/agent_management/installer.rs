@@ -1,13 +1,16 @@
 use super::{
     archive::{self, enclosed},
     download::{self, Downloader, HttpDownloader},
-    node_runtime::{node_path, NodeRuntime},
+    node_runtime::NodeRuntime,
 };
 use super::{
     registry::{Distribution, RegistryAgent},
     ManagementError,
 };
-use crate::{agent::AgentDefinition, storage::Installation};
+use crate::{
+    agent::{AgentDefinition, LaunchKind},
+    storage::Installation,
+};
 use std::{future::Future, path::Path, pin::Pin, process::Stdio, time::Duration};
 use tokio::process::Command;
 
@@ -58,10 +61,7 @@ impl<D: Downloader> Installer for SystemInstaller<D> {
             }
             std::fs::create_dir_all(root).map_err(|_| ManagementError::Install)?;
             let root = root.canonicalize().map_err(|_| ManagementError::Install)?;
-            let staging = tempfile::Builder::new()
-                .prefix(&format!("{id}-"))
-                .tempdir_in(&root)
-                .map_err(|_| ManagementError::Install)?;
+            let staging = crate::installation::staging_directory(&root, id)?;
             let result = self
                 .install_distribution(id, entry, distribution, staging.path(), &root, progress)
                 .await?;
@@ -81,18 +81,19 @@ impl<D: Downloader> SystemInstaller<D> {
         root: &Path,
         progress: &(dyn Fn(&str) + Send + Sync),
     ) -> Result<Installation, ManagementError> {
-        let (command, args, env, version) = match distribution {
+        let (launch_kind, command, args, env, version) = match distribution {
             Distribution::Npm(npm) => {
                 progress("Node.js 확인 중");
                 let runtime = self
                     .runtime
-                    .prepare(&root.join("runtime"), &self.downloads, progress)
+                    .resolve(&root.join("runtime"), &self.downloads, progress)
                     .await?;
-                let node = runtime.node.clone();
                 let (package, version) = npm
                     .package
                     .rsplit_once('@')
                     .ok_or(ManagementError::Registry)?;
+                let maximum =
+                    semver::Version::parse(version).map_err(|_| ManagementError::Registry)?;
                 if package.is_empty()
                     || version.is_empty()
                     || package.starts_with('-')
@@ -111,19 +112,12 @@ impl<D: Downloader> SystemInstaller<D> {
                     return Err(ManagementError::Registry);
                 }
                 progress("npm 패키지 다운로드·설치 중");
+                let requested = format!("{package}@0.0.0 - {maximum}");
                 let mut install = runtime.npm_command();
                 install
                     .args(["install", "--prefix"])
                     .arg(artifact)
-                    .args([
-                        "--save-exact",
-                        "--no-audit",
-                        "--no-fund",
-                        "--ignore-scripts",
-                        "--",
-                        &npm.package,
-                    ])
-                    .env("PATH", node_path(&node))
+                    .args(["--save-exact", "--no-audit", "--no-fund", "--", &requested])
                     .stdin(Stdio::null())
                     .stdout(Stdio::null())
                     .stderr(Stdio::null())
@@ -138,12 +132,9 @@ impl<D: Downloader> SystemInstaller<D> {
                 let resolved = metadata["version"]
                     .as_str()
                     .ok_or(ManagementError::Install)?;
-                if version
-                    .bytes()
-                    .next()
-                    .is_some_and(|byte| byte.is_ascii_digit())
-                    && resolved != version
-                {
+                let resolved_version =
+                    semver::Version::parse(resolved).map_err(|_| ManagementError::Install)?;
+                if resolved_version > maximum {
                     return Err(ManagementError::Install);
                 }
                 let bin = metadata["bin"]
@@ -171,12 +162,14 @@ impl<D: Downloader> SystemInstaller<D> {
                 if !executable.starts_with(artifact) || !executable.is_file() {
                     return Err(ManagementError::Install);
                 }
-                let mut args = vec![executable.to_string_lossy().into_owned()];
-                args.extend(npm.args.clone());
-                let mut env: std::collections::HashMap<_, _> =
-                    npm.env.clone().into_iter().collect();
-                env.insert("PATH".into(), node_path(&node));
-                (node, args, env, resolved.to_owned())
+                let env: std::collections::HashMap<_, _> = npm.env.clone().into_iter().collect();
+                (
+                    LaunchKind::Node,
+                    executable,
+                    npm.args.clone(),
+                    env,
+                    resolved.to_owned(),
+                )
             }
             Distribution::Binary(binary) => {
                 progress("바이너리 다운로드 중");
@@ -201,19 +194,19 @@ impl<D: Downloader> SystemInstaller<D> {
                 .await
                 .map_err(|_| ManagementError::Install)??;
                 let mut args = binary.args.clone();
-                let mut env: std::collections::HashMap<_, _> =
-                    binary.env.clone().into_iter().collect();
-                let command = if binary.cmd == "node" {
-                    let runtime = self
-                        .runtime
-                        .prepare(&root.join("runtime"), &self.downloads, progress)
+                let env: std::collections::HashMap<_, _> = binary.env.clone().into_iter().collect();
+                let (launch_kind, command) = if binary.cmd == "node" {
+                    self.runtime
+                        .resolve(&root.join("runtime"), &self.downloads, progress)
                         .await?;
-                    env.insert("PATH".into(), node_path(&runtime.node));
-                    runtime.node
+                    let entrypoint = args.first().ok_or(ManagementError::Registry)?;
+                    let entrypoint = enclosed(artifact, Path::new(entrypoint))?;
+                    args.remove(0);
+                    (LaunchKind::Node, entrypoint)
                 } else {
                     let command = enclosed(artifact, Path::new(&binary.cmd))?;
                     archive::executable_mode(&command, 0o755)?;
-                    command
+                    (LaunchKind::Direct, command)
                 };
                 for arg in &mut args {
                     if arg.starts_with("./")
@@ -227,7 +220,7 @@ impl<D: Downloader> SystemInstaller<D> {
                 if !command.is_file() {
                     return Err(ManagementError::Install);
                 }
-                (command, args, env, entry.version.clone())
+                (launch_kind, command, args, env, entry.version.clone())
             }
         };
         progress("설치 산출물 확인 중");
@@ -235,9 +228,11 @@ impl<D: Downloader> SystemInstaller<D> {
             definition: AgentDefinition {
                 id: id.into(),
                 name: entry.name.clone(),
+                launch_kind,
                 command,
                 args,
                 env,
+                node_runtime: (launch_kind == LaunchKind::Node).then(|| self.runtime.clone()),
             },
             version,
             artifact: artifact.into(),

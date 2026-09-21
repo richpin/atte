@@ -214,7 +214,7 @@ fn runtime_for(
     folder: PathBuf,
 ) -> mpsc::UnboundedSender<crate::agent_runtime::RuntimeCommand> {
     if let Some(runtime) = state.runtimes.iter().find(|runtime| {
-        runtime.agent == agent
+        same_agent_definition(&runtime.agent, &agent)
             && runtime.folder == folder
             && !runtime.commands.is_closed()
             && runtime
@@ -240,6 +240,15 @@ fn runtime_for(
         task: Some(task),
     });
     commands
+}
+
+fn same_agent_definition(left: &AgentDefinition, right: &AgentDefinition) -> bool {
+    left.id == right.id
+        && left.name == right.name
+        && left.launch_kind == right.launch_kind
+        && left.command == right.command
+        && left.args == right.args
+        && left.env == right.env
 }
 
 impl Default for Threads {
@@ -387,6 +396,55 @@ impl Threads {
             agents.push(agent);
         }
         Ok(())
+    }
+
+    /// Stops this agent's idle runtimes and swaps its definition while no turn is active.
+    pub async fn replace_agent_if_idle(
+        &self,
+        id: &str,
+        activate: impl FnOnce() -> Result<AgentDefinition, ThreadError>,
+    ) -> Result<bool, ThreadError> {
+        let _lifecycle = self.lifecycle.lock().await;
+        let runtimes = {
+            let mut state = self.lock()?;
+            let has_active_turn = state.entries.values().any(|entry| {
+                entry.state.lock().is_ok_and(|current| {
+                    current.thread.agent_id == id
+                        && matches!(
+                            current.thread.status,
+                            ThreadStatus::Running
+                                | ThreadStatus::WaitingForApproval
+                                | ThreadStatus::Cancelling
+                        )
+                })
+            });
+            if has_active_turn {
+                return Ok(false);
+            }
+            for entry in state.entries.values_mut() {
+                let mut current = entry.state.lock().map_err(|_| unavailable())?;
+                if current.thread.agent_id == id {
+                    current.generation += 1;
+                    current.thread.status = ThreadStatus::Disconnected;
+                    current.clear_permissions();
+                    current.publish();
+                    entry.runtime = None;
+                }
+            }
+            let mut runtimes = Vec::new();
+            let mut index = 0;
+            while index < state.runtimes.len() {
+                if state.runtimes[index].agent.id == id {
+                    runtimes.push(state.runtimes.remove(index));
+                } else {
+                    index += 1;
+                }
+            }
+            runtimes
+        };
+        stop_runtimes(runtimes).await;
+        self.register_agent(activate()?)?;
+        Ok(true)
     }
 
     /// Retires this agent's threads and reaps their processes before file removal.

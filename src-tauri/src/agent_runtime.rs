@@ -70,15 +70,29 @@ pub(crate) async fn run(
     mut commands: mpsc::UnboundedReceiver<RuntimeCommand>,
     mut stop: oneshot::Receiver<()>,
 ) {
-    let mut command = Command::new(&agent.command);
+    let Ok(launch) = crate::agent_management::node_runtime::resolve_launch(&agent).await else {
+        commands.close();
+        while let Some(command) = commands.recv().await {
+            if let RuntimeCommand::StartSession(session) = command {
+                session
+                    .updates
+                    .connection_failed(ConnectionFailure::ExecutableNotFound);
+            }
+        }
+        return;
+    };
+    let mut command = Command::new(launch.program);
     command
-        .args(&agent.args)
+        .args(launch.args)
         .envs(&agent.env)
         .current_dir(&folder)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
         .kill_on_drop(true);
+    if let Some(path) = launch.path {
+        command.env("PATH", path);
+    }
     #[cfg(unix)]
     command.process_group(0);
     let mut child = match command.spawn() {

@@ -62,15 +62,19 @@ pub async fn inspect(
     folder: &Path,
     method: Option<&str>,
 ) -> Result<Authentication, ManagementError> {
-    let mut command = Command::new(&agent.command);
+    let launch = super::node_runtime::resolve_launch(agent).await?;
+    let mut command = Command::new(launch.program);
     command
-        .args(&agent.args)
+        .args(launch.args)
         .envs(&agent.env)
         .current_dir(folder)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
         .kill_on_drop(true);
+    if let Some(path) = launch.path {
+        command.env("PATH", path);
+    }
     #[cfg(unix)]
     command.process_group(0);
     let mut child = command.spawn().map_err(|_| ManagementError::Connection)?;
@@ -170,14 +174,18 @@ async fn terminal_login(
     let script = directory.path().join("Atte-login.command");
     let mut env = agent.env.clone();
     env.extend(method.env.clone());
+    let launch = super::node_runtime::resolve_launch(agent).await?;
+    if let Some(path) = launch.path {
+        env.insert("PATH".into(), path.to_string_lossy().into_owned());
+    }
     let mut command = String::from("/usr/bin/env");
     for (key, value) in env {
         command.push(' ');
         command.push_str(&quote(&format!("{key}={value}")));
     }
     command.push(' ');
-    command.push_str(&quote(&agent.command.to_string_lossy()));
-    for arg in agent.args.iter().chain(&method.args) {
+    command.push_str(&quote(&launch.program.to_string_lossy()));
+    for arg in launch.args.iter().chain(&method.args) {
         command.push(' ');
         command.push_str(&quote(arg));
     }

@@ -27,9 +27,11 @@ pub struct Distributions {
     #[serde(default)]
     pub binary: HashMap<String, Binary>,
     pub npx: Option<Npm>,
+    #[serde(flatten)]
+    pub unknown: BTreeMap<String, serde_json::Value>,
 }
 
-#[derive(Clone, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct Binary {
     pub archive: String,
     pub cmd: String,
@@ -38,22 +40,64 @@ pub struct Binary {
     #[serde(default)]
     pub env: BTreeMap<String, String>,
     pub sha256: Option<String>,
+    #[serde(flatten)]
+    pub unknown: BTreeMap<String, serde_json::Value>,
 }
 
-#[derive(Clone, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct Npm {
     pub package: String,
     #[serde(default)]
     pub args: Vec<String>,
     #[serde(default)]
     pub env: BTreeMap<String, String>,
+    #[serde(flatten)]
+    pub unknown: BTreeMap<String, serde_json::Value>,
 }
 
-#[derive(Clone, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum Distribution {
     Binary(Binary),
     Npm(Npm),
+}
+
+impl Distribution {
+    /// Installation-affecting Registry fields in a stable, path-independent form.
+    pub fn source_identity(&self) -> Self {
+        match self {
+            Self::Binary(binary) => Self::Binary(Binary {
+                archive: binary.archive.clone(),
+                cmd: binary.cmd.clone(),
+                args: binary.args.clone(),
+                env: binary.env.clone(),
+                sha256: binary.sha256.clone(),
+                unknown: BTreeMap::new(),
+            }),
+            Self::Npm(npm) => Self::Npm(Npm {
+                package: npm.package.clone(),
+                args: npm.args.clone(),
+                env: npm.env.clone(),
+                unknown: BTreeMap::new(),
+            }),
+        }
+    }
+
+    pub(crate) fn has_same_source_identity(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Binary(left), Self::Binary(right)) => {
+                left.archive == right.archive
+                    && left.cmd == right.cmd
+                    && left.args == right.args
+                    && left.env == right.env
+                    && left.sha256 == right.sha256
+            }
+            (Self::Npm(left), Self::Npm(right)) => {
+                left.package == right.package && left.args == right.args && left.env == right.env
+            }
+            _ => false,
+        }
+    }
 }
 
 impl Registry {

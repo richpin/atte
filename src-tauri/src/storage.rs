@@ -22,6 +22,10 @@ pub struct StoredAgent {
     pub id: String,
     pub registry: Option<RegistryAgent>,
     pub installation: Option<Installation>,
+    pub(crate) installation_identity: Option<crate::installation::Identity>,
+    pub pending: Option<Installation>,
+    pub(crate) pending_identity: Option<crate::installation::Identity>,
+    pub pending_artifact: Option<PathBuf>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -38,7 +42,10 @@ pub enum StorageError {
     Unavailable,
 }
 
-pub struct Store(Mutex<Connection>);
+pub struct Store {
+    connection: Mutex<Connection>,
+    root: PathBuf,
+}
 
 impl Store {
     pub fn open(path: &Path) -> Result<Self, StorageError> {
@@ -54,11 +61,17 @@ impl Store {
             transaction.execute_batch(include_str!("../schema.sql"))?;
         }
         transaction.commit()?;
-        Ok(Self(Mutex::new(connection)))
+        Ok(Self {
+            connection: Mutex::new(connection),
+            root: path.parent().unwrap_or(Path::new(".")).to_owned(),
+        })
     }
 
     pub(crate) fn threads(&self) -> Result<Vec<ThreadMetadata>, StorageError> {
-        let connection = self.0.lock().map_err(|_| StorageError::Unavailable)?;
+        let connection = self
+            .connection
+            .lock()
+            .map_err(|_| StorageError::Unavailable)?;
         let mut statement = connection.prepare("SELECT metadata FROM threads")?;
         let rows = statement.query_map([], |row| row.get::<_, String>(0))?;
         rows.map(|row| Ok(serde_json::from_str(&row?)?)).collect()
@@ -68,7 +81,10 @@ impl Store {
         &self,
         id: uuid::Uuid,
     ) -> Result<Vec<QueuedMessage>, StorageError> {
-        let connection = self.0.lock().map_err(|_| StorageError::Unavailable)?;
+        let connection = self
+            .connection
+            .lock()
+            .map_err(|_| StorageError::Unavailable)?;
         let json: Option<String> = connection
             .query_row(
                 "SELECT queued_messages FROM threads WHERE id=?1",
@@ -86,13 +102,16 @@ impl Store {
         metadata: &ThreadMetadata,
         messages: &[QueuedMessage],
     ) -> Result<(), StorageError> {
-        let connection = self.0.lock().map_err(|_| StorageError::Unavailable)?;
+        let connection = self
+            .connection
+            .lock()
+            .map_err(|_| StorageError::Unavailable)?;
         connection.execute("INSERT INTO threads (id, metadata, queued_messages) VALUES (?1, ?2, ?3) ON CONFLICT(id) DO UPDATE SET queued_messages=excluded.queued_messages", params![metadata.id.to_string(), serde_json::to_string(metadata)?, serde_json::to_string(messages)?])?;
         Ok(())
     }
 
     pub(crate) fn save_thread(&self, metadata: &ThreadMetadata) -> Result<(), StorageError> {
-        self.0.lock().map_err(|_| StorageError::Unavailable)?.execute(
+        self.connection.lock().map_err(|_| StorageError::Unavailable)?.execute(
             "INSERT INTO threads (id, metadata) VALUES (?1, ?2) ON CONFLICT(id) DO UPDATE SET metadata=excluded.metadata",
             params![metadata.id.to_string(), serde_json::to_string(metadata)?],
         )?;
@@ -100,7 +119,7 @@ impl Store {
     }
 
     pub(crate) fn delete_thread(&self, id: uuid::Uuid) -> Result<(), StorageError> {
-        self.0
+        self.connection
             .lock()
             .map_err(|_| StorageError::Unavailable)?
             .execute("DELETE FROM threads WHERE id=?1", [id.to_string()])?;
@@ -108,8 +127,11 @@ impl Store {
     }
 
     pub fn agents(&self) -> Result<Vec<StoredAgent>, StorageError> {
-        let connection = self.0.lock().map_err(|_| StorageError::Unavailable)?;
-        let mut statement = connection.prepare("SELECT id, registry_metadata, installed_version, artifact_path, launch_definition FROM agents ORDER BY id")?;
+        let connection = self
+            .connection
+            .lock()
+            .map_err(|_| StorageError::Unavailable)?;
+        let mut statement = connection.prepare("SELECT id, registry_metadata, installed_version, artifact_path, launch_definition, pending_artifact_path FROM agents ORDER BY id")?;
         let rows = statement.query_map([], |row| {
             Ok((
                 row.get::<_, String>(0)?,
@@ -117,10 +139,11 @@ impl Store {
                 row.get::<_, Option<String>>(2)?,
                 row.get::<_, Option<String>>(3)?,
                 row.get::<_, Option<String>>(4)?,
+                row.get::<_, Option<String>>(5)?,
             ))
         })?;
         rows.map(|row| {
-            let (id, metadata, version, artifact, definition) = row?;
+            let (id, metadata, version, artifact, definition, pending_artifact) = row?;
             let installation = match (version, artifact, definition) {
                 (Some(version), Some(artifact), Some(definition)) => Some(Installation {
                     version,
@@ -132,10 +155,23 @@ impl Store {
             // Registry metadata is replaceable; bad cached metadata must not prevent
             // restoring a separately persisted, valid installation.
             let registry = metadata.and_then(|json| serde_json::from_str(&json).ok());
+            let installation_identity = installation
+                .as_ref()
+                .and_then(|item| crate::installation::identity(&item.artifact).ok());
+            let pending = pending_artifact.as_deref().and_then(|artifact| {
+                crate::installation::load(&self.root, Path::new(artifact), &id).ok()
+            });
+            let pending_identity = pending
+                .as_ref()
+                .and_then(|item| crate::installation::identity(&item.artifact).ok());
             Ok(StoredAgent {
                 id,
                 registry,
                 installation,
+                installation_identity,
+                pending,
+                pending_identity,
+                pending_artifact: pending_artifact.map(PathBuf::from),
             })
         })
         .collect()
@@ -150,17 +186,94 @@ impl Store {
     }
 
     pub fn save_installation(&self, installation: &Installation) -> Result<(), StorageError> {
-        self.0.lock().map_err(|_| StorageError::Unavailable)?.execute(
+        self.connection.lock().map_err(|_| StorageError::Unavailable)?.execute(
             "INSERT INTO agents (id, installed_version, artifact_path, launch_definition) VALUES (?1, ?2, ?3, ?4) ON CONFLICT(id) DO UPDATE SET installed_version=excluded.installed_version, artifact_path=excluded.artifact_path, launch_definition=excluded.launch_definition",
             params![installation.definition.id, installation.version, installation.artifact.to_string_lossy(), serde_json::to_string(&installation.definition)?])?;
         Ok(())
     }
 
+    /// Replaces the pending selector and returns the previously selected artifact.
+    ///
+    /// # Errors
+    /// Returns an error when the database is unavailable or the update fails.
+    pub fn save_pending(
+        &self,
+        installation: &Installation,
+    ) -> Result<Option<PathBuf>, StorageError> {
+        let connection = self
+            .connection
+            .lock()
+            .map_err(|_| StorageError::Unavailable)?;
+        let previous: Option<String> = connection
+            .query_row(
+                "SELECT pending_artifact_path FROM agents WHERE id=?1",
+                [&installation.definition.id],
+                |row| row.get(0),
+            )
+            .optional()?
+            .flatten();
+        connection.execute(
+            "UPDATE agents SET pending_artifact_path=?2 WHERE id=?1",
+            params![
+                installation.definition.id,
+                installation.artifact.to_string_lossy()
+            ],
+        )?;
+        Ok(previous.map(PathBuf::from))
+    }
+
+    /// Atomically selects the pending installation as active.
+    ///
+    /// # Errors
+    /// Returns an error when stored agent data cannot be read or the selector transaction fails.
+    pub fn promote_pending(
+        &self,
+        id: &str,
+    ) -> Result<Option<(Option<Installation>, Installation)>, StorageError> {
+        let agents = self.agents()?;
+        let Some(stored) = agents.into_iter().find(|agent| agent.id == id) else {
+            return Ok(None);
+        };
+        let Some(pending) = stored.pending else {
+            return Ok(None);
+        };
+        let previous = stored.installation;
+        let mut connection = self
+            .connection
+            .lock()
+            .map_err(|_| StorageError::Unavailable)?;
+        let transaction = connection.transaction()?;
+        transaction.execute(
+            "UPDATE agents SET installed_version=?2, artifact_path=?3, launch_definition=?4, pending_artifact_path=NULL WHERE id=?1 AND pending_artifact_path=?3",
+            params![id, pending.version, pending.artifact.to_string_lossy(), serde_json::to_string(&pending.definition)?],
+        )?;
+        transaction.commit()?;
+        Ok(Some((previous, pending)))
+    }
+
+    /// Clears a pending selector without changing the active installation.
+    ///
+    /// # Errors
+    /// Returns an error when the database is unavailable or the update fails.
+    pub fn clear_pending(&self, id: &str) -> Result<(), StorageError> {
+        self.connection
+            .lock()
+            .map_err(|_| StorageError::Unavailable)?
+            .execute(
+                "UPDATE agents SET pending_artifact_path=NULL WHERE id=?1",
+                [id],
+            )?;
+        Ok(())
+    }
+
     /// Called only after installation files have been removed successfully.
     pub fn remove_installation(&self, id: &str) -> Result<(), StorageError> {
-        let mut connection = self.0.lock().map_err(|_| StorageError::Unavailable)?;
+        let mut connection = self
+            .connection
+            .lock()
+            .map_err(|_| StorageError::Unavailable)?;
         let transaction = connection.transaction()?;
-        transaction.execute("UPDATE agents SET installed_version=NULL, artifact_path=NULL, launch_definition=NULL WHERE id=?1", [id])?;
+        transaction.execute("UPDATE agents SET installed_version=NULL, artifact_path=NULL, pending_artifact_path=NULL, launch_definition=NULL WHERE id=?1", [id])?;
         transaction.execute(
             "DELETE FROM agents WHERE id=?1 AND registry_metadata IS NULL",
             [id],
@@ -171,7 +284,7 @@ impl Store {
 
     pub fn registry_fetched_at(&self) -> Result<i64, StorageError> {
         let value: Option<String> = self
-            .0
+            .connection
             .lock()
             .map_err(|_| StorageError::Unavailable)?
             .query_row(
@@ -186,7 +299,10 @@ impl Store {
     }
 
     pub fn save_registry(&self, registry: &Registry, fetched_at: i64) -> Result<(), StorageError> {
-        let mut connection = self.0.lock().map_err(|_| StorageError::Unavailable)?;
+        let mut connection = self
+            .connection
+            .lock()
+            .map_err(|_| StorageError::Unavailable)?;
         let transaction = connection.transaction()?;
         transaction.execute("UPDATE agents SET registry_metadata=NULL", [])?;
         for agent in &registry.agents {

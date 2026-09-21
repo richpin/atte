@@ -2,6 +2,7 @@
 pub mod agent;
 pub mod agent_management;
 mod agent_runtime;
+mod installation;
 mod installation_files;
 mod lifecycle;
 pub mod storage;
@@ -210,6 +211,24 @@ pub fn run() {
             let threads = management.restore_threads()?;
             app.manage(threads);
             app.manage(management);
+            let updates = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                loop {
+                    let management = updates.state::<agent_management::AgentManagement>();
+                    let threads = updates.state::<Threads>();
+                    let installer = management.installer();
+                    match management
+                        .refresh_from(agent_management::registry::REGISTRY_URL, true)
+                        .await
+                    {
+                        Ok(()) => {
+                            let _ = management.prepare_updates(&threads, &installer).await;
+                        }
+                        Err(error) => eprintln!("background Registry refresh failed: {error}"),
+                    }
+                    tokio::time::sleep(std::time::Duration::from_secs(60 * 60)).await;
+                }
+            });
             lifecycle::install(app.handle())?;
             Ok(())
         })
@@ -271,7 +290,11 @@ async fn refresh_agent_catalog(
     lifecycle
         .operation(async {
             management
-                .refresh_if_stale()
+                .refresh_from(agent_management::registry::REGISTRY_URL, true)
+                .await
+                .map_err(|error| error.to_string())?;
+            management
+                .prepare_updates(&threads, &management.installer())
                 .await
                 .map_err(|error| error.to_string())?;
             management
@@ -292,14 +315,9 @@ async fn install_agent(
     lifecycle
         .finish_before_exit(async {
             management
-                .install(
-                    &id,
-                    &threads,
-                    &agent_management::installer::SystemInstaller::default(),
-                    &|message| {
-                        let _ = channel.send(message.to_owned());
-                    },
-                )
+                .install(&id, &threads, &management.installer(), &|message| {
+                    let _ = channel.send(message.to_owned());
+                })
                 .await
                 .map_err(|error| error.to_string())
         })

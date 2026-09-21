@@ -42,9 +42,11 @@ fn mock_agent() -> AgentDefinition {
     AgentDefinition {
         id: "fixture".into(),
         name: "Fixture".into(),
+        launch_kind: Default::default(),
         command: fixture_executable().clone(),
         args: vec![],
         env: Default::default(),
+        node_runtime: None,
     }
 }
 

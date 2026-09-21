@@ -3,6 +3,7 @@ CREATE TABLE agents (
     registry_metadata TEXT,
     installed_version TEXT,
     artifact_path TEXT,
+    pending_artifact_path TEXT,
     launch_definition TEXT,
     CHECK ((installed_version IS NULL AND artifact_path IS NULL AND launch_definition IS NULL)
         OR (installed_version IS NOT NULL AND artifact_path IS NOT NULL AND launch_definition IS NOT NULL))
