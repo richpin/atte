@@ -95,7 +95,7 @@ export function ThreadTimeline(props: {
       >
         <div
           ref={content}
-          class="flex flex-col gap-4 px-6 pt-6"
+          class="mx-auto flex w-full max-w-4xl flex-col gap-4 px-6 pt-6"
           style={{ "padding-bottom": bottomInset() }}
         >
           {props.children}
