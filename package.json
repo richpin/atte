@@ -13,7 +13,7 @@
     "format": "biome format --write .",
     "format:check": "biome format .",
     "check": "biome check --error-on-warnings .",
-    "check:fsd": "steiger ./src --fail-on-warnings",
+    "check:fsd": "CHOKIDAR_USEPOLLING=1 steiger ./src --fail-on-warnings",
     "check:fix": "biome check --write .",
     "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.node.json",
     "test": "vitest run",
