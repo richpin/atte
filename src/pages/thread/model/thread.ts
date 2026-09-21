@@ -53,6 +53,13 @@ export function createThreadModel(queryClient?: QueryClient) {
   const thread = () => state.thread;
   const [selectedThreadId, setSelectedThreadId] = createSignal<string>();
   const [error, setError] = createSignal<string>();
+  const [configurationError, setConfigurationError] = createSignal<{
+    configId: string;
+    message: string;
+  }>();
+  const visibleError = () => error() ?? configurationError()?.message;
+  const latestConfigurationAttempts = new Map<string, number>();
+  let configurationAttempt = 0;
   const [selecting, setSelecting] = createSignal(false);
   const [listSubscriptionError, setListSubscriptionError] = createSignal(false);
   let disposed = false;
@@ -252,6 +259,8 @@ export function createThreadModel(queryClient?: QueryClient) {
     selection++;
     view++;
     setError(undefined);
+    setConfigurationError(undefined);
+    latestConfigurationAttempts.clear();
     setSending(false);
     setAnsweringPermissionId(undefined);
     setCancellingTurnId(undefined);
@@ -387,12 +396,25 @@ export function createThreadModel(queryClient?: QueryClient) {
     const expectedView = view;
     const current = thread();
     if (!current || !actionsEnabled()) return;
-    setError(undefined);
+    const attempt = ++configurationAttempt;
+    latestConfigurationAttempts.set(configId, attempt);
     try {
       await setThreadConfiguration(current.id, configId, value);
+      if (
+        isCurrent(expectedView) &&
+        latestConfigurationAttempts.get(configId) === attempt &&
+        configurationError()?.configId === configId
+      )
+        setConfigurationError(undefined);
     } catch (cause) {
-      if (isCurrent(expectedView))
-        setError(localizedMessage(cause, "thread.error.configure"));
+      if (
+        isCurrent(expectedView) &&
+        latestConfigurationAttempts.get(configId) === attempt
+      )
+        setConfigurationError({
+          configId,
+          message: localizedMessage(cause, "thread.error.configure"),
+        });
     }
   }
 
@@ -403,6 +425,8 @@ export function createThreadModel(queryClient?: QueryClient) {
     setConnectingThreadId(current.id);
     setConnectFailed(false);
     setError(undefined);
+    setConfigurationError(undefined);
+    latestConfigurationAttempts.clear();
     try {
       await connectThread(current.id);
     } catch (cause) {
@@ -471,6 +495,8 @@ export function createThreadModel(queryClient?: QueryClient) {
     setSelectedThreadId(undefined);
     setState("thread", undefined);
     setError(undefined);
+    setConfigurationError(undefined);
+    latestConfigurationAttempts.clear();
     setSending(false);
     setAnsweringPermissionId(undefined);
     setCancellingTurnId(undefined);
@@ -484,7 +510,7 @@ export function createThreadModel(queryClient?: QueryClient) {
   return {
     thread,
     selectedThreadId,
-    error,
+    error: visibleError,
     selecting,
     history,
     listLoading,

@@ -50,6 +50,76 @@ fn mock_agent() -> AgentDefinition {
     }
 }
 
+fn add_configuration_gate(agent: &mut AgentDefinition, gate: &std::path::Path) {
+    std::fs::create_dir_all(gate).unwrap();
+    agent
+        .env
+        .insert("CONFIGURATION_GATE".into(), gate.to_string_lossy().into());
+}
+
+async fn wait_for_configuration_gate(gate: &std::path::Path, request: usize, stage: &str) {
+    let arrived = gate.join(format!("{request}.{stage}.arrived"));
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while !arrived.exists() {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+}
+
+fn release_configuration_gate(gate: &std::path::Path, request: usize, stage: &str) {
+    std::fs::write(gate.join(format!("{request}.{stage}.release")), []).unwrap();
+}
+
+async fn wait_for_boolean_configuration(
+    threads: &Threads,
+    id: uuid::Uuid,
+    config_id: &str,
+    expected: bool,
+) {
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let thread = threads.get(id).unwrap();
+            let current = thread
+                .configuration
+                .iter()
+                .find(|configuration| configuration.id == config_id)
+                .unwrap();
+            if serde_json::to_value(current).unwrap()["currentValue"] == expected {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+}
+
+async fn wait_for_select_configuration(
+    threads: &Threads,
+    id: uuid::Uuid,
+    config_id: &str,
+    expected: &str,
+) {
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let thread = threads.get(id).unwrap();
+            let current = thread
+                .configuration
+                .iter()
+                .find(|configuration| configuration.id == config_id)
+                .unwrap();
+            if serde_json::to_value(current).unwrap()["currentValue"] == expected {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+}
+
 async fn persist_remote_session(
     folder: &std::path::Path,
     agent: &AgentDefinition,
@@ -1321,6 +1391,513 @@ async fn thread_configuration_round_trips_opaque_typed_agent_values() {
         false
     );
     assert_eq!(updated.status, ThreadStatus::SessionReady);
+    threads.shutdown().await;
+}
+
+#[tokio::test]
+async fn configuration_selection_is_published_before_the_request_completes() {
+    let folder = tempfile::tempdir().unwrap();
+    let requests = folder.path().join("configuration-requests.jsonl");
+    let gate = folder.path().join("configuration-gate");
+    let mut agent = mock_agent();
+    agent.env.insert("CONFIGURATION".into(), "1".into());
+    add_configuration_gate(&mut agent, &gate);
+    agent.env.insert(
+        "CONFIGURATION_REQUEST_LOG".into(),
+        requests.to_string_lossy().into(),
+    );
+    let threads = std::sync::Arc::new(Threads::new(vec![agent]));
+    let draft = threads.create(folder.path()).unwrap();
+    threads.connect(draft.id).unwrap();
+    settle(&threads, draft.id).await;
+    let mut updates = subscribe(&threads, draft.id);
+
+    let changing = {
+        let threads = threads.clone();
+        tokio::spawn(async move {
+            threads
+                .set_configuration(
+                    draft.id,
+                    "opaque-thinking".into(),
+                    ThreadConfigurationValue::Boolean { value: false },
+                )
+                .await
+        })
+    };
+    wait_for_configuration_gate(&gate, 1, "request").await;
+    let optimistic = tokio::time::timeout(Duration::from_millis(100), async {
+        loop {
+            let thread = updates.recv().await.unwrap();
+            if serde_json::to_value(&thread.configuration[2]).unwrap()["currentValue"] == false {
+                break thread;
+            }
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(optimistic.status, ThreadStatus::SessionReady);
+    assert!(!changing.is_finished());
+    release_configuration_gate(&gate, 1, "request");
+    changing.await.unwrap().unwrap();
+
+    assert_eq!(
+        std::fs::read_to_string(requests).unwrap().lines().count(),
+        1
+    );
+    threads.shutdown().await;
+}
+
+#[tokio::test]
+async fn selecting_the_displayed_configuration_value_sends_no_request() {
+    let folder = tempfile::tempdir().unwrap();
+    let requests = folder.path().join("configuration-requests.jsonl");
+    let mut agent = mock_agent();
+    agent.env.insert("CONFIGURATION".into(), "1".into());
+    agent.env.insert(
+        "CONFIGURATION_REQUEST_LOG".into(),
+        requests.to_string_lossy().into(),
+    );
+    let threads = Threads::new(vec![agent]);
+    let draft = threads.create(folder.path()).unwrap();
+    threads.connect(draft.id).unwrap();
+    settle(&threads, draft.id).await;
+
+    threads
+        .set_configuration(
+            draft.id,
+            "opaque-thinking".into(),
+            ThreadConfigurationValue::Boolean { value: true },
+        )
+        .await
+        .unwrap();
+
+    assert!(std::fs::read_to_string(requests)
+        .unwrap_or_default()
+        .is_empty());
+    threads.shutdown().await;
+}
+
+#[tokio::test]
+async fn unsent_configuration_selections_coalesce_to_the_latest_displayed_value() {
+    let folder = tempfile::tempdir().unwrap();
+    let requests = folder.path().join("configuration-requests.jsonl");
+    let gate = folder.path().join("configuration-gate");
+    let mut agent = mock_agent();
+    agent.env.insert("CONFIGURATION".into(), "1".into());
+    add_configuration_gate(&mut agent, &gate);
+    agent.env.insert(
+        "CONFIGURATION_REQUEST_LOG".into(),
+        requests.to_string_lossy().into(),
+    );
+    let threads = std::sync::Arc::new(Threads::new(vec![agent]));
+    let draft = threads.create(folder.path()).unwrap();
+    threads.connect(draft.id).unwrap();
+    settle(&threads, draft.id).await;
+
+    let select = |value| {
+        let threads = threads.clone();
+        tokio::spawn(async move {
+            threads
+                .set_configuration(
+                    draft.id,
+                    "opaque-thinking".into(),
+                    ThreadConfigurationValue::Boolean { value },
+                )
+                .await
+        })
+    };
+    let first = select(false);
+    wait_for_configuration_gate(&gate, 1, "request").await;
+    let superseded = select(true);
+    wait_for_boolean_configuration(&threads, draft.id, "opaque-thinking", true).await;
+    let latest = select(false);
+    wait_for_boolean_configuration(&threads, draft.id, "opaque-thinking", false).await;
+    release_configuration_gate(&gate, 1, "request");
+
+    first.await.unwrap().unwrap();
+    superseded.await.unwrap().unwrap();
+    latest.await.unwrap().unwrap();
+    assert_eq!(
+        std::fs::read_to_string(requests).unwrap().lines().count(),
+        1
+    );
+    assert_eq!(
+        serde_json::to_value(&threads.get(draft.id).unwrap().configuration[2]).unwrap()
+            ["currentValue"],
+        false
+    );
+    threads.shutdown().await;
+}
+
+#[tokio::test]
+async fn configuration_responses_revalidate_dependent_unsent_selections() {
+    let folder = tempfile::tempdir().unwrap();
+    let requests = folder.path().join("configuration-requests.jsonl");
+    let gate = folder.path().join("configuration-gate");
+    let mut agent = mock_agent();
+    for (key, value) in [("CONFIGURATION", "1"), ("RESPONSIVE_CONFIGURATION", "1")] {
+        agent.env.insert(key.into(), value.into());
+    }
+    add_configuration_gate(&mut agent, &gate);
+    agent.env.insert(
+        "CONFIGURATION_REQUEST_LOG".into(),
+        requests.to_string_lossy().into(),
+    );
+    let threads = std::sync::Arc::new(Threads::new(vec![agent]));
+    let draft = threads.create(folder.path()).unwrap();
+    threads.connect(draft.id).unwrap();
+    settle(&threads, draft.id).await;
+
+    let model = {
+        let threads = threads.clone();
+        tokio::spawn(async move {
+            threads
+                .set_configuration(
+                    draft.id,
+                    "opaque-model".into(),
+                    ThreadConfigurationValue::Select {
+                        value: "model-b".into(),
+                    },
+                )
+                .await
+        })
+    };
+    wait_for_configuration_gate(&gate, 1, "request").await;
+    let effort = {
+        let threads = threads.clone();
+        tokio::spawn(async move {
+            threads
+                .set_configuration(
+                    draft.id,
+                    "opaque-effort".into(),
+                    ThreadConfigurationValue::Select {
+                        value: "high".into(),
+                    },
+                )
+                .await
+        })
+    };
+    wait_for_select_configuration(&threads, draft.id, "opaque-effort", "high").await;
+    release_configuration_gate(&gate, 1, "request");
+
+    model.await.unwrap().unwrap();
+    effort.await.unwrap().unwrap();
+    assert_eq!(
+        std::fs::read_to_string(requests).unwrap().lines().count(),
+        1
+    );
+    let configuration = threads.get(draft.id).unwrap().configuration;
+    assert_eq!(
+        serde_json::to_value(&configuration[0]).unwrap()["currentValue"],
+        "model-b"
+    );
+    assert_eq!(
+        serde_json::to_value(&configuration[1]).unwrap()["currentValue"],
+        "low"
+    );
+    threads.shutdown().await;
+}
+
+#[tokio::test]
+async fn configuration_changes_preserve_order_across_different_settings() {
+    let folder = tempfile::tempdir().unwrap();
+    let requests = folder.path().join("configuration-requests.jsonl");
+    let gate = folder.path().join("configuration-gate");
+    let mut agent = mock_agent();
+    for (key, value) in [("CONFIGURATION", "1"), ("RESPONSIVE_CONFIGURATION", "1")] {
+        agent.env.insert(key.into(), value.into());
+    }
+    add_configuration_gate(&mut agent, &gate);
+    agent.env.insert(
+        "CONFIGURATION_REQUEST_LOG".into(),
+        requests.to_string_lossy().into(),
+    );
+    let threads = std::sync::Arc::new(Threads::new(vec![agent]));
+    let draft = threads.create(folder.path()).unwrap();
+    threads.connect(draft.id).unwrap();
+    settle(&threads, draft.id).await;
+
+    let thinking = {
+        let threads = threads.clone();
+        tokio::spawn(async move {
+            threads
+                .set_configuration(
+                    draft.id,
+                    "opaque-thinking".into(),
+                    ThreadConfigurationValue::Boolean { value: false },
+                )
+                .await
+        })
+    };
+    wait_for_configuration_gate(&gate, 1, "request").await;
+    let model = {
+        let threads = threads.clone();
+        tokio::spawn(async move {
+            threads
+                .set_configuration(
+                    draft.id,
+                    "opaque-model".into(),
+                    ThreadConfigurationValue::Select {
+                        value: "model-b".into(),
+                    },
+                )
+                .await
+        })
+    };
+    wait_for_select_configuration(&threads, draft.id, "opaque-model", "model-b").await;
+    assert!(!gate.join("2.request.arrived").exists());
+    release_configuration_gate(&gate, 1, "request");
+    wait_for_configuration_gate(&gate, 2, "request").await;
+    release_configuration_gate(&gate, 2, "request");
+
+    thinking.await.unwrap().unwrap();
+    model.await.unwrap().unwrap();
+    let ids: Vec<_> = std::fs::read_to_string(requests)
+        .unwrap()
+        .lines()
+        .map(|line| {
+            serde_json::from_str::<serde_json::Value>(line).unwrap()["configId"]
+                .as_str()
+                .unwrap()
+                .to_owned()
+        })
+        .collect();
+    assert_eq!(ids, ["opaque-thinking", "opaque-model"]);
+    threads.shutdown().await;
+}
+
+#[tokio::test]
+async fn configuration_failure_rolls_back_without_interrupting_turn_or_queue() {
+    let folder = tempfile::tempdir().unwrap();
+    let requests = folder.path().join("configuration-requests.jsonl");
+    let gate = folder.path().join("configuration-gate");
+    let mut agent = mock_agent();
+    for (key, value) in [
+        ("CONFIGURATION", "1"),
+        ("RESPONSIVE_CONFIGURATION", "1"),
+        ("CONFIGURATION_FAIL_CONFIG", "opaque-thinking"),
+        ("FIXTURE_MODE", "cancel"),
+    ] {
+        agent.env.insert(key.into(), value.into());
+    }
+    add_configuration_gate(&mut agent, &gate);
+    agent.env.insert(
+        "CONFIGURATION_REQUEST_LOG".into(),
+        requests.to_string_lossy().into(),
+    );
+    let threads = std::sync::Arc::new(Threads::new(vec![agent]));
+    let draft = threads.create(folder.path()).unwrap();
+    threads.connect(draft.id).unwrap();
+    settle(&threads, draft.id).await;
+
+    let changing = {
+        let threads = threads.clone();
+        tokio::spawn(async move {
+            threads
+                .set_configuration(
+                    draft.id,
+                    "opaque-thinking".into(),
+                    ThreadConfigurationValue::Boolean { value: false },
+                )
+                .await
+        })
+    };
+    wait_for_configuration_gate(&gate, 1, "request").await;
+    threads.send_message(draft.id, "working".into()).unwrap();
+    threads.send_message(draft.id, "queued".into()).unwrap();
+    release_configuration_gate(&gate, 1, "request");
+
+    assert!(changing.await.unwrap().is_err());
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let thread = threads.get(draft.id).unwrap();
+            if thread.turns[0].response == "Started" {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+    let running = threads.get(draft.id).unwrap();
+    assert_eq!(running.status, ThreadStatus::Running);
+    assert_eq!(running.queued_messages[0].text, "queued");
+    assert_eq!(
+        serde_json::to_value(&running.configuration[2]).unwrap()["currentValue"],
+        true
+    );
+    threads.cancel_turn(draft.id, running.turns[0].id).unwrap();
+    settle(&threads, draft.id).await;
+    threads.shutdown().await;
+}
+
+#[tokio::test]
+async fn agent_snapshot_during_configuration_keeps_the_latest_valid_selection_visible() {
+    let folder = tempfile::tempdir().unwrap();
+    let gate = folder.path().join("configuration-gate");
+    let mut agent = mock_agent();
+    for (key, value) in [
+        ("CONFIGURATION", "1"),
+        ("RESPONSIVE_CONFIGURATION", "1"),
+        ("CONFIGURATION_UPDATE_WHILE_SET", "1"),
+    ] {
+        agent.env.insert(key.into(), value.into());
+    }
+    add_configuration_gate(&mut agent, &gate);
+    let threads = std::sync::Arc::new(Threads::new(vec![agent]));
+    let draft = threads.create(folder.path()).unwrap();
+    threads.connect(draft.id).unwrap();
+    settle(&threads, draft.id).await;
+    let mut updates = subscribe(&threads, draft.id);
+
+    let changing = {
+        let threads = threads.clone();
+        tokio::spawn(async move {
+            threads
+                .set_configuration(
+                    draft.id,
+                    "opaque-thinking".into(),
+                    ThreadConfigurationValue::Boolean { value: false },
+                )
+                .await
+        })
+    };
+    wait_for_configuration_gate(&gate, 1, "request").await;
+    release_configuration_gate(&gate, 1, "request");
+    wait_for_configuration_gate(&gate, 1, "update").await;
+    let mut selected_snapshots = 0;
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while selected_snapshots < 2 {
+            if let Some(thread) = updates.recv().await {
+                let value = serde_json::to_value(&thread.configuration[2]).unwrap()["currentValue"]
+                    .as_bool();
+                if selected_snapshots > 0 {
+                    assert_eq!(value, Some(false));
+                }
+                if value == Some(false) {
+                    selected_snapshots += 1;
+                }
+            }
+        }
+    })
+    .await
+    .unwrap();
+    release_configuration_gate(&gate, 1, "update");
+    changing.await.unwrap().unwrap();
+    assert!(selected_snapshots >= 2);
+    assert_eq!(
+        serde_json::to_value(&threads.get(draft.id).unwrap().configuration[2]).unwrap()
+            ["currentValue"],
+        false
+    );
+    threads.shutdown().await;
+}
+
+#[tokio::test]
+async fn configuration_requests_for_different_threads_progress_independently() {
+    let first_folder = tempfile::tempdir().unwrap();
+    let second_folder = tempfile::tempdir().unwrap();
+    let first_gate = first_folder.path().join("configuration-gate");
+    let second_gate = second_folder.path().join("configuration-gate");
+    let mut first_agent = mock_agent();
+    first_agent.id = "fixture-first".into();
+    first_agent.name = "Fixture first".into();
+    first_agent.env.insert("CONFIGURATION".into(), "1".into());
+    first_agent
+        .env
+        .insert("RESPONSIVE_CONFIGURATION".into(), "1".into());
+    add_configuration_gate(&mut first_agent, &first_gate);
+    let mut second_agent = mock_agent();
+    second_agent.id = "fixture-second".into();
+    second_agent.name = "Fixture second".into();
+    second_agent.env.insert("CONFIGURATION".into(), "1".into());
+    second_agent
+        .env
+        .insert("RESPONSIVE_CONFIGURATION".into(), "1".into());
+    add_configuration_gate(&mut second_agent, &second_gate);
+    let threads = std::sync::Arc::new(Threads::new(vec![first_agent, second_agent]));
+    let first = threads
+        .create_for_agent(first_folder.path(), "fixture-first")
+        .unwrap();
+    let second = threads
+        .create_for_agent(second_folder.path(), "fixture-second")
+        .unwrap();
+    for id in [first.id, second.id] {
+        threads.connect(id).unwrap();
+        settle(&threads, id).await;
+    }
+
+    let select = |id| {
+        let threads = threads.clone();
+        tokio::spawn(async move {
+            threads
+                .set_configuration(
+                    id,
+                    "opaque-thinking".into(),
+                    ThreadConfigurationValue::Boolean { value: false },
+                )
+                .await
+        })
+    };
+    let first_change = select(first.id);
+    let second_change = select(second.id);
+    tokio::join!(
+        wait_for_configuration_gate(&first_gate, 1, "request"),
+        wait_for_configuration_gate(&second_gate, 1, "request")
+    );
+    assert!(!first_change.is_finished());
+    assert!(!second_change.is_finished());
+    release_configuration_gate(&first_gate, 1, "request");
+    release_configuration_gate(&second_gate, 1, "request");
+    first_change.await.unwrap().unwrap();
+    second_change.await.unwrap().unwrap();
+    threads.shutdown().await;
+}
+
+#[tokio::test]
+async fn obsolete_configuration_result_cannot_overwrite_a_reconnected_thread() {
+    let folder = tempfile::tempdir().unwrap();
+    let gate = folder.path().join("configuration-gate");
+    let mut agent = mock_agent();
+    for (key, value) in [("CONFIGURATION", "1"), ("RESPONSIVE_CONFIGURATION", "1")] {
+        agent.env.insert(key.into(), value.into());
+    }
+    add_configuration_gate(&mut agent, &gate);
+    let replacement = agent.clone();
+    let threads = std::sync::Arc::new(Threads::new(vec![agent]));
+    let draft = threads.create(folder.path()).unwrap();
+    threads.connect(draft.id).unwrap();
+    settle(&threads, draft.id).await;
+
+    let changing = {
+        let threads = threads.clone();
+        tokio::spawn(async move {
+            threads
+                .set_configuration(
+                    draft.id,
+                    "opaque-thinking".into(),
+                    ThreadConfigurationValue::Boolean { value: false },
+                )
+                .await
+        })
+    };
+    wait_for_configuration_gate(&gate, 1, "request").await;
+    assert!(threads
+        .replace_agent_if_idle("fixture", || Ok(replacement))
+        .await
+        .unwrap());
+    threads.connect(draft.id).unwrap();
+    let reconnected = settle(&threads, draft.id).await;
+    assert_eq!(
+        serde_json::to_value(&reconnected.configuration[2]).unwrap()["currentValue"],
+        true
+    );
+    let _ = changing.await;
+    assert_eq!(
+        serde_json::to_value(&threads.get(draft.id).unwrap().configuration[2]).unwrap()
+            ["currentValue"],
+        true
+    );
     threads.shutdown().await;
 }
 

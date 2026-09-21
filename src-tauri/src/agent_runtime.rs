@@ -32,7 +32,7 @@ use agent_client_protocol::{
 };
 pub(crate) use process::ProcessGroup;
 use std::{
-    collections::HashMap,
+    collections::{HashMap, VecDeque},
     path::PathBuf,
     process::Stdio,
     sync::{
@@ -511,22 +511,23 @@ async fn run_session(
             Ok(Err(failure)) => return failure,
             Err(_) => return ConnectionFailure::TimedOut,
         };
+    let mut configuration_changes = Box::pin(run_configuration_changes(
+        connection.clone(),
+        remote.clone(),
+        updates.clone(),
+        session.configuration,
+    ));
     let mut next_prompt =
         updates.session_ready(remote.to_string(), thread_configuration(configuration));
     loop {
         let prompt = match next_prompt.take() {
             Some(prompt) => prompt,
-            None => loop {
-                tokio::select! {
-                    prompt = session.prompts.recv() => match prompt {
-                        Some(prompt) => break prompt,
-                        None => return ConnectionFailure::ConnectionClosed,
-                    },
-                    change = session.configuration.recv() => match change {
-                        Some(change) => apply_configuration(&connection, &remote, updates, change).await,
-                        None => return ConnectionFailure::ConnectionClosed,
-                    },
-                }
+            None => tokio::select! {
+                prompt = session.prompts.recv() => match prompt {
+                    Some(prompt) => prompt,
+                    None => return ConnectionFailure::ConnectionClosed,
+                },
+                failure = &mut configuration_changes => return failure,
             },
         };
         if let Ok(mut routes) = routes.lock() {
@@ -578,43 +579,115 @@ async fn run_session(
                         if let Err(error) = connection.send_notification(CancelNotification::new(remote.clone())) { return classify(error, ConnectionFailure::ConnectionClosed); }
                     }
                 }
-                change = session.configuration.recv() => match change {
-                    Some(change) => apply_configuration(&connection, &remote, updates, change).await,
-                    None => return ConnectionFailure::ConnectionClosed,
-                }
+                failure = &mut configuration_changes => return failure,
             }
         }
     }
 }
 
-async fn apply_configuration(
-    connection: &ConnectionTo<Agent>,
-    session: &SessionId,
-    updates: &RuntimeUpdates,
+async fn run_configuration_changes(
+    connection: ConnectionTo<Agent>,
+    session: SessionId,
+    updates: RuntimeUpdates,
+    mut changes: mpsc::UnboundedReceiver<ConfigurationChange>,
+) -> ConnectionFailure {
+    let mut pending = VecDeque::new();
+    loop {
+        let Some(change) = next_configuration_change(&mut changes, &mut pending).await else {
+            return ConnectionFailure::ConnectionClosed;
+        };
+        if !updates.prepare_configuration_change(
+            change.request_id,
+            &change.config_id,
+            &change.value,
+        ) {
+            let _ = change.complete.send(Ok(()));
+            continue;
+        }
+        let value = match &change.value {
+            ThreadConfigurationValue::Select { value } => {
+                SessionConfigOptionValue::value_id(value.clone())
+            }
+            ThreadConfigurationValue::Boolean { value } => {
+                SessionConfigOptionValue::boolean(*value)
+            }
+        };
+        let (finished, mut request) = oneshot::channel();
+        let result_updates = updates.clone();
+        let request_id = change.request_id;
+        let config_id = change.config_id.clone();
+        if let Err(error) = connection
+            .send_request(SetSessionConfigOptionRequest::new(
+                session.clone(),
+                change.config_id,
+                value,
+            ))
+            .on_receiving_result(async move |result| {
+                let completion = match result {
+                    Ok(response) => {
+                        result_updates.configuration_succeeded(
+                            request_id,
+                            &config_id,
+                            thread_configuration(response.config_options),
+                        );
+                        Ok(())
+                    }
+                    Err(_) => {
+                        if result_updates.configuration_failed(request_id, &config_id) {
+                            Err(ThreadError::NotReady(
+                                "스레드 설정을 변경할 수 없습니다.".into(),
+                            ))
+                        } else {
+                            Ok(())
+                        }
+                    }
+                };
+                let _ = change.complete.send(completion);
+                let _ = finished.send(());
+                Ok(())
+            })
+        {
+            return classify(error, ConnectionFailure::ConnectionClosed);
+        }
+        loop {
+            tokio::select! {
+                result = &mut request => match result {
+                    Ok(()) => break,
+                    Err(_) => return ConnectionFailure::ConnectionClosed,
+                },
+                incoming = changes.recv() => match incoming {
+                    Some(incoming) => queue_configuration_change(&mut pending, incoming),
+                    None => return ConnectionFailure::ConnectionClosed,
+                },
+            }
+        }
+    }
+}
+
+async fn next_configuration_change(
+    changes: &mut mpsc::UnboundedReceiver<ConfigurationChange>,
+    pending: &mut VecDeque<ConfigurationChange>,
+) -> Option<ConfigurationChange> {
+    match pending.pop_front() {
+        Some(change) => Some(change),
+        None => changes.recv().await,
+    }
+}
+
+fn queue_configuration_change(
+    pending: &mut VecDeque<ConfigurationChange>,
     change: ConfigurationChange,
 ) {
-    let value = match change.value {
-        ThreadConfigurationValue::Select { value } => SessionConfigOptionValue::value_id(value),
-        ThreadConfigurationValue::Boolean { value } => SessionConfigOptionValue::boolean(value),
-    };
-    let result = connection
-        .send_request(SetSessionConfigOptionRequest::new(
-            session.clone(),
-            change.config_id,
-            value,
-        ))
-        .block_task()
-        .await;
-    match result {
-        Ok(response) => {
-            updates.configuration_updated(thread_configuration(response.config_options));
-            let _ = change.complete.send(Ok(()));
+    if let Some(index) = pending
+        .iter()
+        .position(|pending| pending.config_id == change.config_id)
+    {
+        if let Some(replaced) = pending.remove(index) {
+            let _ = replaced.complete.send(Ok(()));
         }
-        Err(_) => {
-            let _ = change.complete.send(Err(ThreadError::NotReady(
-                "스레드 설정을 변경할 수 없습니다.".into(),
-            )));
-        }
+        pending.insert(index, change);
+    } else {
+        pending.push_back(change);
     }
 }
 

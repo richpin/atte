@@ -60,6 +60,58 @@ pub struct ThreadConfiguration {
     pub control: ThreadConfigurationControl,
 }
 
+impl ThreadConfiguration {
+    fn accepts(&self, value: &ThreadConfigurationValue) -> bool {
+        match (&self.control, value) {
+            (
+                ThreadConfigurationControl::Select { options, .. },
+                ThreadConfigurationValue::Select { value },
+            ) => match options {
+                ThreadConfigurationSelectOptions::Flat { options } => {
+                    options.iter().any(|choice| choice.value == *value)
+                }
+                ThreadConfigurationSelectOptions::Grouped { groups } => groups
+                    .iter()
+                    .flat_map(|group| &group.options)
+                    .any(|choice| choice.value == *value),
+            },
+            (
+                ThreadConfigurationControl::Boolean { .. },
+                ThreadConfigurationValue::Boolean { .. },
+            ) => true,
+            _ => false,
+        }
+    }
+
+    fn has_value(&self, value: &ThreadConfigurationValue) -> bool {
+        match (&self.control, value) {
+            (
+                ThreadConfigurationControl::Select { current_value, .. },
+                ThreadConfigurationValue::Select { value },
+            ) => current_value == value,
+            (
+                ThreadConfigurationControl::Boolean { current_value },
+                ThreadConfigurationValue::Boolean { value },
+            ) => current_value == value,
+            _ => false,
+        }
+    }
+
+    fn set_value(&mut self, value: &ThreadConfigurationValue) {
+        match (&mut self.control, value) {
+            (
+                ThreadConfigurationControl::Select { current_value, .. },
+                ThreadConfigurationValue::Select { value },
+            ) => current_value.clone_from(value),
+            (
+                ThreadConfigurationControl::Boolean { current_value },
+                ThreadConfigurationValue::Boolean { value },
+            ) => *current_value = *value,
+            _ => {}
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 #[serde(tag = "type", rename_all = "camelCase")]
 /// The interaction kind and confirmed value for an agent configuration option.
@@ -404,6 +456,8 @@ impl Threads {
                     state: Arc::new(Mutex::new(ThreadState {
                         list: list.clone(),
                         thread,
+                        confirmed_configuration: Vec::new(),
+                        desired_configuration: HashMap::new(),
                         generation: 0,
                         subscribers: Vec::new(),
                         permissions: HashMap::new(),
@@ -539,7 +593,7 @@ impl Threads {
                 if current.thread.agent_id == id {
                     current.generation += 1;
                     current.thread.status = ThreadStatus::Disconnected;
-                    current.thread.configuration.clear();
+                    current.clear_configuration();
                     current.clear_permissions();
                     current.publish();
                     entry.runtime = None;
@@ -782,7 +836,7 @@ impl Threads {
                         | ThreadStatus::Cancelling
                 );
                 current.thread.status = ThreadStatus::Failed;
-                current.thread.configuration.clear();
+                current.clear_configuration();
                 current.thread.failure = Some(ConnectionFailure::AgentRemoved);
                 current.thread.authentication = AuthenticationStatus::Unknown;
                 current.clear_permissions();
@@ -883,6 +937,8 @@ impl Threads {
                 state: Arc::new(Mutex::new(ThreadState {
                     list: self.list.clone(),
                     thread: draft.clone(),
+                    confirmed_configuration: Vec::new(),
+                    desired_configuration: HashMap::new(),
                     generation: 0,
                     subscribers: Vec::new(),
                     permissions: HashMap::new(),
@@ -1052,6 +1108,7 @@ impl Threads {
         thread.configuration.clear();
         current.generation += 1;
         current.thread = thread;
+        current.clear_configuration();
         current.publish();
         let thread = current.thread.clone();
         let updates = RuntimeUpdates {
@@ -1183,21 +1240,22 @@ impl Threads {
     ///
     /// # Errors
     ///
-    /// Returns an error when the thread does not exist, is not connected, the runtime is
-    /// unavailable, or the agent rejects the requested configuration value.
+    /// Returns an error when the thread or configuration value does not exist, the thread is not
+    /// connected, the current runtime becomes unavailable, or the agent rejects the requested
+    /// value. A completion dropped by an obsolete runtime generation is ignored.
     pub async fn set_configuration(
         &self,
         id: Uuid,
         config_id: String,
         value: ThreadConfigurationValue,
     ) -> Result<(), ThreadError> {
-        let response = {
+        let (response, generation) = {
             let state = self.lock()?;
             if state.closed {
                 return Err(unavailable());
             }
             let entry = state.entries.get(&id).ok_or_else(not_found)?;
-            let current = entry.state.lock().map_err(|_| unavailable())?;
+            let mut current = entry.state.lock().map_err(|_| unavailable())?;
             if !matches!(
                 current.thread.status,
                 ThreadStatus::SessionReady
@@ -1209,22 +1267,69 @@ impl Threads {
                     "연결된 스레드에서 설정을 변경해주세요.".into(),
                 ));
             }
-            let (complete, response) = oneshot::channel();
-            entry
+            let configuration_requests = entry
                 .runtime
                 .as_ref()
                 .ok_or_else(unavailable)?
                 .inputs
                 .configuration
-                .send(ConfigurationChange {
-                    config_id,
-                    value,
-                    complete,
-                })
-                .map_err(|_| unavailable())?;
-            response
+                .clone();
+            let configuration = current
+                .thread
+                .configuration
+                .iter_mut()
+                .find(|configuration| configuration.id == config_id)
+                .ok_or_else(|| ThreadError::NotReady("사용할 수 없는 스레드 설정입니다.".into()))?;
+            if configuration.has_value(&value) {
+                return Ok(());
+            }
+            if !configuration.accepts(&value) {
+                return Err(ThreadError::NotReady(
+                    "사용할 수 없는 스레드 설정값입니다.".into(),
+                ));
+            }
+            configuration.set_value(&value);
+            let request_id = Uuid::new_v4();
+            current.desired_configuration.insert(
+                config_id.clone(),
+                DesiredConfiguration {
+                    request_id,
+                    value: value.clone(),
+                },
+            );
+            current.publish();
+            let (complete, response) = oneshot::channel();
+            let send = configuration_requests.send(ConfigurationChange {
+                request_id,
+                config_id,
+                value,
+                complete,
+            });
+            if send.is_err() {
+                current
+                    .desired_configuration
+                    .retain(|_, desired| desired.request_id != request_id);
+                current.reconcile_configuration();
+                current.publish();
+                return Err(unavailable());
+            }
+            (response, current.generation)
         };
-        response.await.map_err(|_| unavailable())?
+        match response.await {
+            Ok(result) => result,
+            Err(_) => {
+                let state = self.lock()?;
+                let Some(entry) = state.entries.get(&id) else {
+                    return Ok(());
+                };
+                let current = entry.state.lock().map_err(|_| unavailable())?;
+                if current.generation == generation {
+                    Err(unavailable())
+                } else {
+                    Ok(())
+                }
+            }
+        }
     }
 
     /// Deletes only input that has not yet been removed for dispatch.
@@ -1485,6 +1590,7 @@ pub(crate) struct Prompt {
 }
 
 pub(crate) struct ConfigurationChange {
+    pub request_id: Uuid,
     pub config_id: String,
     pub value: ThreadConfigurationValue,
     pub complete: oneshot::Sender<Result<(), ThreadError>>,
@@ -1494,11 +1600,19 @@ struct ThreadState {
     list: Arc<Mutex<list::ThreadList>>,
     store: Option<Arc<Store>>,
     thread: Thread,
+    confirmed_configuration: Vec<ThreadConfiguration>,
+    desired_configuration: HashMap<String, DesiredConfiguration>,
     generation: u64,
     subscribers: Vec<mpsc::UnboundedSender<ThreadUpdate>>,
     permissions: HashMap<Uuid, oneshot::Sender<String>>,
     draining: bool,
     dispatch_queue_on_ready: bool,
+}
+
+#[derive(Clone)]
+struct DesiredConfiguration {
+    request_id: Uuid,
+    value: ThreadConfigurationValue,
 }
 
 impl ThreadState {
@@ -1512,6 +1626,34 @@ impl ThreadState {
         self.thread.last_prompt_at = next_prompt_at();
         self.publish();
         Ok(())
+    }
+
+    fn clear_configuration(&mut self) {
+        self.thread.configuration.clear();
+        self.confirmed_configuration.clear();
+        self.desired_configuration.clear();
+    }
+
+    fn reconcile_configuration(&mut self) {
+        self.desired_configuration.retain(|id, desired| {
+            self.confirmed_configuration
+                .iter()
+                .find(|configuration| configuration.id == *id)
+                .is_some_and(|configuration| configuration.accepts(&desired.value))
+        });
+        self.thread
+            .configuration
+            .clone_from(&self.confirmed_configuration);
+        for (id, desired) in &self.desired_configuration {
+            if let Some(configuration) = self
+                .thread
+                .configuration
+                .iter_mut()
+                .find(|configuration| configuration.id == *id)
+            {
+                configuration.set_value(&desired.value);
+            }
+        }
     }
 
     fn save_queue(&mut self, queue: Vec<QueuedMessage>) -> Result<(), ThreadError> {
@@ -1634,7 +1776,9 @@ impl RuntimeUpdates {
         }
         state.thread.remote_session_id = Some(remote_session_id);
         state.thread.status = ThreadStatus::SessionReady;
-        state.thread.configuration = configuration;
+        state.confirmed_configuration = configuration;
+        state.desired_configuration.clear();
+        state.reconcile_configuration();
         let next = state
             .dispatch_queue_on_ready
             .then(|| state.take_next_queued_prompt())
@@ -1645,7 +1789,80 @@ impl RuntimeUpdates {
     }
 
     pub fn configuration_updated(&self, configuration: Vec<ThreadConfiguration>) {
-        self.modify(|thread| thread.configuration = configuration);
+        self.modify_state(|state| {
+            state.confirmed_configuration = configuration;
+            state.reconcile_configuration();
+        });
+    }
+
+    pub fn prepare_configuration_change(
+        &self,
+        request_id: Uuid,
+        config_id: &str,
+        value: &ThreadConfigurationValue,
+    ) -> bool {
+        let Ok(mut state) = self.state.lock() else {
+            return false;
+        };
+        if state.generation != self.generation {
+            return false;
+        }
+        let is_current = state
+            .desired_configuration
+            .get(config_id)
+            .is_some_and(|desired| desired.request_id == request_id);
+        let should_send = is_current
+            && state
+                .confirmed_configuration
+                .iter()
+                .find(|configuration| configuration.id == config_id)
+                .is_some_and(|configuration| {
+                    configuration.accepts(value) && !configuration.has_value(value)
+                });
+        if is_current && !should_send {
+            state.desired_configuration.remove(config_id);
+            state.reconcile_configuration();
+            state.publish();
+        }
+        should_send
+    }
+
+    pub fn configuration_failed(&self, request_id: Uuid, config_id: &str) -> bool {
+        let Ok(mut state) = self.state.lock() else {
+            return false;
+        };
+        if state.generation != self.generation {
+            return false;
+        }
+        if state
+            .desired_configuration
+            .get(config_id)
+            .is_some_and(|desired| desired.request_id == request_id)
+        {
+            state.desired_configuration.remove(config_id);
+        }
+        state.reconcile_configuration();
+        state.publish();
+        true
+    }
+
+    pub fn configuration_succeeded(
+        &self,
+        request_id: Uuid,
+        config_id: &str,
+        configuration: Vec<ThreadConfiguration>,
+    ) {
+        self.modify_state(|state| {
+            state.confirmed_configuration = configuration;
+            if state
+                .desired_configuration
+                .get(config_id)
+                .is_some_and(|desired| desired.request_id == request_id)
+            {
+                state.desired_configuration.remove(config_id);
+            }
+            state.reconcile_configuration();
+        });
     }
 
     pub fn history_restored(&self, turns: Vec<Turn>) {
@@ -1669,28 +1886,28 @@ impl RuntimeUpdates {
         if failure == ConnectionFailure::AuthenticationRequired {
             self.record_authentication(AuthenticationStatus::Required);
         }
-        self.modify(|thread| {
-            thread.interrupted |= matches!(
-                thread.status,
+        self.modify_state(|state| {
+            state.thread.interrupted |= matches!(
+                state.thread.status,
                 ThreadStatus::Running | ThreadStatus::WaitingForApproval | ThreadStatus::Cancelling
             );
-            thread.status = ThreadStatus::Failed;
-            thread.configuration.clear();
+            state.thread.status = ThreadStatus::Failed;
+            state.clear_configuration();
             if failure == ConnectionFailure::AuthenticationRequired {
-                thread.authentication = AuthenticationStatus::Required;
+                state.thread.authentication = AuthenticationStatus::Required;
             }
-            thread.failure = Some(failure);
+            state.thread.failure = Some(failure);
         });
     }
 
     pub fn connection_closed(&self) {
-        self.modify(|thread| {
-            thread.interrupted |= matches!(
-                thread.status,
+        self.modify_state(|state| {
+            state.thread.interrupted |= matches!(
+                state.thread.status,
                 ThreadStatus::Running | ThreadStatus::WaitingForApproval | ThreadStatus::Cancelling
             );
-            thread.status = ThreadStatus::Disconnected;
-            thread.configuration.clear();
+            state.thread.status = ThreadStatus::Disconnected;
+            state.clear_configuration();
         });
     }
 
@@ -1795,13 +2012,17 @@ impl RuntimeUpdates {
     }
 
     fn modify(&self, update: impl FnOnce(&mut Thread)) {
+        self.modify_state(|state| update(&mut state.thread));
+    }
+
+    fn modify_state(&self, update: impl FnOnce(&mut ThreadState)) {
         let Ok(mut state) = self.state.lock() else {
             return;
         };
         if state.generation != self.generation {
             return;
         }
-        update(&mut state.thread);
+        update(&mut state);
         if !matches!(
             state.thread.status,
             ThreadStatus::Running | ThreadStatus::WaitingForApproval

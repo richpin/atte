@@ -74,6 +74,38 @@ fn configuration() -> Value {
     ])
 }
 
+fn apply_configuration_value(options: &mut Value, config_id: &str, value: &Value) {
+    let Some(option) = options
+        .as_array_mut()
+        .and_then(|options| options.iter_mut().find(|option| option["id"] == config_id))
+    else {
+        return;
+    };
+    option["currentValue"] = value.clone();
+    if config_id == "opaque-model" && value == "model-b" {
+        options[1]["currentValue"] = json!("low");
+        options[1]["options"] = json!([{
+            "group": "normal",
+            "name": "Normal",
+            "options": [{"value": "low", "name": "Low"}]
+        }]);
+    }
+}
+
+fn wait_at_configuration_gate(request: usize, stage: &str) -> io::Result<()> {
+    let Some(root) = env::var_os("CONFIGURATION_GATE") else {
+        return Ok(());
+    };
+    let root = std::path::PathBuf::from(root);
+    fs::create_dir_all(&root)?;
+    fs::write(root.join(format!("{request}.{stage}.arrived")), [])?;
+    let release = root.join(format!("{request}.{stage}.release"));
+    while !release.exists() {
+        thread::sleep(Duration::from_millis(5));
+    }
+    Ok(())
+}
+
 // Also reap the descendant on normal EOF; the cleanup test kills the process group.
 struct Descendant(Child);
 
@@ -110,6 +142,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     let mode = env::var("FIXTURE_MODE").unwrap_or_else(|_| "ready".into());
     let supports_configuration = env::var_os("CONFIGURATION").is_some();
+    let responsive_configuration = env::var_os("RESPONSIVE_CONFIGURATION").is_some();
+    let mut current_configuration = configuration();
     if mode == "concurrent" {
         return concurrent::run();
     }
@@ -137,6 +171,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut output = io::stdout().lock();
     let mut sessions = 0;
     let mut prompts = 0;
+    let mut configuration_requests = 0;
     let mut history: Vec<Value> = env::var_os("SESSION_FILE")
         .and_then(|path| fs::read(path).ok())
         .and_then(|bytes| serde_json::from_slice(&bytes).ok())
@@ -297,14 +332,48 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             "session/set_config_option" => {
                 assert!(supports_configuration);
                 assert_eq!(request["params"]["sessionId"], "remote-1");
-                assert_eq!(request["params"]["configId"], "opaque-thinking");
-                assert_eq!(request["params"]["type"], "boolean");
-                assert_eq!(request["params"]["value"], false);
-                let mut options = configuration();
-                if env::var_os("CONFIGURATION_UPDATE_OTHER").is_none() {
-                    options[2]["currentValue"] = json!(false);
+                configuration_requests += 1;
+                if let Some(path) = env::var_os("CONFIGURATION_REQUEST_LOG") {
+                    writeln!(
+                        fs::OpenOptions::new()
+                            .create(true)
+                            .append(true)
+                            .open(path)?,
+                        "{}",
+                        serde_json::to_string(&request["params"])?
+                    )?;
                 }
-                json!({"configOptions": options})
+                wait_at_configuration_gate(configuration_requests, "request")?;
+                if env::var_os("CONFIGURATION_UPDATE_WHILE_SET").is_some() {
+                    send(
+                        &mut output,
+                        json!({"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"remote-1","update":{"sessionUpdate":"config_option_update","configOptions":current_configuration.clone()}}}),
+                    )?;
+                    wait_at_configuration_gate(configuration_requests, "update")?;
+                }
+                if responsive_configuration {
+                    let config_id = request["params"]["configId"]
+                        .as_str()
+                        .ok_or("missing config ID")?;
+                    apply_configuration_value(
+                        &mut current_configuration,
+                        config_id,
+                        &request["params"]["value"],
+                    );
+                    if env::var("CONFIGURATION_FAIL_CONFIG").as_deref() == Ok(config_id) {
+                        error = Some(json!({"code": -32603, "message": "configuration rejected"}));
+                    }
+                    json!({"configOptions": current_configuration.clone()})
+                } else {
+                    assert_eq!(request["params"]["configId"], "opaque-thinking");
+                    assert_eq!(request["params"]["type"], "boolean");
+                    assert_eq!(request["params"]["value"], false);
+                    let mut options = configuration();
+                    if env::var_os("CONFIGURATION_UPDATE_OTHER").is_none() {
+                        options[2]["currentValue"] = json!(false);
+                    }
+                    json!({"configOptions": options})
+                }
             }
             "session/prompt" => {
                 prompts += 1;

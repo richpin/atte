@@ -237,7 +237,14 @@ it("groups threads by folder, collapses projects and creates within the selected
 });
 
 it("presents agent configuration and reconciles it from the thread subscription", async () => {
-  const saved = {
+  let saved: Record<string, unknown> & {
+    configuration: Array<
+      Record<string, unknown> & {
+        id: string;
+        currentValue: string | boolean;
+      }
+    >;
+  } = {
     id: "configured",
     title: "Configured thread",
     workingFolder: "/work/project",
@@ -335,8 +342,33 @@ it("presents agent configuration and reconciles it from the thread subscription"
       },
     ],
   };
-  requests.mockImplementation(async (command) => {
+  let completeModelChange!: () => void;
+  const modelChange = new Promise<void>((resolve) => {
+    completeModelChange = resolve;
+  });
+  requests.mockImplementation(async (command, args) => {
     if (command === "subscription_snapshot") return saved;
+    if (command === "set_thread_configuration") {
+      const { configId, value } = args as {
+        configId: string;
+        value: { type: "select" | "boolean"; value: string | boolean };
+      };
+      const optimistic = {
+        ...saved,
+        configuration: saved.configuration.map((configuration) =>
+          configuration.id === configId
+            ? { ...configuration, currentValue: value.value }
+            : configuration,
+        ),
+      };
+      receive(optimistic);
+      if (configId === "opaque-model") {
+        saved = optimistic;
+        return modelChange;
+      }
+      receive(saved);
+      throw new Error("configuration rejected");
+    }
     return undefined;
   });
   const original = vi.mocked(invoke).getMockImplementation();
@@ -381,15 +413,34 @@ it("presents agent configuration and reconciles it from the thread subscription"
     configId: "opaque-model",
     value: { type: "select", value: "model-b" },
   });
-  expect(screen.getByRole("combobox", { name: "Model: Model A" })).toBeTruthy();
-
-  receive({
-    ...saved,
-    configuration: [{ ...saved.configuration[0], currentValue: "model-b" }],
-  });
   expect(
     await screen.findByRole("combobox", { name: "Model: Model B" }),
   ).toBeTruthy();
+  expect(
+    (screen.getByRole("textbox", { name: "메시지" }) as HTMLTextAreaElement)
+      .disabled,
+  ).toBe(false);
+  await userEvent.click(
+    screen.getByRole("switch", { name: "Planning mode: 켜짐" }),
+  );
+  expect(invoke).toHaveBeenCalledWith("set_thread_configuration", {
+    id: "configured",
+    configId: "opaque-mode",
+    value: { type: "boolean", value: false },
+  });
+  expect((await screen.findByRole("alert")).textContent).toContain(
+    "configuration rejected",
+  );
+  expect(
+    screen.getByRole("switch", { name: "Planning mode: 켜짐" }),
+  ).toBeTruthy();
+  const message = screen.getByRole("textbox", { name: "메시지" });
+  await userEvent.type(message, "continue{Enter}");
+  expect(invoke).toHaveBeenCalledWith("send_message", {
+    id: "configured",
+    text: "continue",
+  });
+  completeModelChange();
 
   receive({ ...saved, status: "connecting", configuration: [] });
   await waitFor(() =>
@@ -400,6 +451,140 @@ it("presents agent configuration and reconciles it from the thread subscription"
   expect(
     await screen.findByRole("switch", { name: "Planning mode: 켜짐" }),
   ).toBeTruthy();
+});
+
+it("keeps cancellation and permission responses usable during configuration reconciliation", async () => {
+  const saved = {
+    id: "active-configured",
+    title: "Active configured thread",
+    workingFolder: "/work/project",
+    agentId: "codex",
+    status: "running",
+    remoteSessionId: "remote-1",
+    authentication: "authenticated",
+    turns: [
+      {
+        id: "turn-1",
+        message: "work",
+        response: "working",
+        stopReason: null,
+      },
+    ],
+    permissions: [],
+    queuedMessages: [],
+    configuration: [
+      {
+        id: "opaque-model",
+        name: "Model",
+        description: null,
+        category: "model",
+        type: "select",
+        currentValue: "model-a",
+        options: {
+          type: "flat",
+          options: [
+            { value: "model-a", name: "Model A", description: null },
+            { value: "model-b", name: "Model B", description: null },
+          ],
+        },
+      },
+      {
+        id: "opaque-effort",
+        name: "Reasoning effort",
+        description: null,
+        category: "thought_level",
+        type: "select",
+        currentValue: "high",
+        options: {
+          type: "flat",
+          options: [
+            { value: "medium", name: "Medium", description: null },
+            { value: "high", name: "High", description: null },
+          ],
+        },
+      },
+    ],
+  };
+  let finishConfiguration!: () => void;
+  const configurationRequest = new Promise<void>((resolve) => {
+    finishConfiguration = resolve;
+  });
+  requests.mockImplementation(async (command) => {
+    if (command === "subscription_snapshot") return saved;
+    if (command === "set_thread_configuration") {
+      receive({
+        ...saved,
+        configuration: [
+          { ...saved.configuration[0], currentValue: "model-b" },
+          saved.configuration[1],
+        ],
+      });
+      return configurationRequest;
+    }
+    return undefined;
+  });
+  const original = vi.mocked(invoke).getMockImplementation();
+  vi.mocked(invoke).mockImplementation(async (command, args) => {
+    if (command === "list_threads") return [saved];
+    return original?.(command, args);
+  });
+  render(() => <App />);
+  await userEvent.click(
+    await screen.findByRole("button", {
+      name: /^Active configured thread(?! 메뉴)/,
+    }),
+  );
+
+  await userEvent.selectOptions(
+    screen.getByRole("combobox", { name: "Model: Model A" }),
+    "model-b",
+  );
+  expect(
+    await screen.findByRole("combobox", { name: "Model: Model B" }),
+  ).toBeTruthy();
+  await userEvent.click(screen.getByRole("button", { name: "현재 작업 중단" }));
+  expect(invoke).toHaveBeenCalledWith("cancel_turn", {
+    id: "active-configured",
+    turn: "turn-1",
+  });
+
+  const waiting = {
+    ...saved,
+    status: "waitingForApproval",
+    permissions: [
+      {
+        id: "permission-1",
+        title: "Write file",
+        details: "fixture.txt",
+        options: [{ id: "allow", name: "Allow once" }],
+      },
+    ],
+    configuration: [
+      { ...saved.configuration[0], currentValue: "model-b" },
+      {
+        ...saved.configuration[1],
+        currentValue: "low",
+        options: {
+          type: "flat",
+          options: [{ value: "low", name: "Low", description: null }],
+        },
+      },
+    ],
+  };
+  receive(waiting);
+  await userEvent.click(
+    await screen.findByRole("button", { name: "Allow once" }),
+  );
+  expect(invoke).toHaveBeenCalledWith("answer_permission", {
+    id: "active-configured",
+    request: "permission-1",
+    option: "allow",
+  });
+  expect(
+    screen.getByRole("combobox", { name: "Reasoning effort: Low" }),
+  ).toBeTruthy();
+  expect(screen.queryByRole("option", { name: "High" })).toBeNull();
+  finishConfiguration();
 });
 
 it("opens the same delete action from the row menu and right click, then cancels safely", async () => {

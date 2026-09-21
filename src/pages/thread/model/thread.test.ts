@@ -240,6 +240,59 @@ it("changes thread configuration through a command and displays only subscriptio
   expect(model.thread()?.configuration[0].currentValue).toBe("model-b");
 });
 
+it("clears an earlier configuration error when a later selection succeeds", async () => {
+  const first = deferred<void>();
+  const second = deferred<void>();
+  let attempts = 0;
+  commands.set("set_thread_configuration", () =>
+    attempts++ === 0 ? first.promise : second.promise,
+  );
+  const model = setup();
+  await open(model, "A");
+
+  const failed = model.configure("opaque-thinking", {
+    type: "boolean",
+    value: false,
+  });
+  first.reject(new Error("rejected"));
+  await failed;
+  expect(model.error()).toBe("rejected");
+  const succeeded = model.configure("opaque-thinking", {
+    type: "boolean",
+    value: true,
+  });
+  expect(model.error()).toBe("rejected");
+  second.resolve();
+  await succeeded;
+  expect(model.error()).toBeUndefined();
+});
+
+it("does not clear a newer configuration error when an older selection finishes", async () => {
+  const older = deferred<void>();
+  const newer = deferred<void>();
+  let attempts = 0;
+  commands.set("set_thread_configuration", () =>
+    attempts++ === 0 ? older.promise : newer.promise,
+  );
+  const model = setup();
+  await open(model, "A");
+
+  const oldSelection = model.configure("opaque-thinking", {
+    type: "boolean",
+    value: false,
+  });
+  const newSelection = model.configure("opaque-thinking", {
+    type: "boolean",
+    value: true,
+  });
+  newer.reject(new Error("latest rejected"));
+  await newSelection;
+  expect(model.error()).toBe("latest rejected");
+  older.resolve();
+  await oldSelection;
+  expect(model.error()).toBe("latest rejected");
+});
+
 it("keeps the draft when sending fails", async () => {
   commands.set("send_message", async () => {
     throw new Error("failed");
@@ -313,7 +366,17 @@ it("removes the draft when its thread is deleted", async () => {
 
 it("preserves the snapshot and blocks every mutation while retrying", async () => {
   const model = setup();
-  await open(model, "A", running("A"));
+  const configuration = [
+    {
+      id: "opaque-thinking",
+      name: "Thinking",
+      description: null,
+      category: null,
+      type: "boolean" as const,
+      currentValue: true,
+    },
+  ];
+  await open(model, "A", { ...running("A"), configuration });
   stream("A")({
     kind: "textDelta",
     threadId: "A",
@@ -327,6 +390,7 @@ it("preserves the snapshot and blocks every mutation while retrying", async () =
     model.cancel(),
     model.answer("request", "allow"),
     model.deleteQueued("queued"),
+    model.configure("opaque-thinking", { type: "boolean", value: false }),
   ]);
   expect(model.thread()?.id).toBe("A");
   expect(model.actionsEnabled()).toBe(false);
@@ -337,6 +401,7 @@ it("preserves the snapshot and blocks every mutation while retrying", async () =
     "cancel_turn",
     "answer_permission",
     "delete_queued_message",
+    "set_thread_configuration",
   ]) {
     expect(invoke).not.toHaveBeenCalledWith(command, expect.anything());
   }
