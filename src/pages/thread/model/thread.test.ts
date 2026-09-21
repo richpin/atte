@@ -34,7 +34,7 @@ function thread(id: string, changes: Partial<Thread> = {}): Thread {
     interrupted: false,
     storageError: null,
     status: "sessionReady",
-    remoteSessionId: id,
+    sessionId: id,
     authentication: "authenticated",
     failure: null,
     turns: [],

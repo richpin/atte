@@ -15,7 +15,38 @@ CREATE TABLE app_metadata (
 -- Unsent input belongs to the thread; array order is FIFO.
 CREATE TABLE threads (
     id TEXT PRIMARY KEY NOT NULL,
-    metadata TEXT NOT NULL,
+    title TEXT NOT NULL,
+    working_folder TEXT NOT NULL,
+    agent_id TEXT NOT NULL,
+    session_id TEXT,
+    created_at INTEGER NOT NULL CHECK (created_at >= 0),
+    updated_at INTEGER NOT NULL CHECK (updated_at >= 0),
+    last_prompt_at INTEGER NOT NULL CHECK (last_prompt_at >= 0),
+    status TEXT NOT NULL CHECK (status IN (
+        'disconnected',
+        'connecting',
+        'sessionReady',
+        'running',
+        'waitingForApproval',
+        'cancelling',
+        'failed'
+    )),
+    failure TEXT CHECK (failure IS NULL OR failure IN (
+        'executableNotFound',
+        'launchFailed',
+        'initializationFailed',
+        'sessionCreationFailed',
+        'authenticationRequired',
+        'processExited',
+        'connectionClosed',
+        'timedOut',
+        'promptFailed',
+        'agentRemoved',
+        'resumptionUnsupported',
+        'sessionRestorationFailed'
+    )),
+    interrupted INTEGER NOT NULL CHECK (interrupted IN (0, 1)),
     queued_messages TEXT NOT NULL DEFAULT '[]'
+        CHECK (json_valid(queued_messages) AND json_type(queued_messages) = 'array')
 ) STRICT;
 PRAGMA user_version = 1;

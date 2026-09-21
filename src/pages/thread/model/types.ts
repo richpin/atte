@@ -30,7 +30,7 @@ export interface Thread {
     | "waitingForApproval"
     | "cancelling"
     | "failed";
-  remoteSessionId: string | null;
+  sessionId: string | null;
   authentication: "unknown" | "required" | "authenticated";
   failure: ConnectionFailure | null;
   turns: Turn[];
@@ -90,7 +90,7 @@ export type ThreadMetadata = Pick<
   | "workingFolder"
   | "agentId"
   | "status"
-  | "remoteSessionId"
+  | "sessionId"
   | "createdAt"
   | "updatedAt"
   | "lastPromptAt"

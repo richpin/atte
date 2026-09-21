@@ -119,19 +119,10 @@ fn permanently_deletes_a_restored_remote_session_without_an_installed_agent() {
     let draft = original.create(root.path()).unwrap();
     drop(original);
     let database = rusqlite::Connection::open(&path).unwrap();
-    let metadata: String = database
-        .query_row(
-            "SELECT metadata FROM threads WHERE id=?1",
-            [draft.id.to_string()],
-            |row| row.get(0),
-        )
-        .unwrap();
-    let mut metadata: serde_json::Value = serde_json::from_str(&metadata).unwrap();
-    metadata["remoteSessionId"] = serde_json::json!("remote");
     database
         .execute(
-            "UPDATE threads SET metadata=?2 WHERE id=?1",
-            rusqlite::params![draft.id.to_string(), metadata.to_string()],
+            "UPDATE threads SET session_id=?2 WHERE id=?1",
+            rusqlite::params![draft.id.to_string(), "remote"],
         )
         .unwrap();
     let restored = Threads::with_store(
@@ -151,6 +142,40 @@ fn permanently_deletes_a_restored_remote_session_without_an_installed_agent() {
         )
         .unwrap();
     assert_eq!(rows, 0);
+}
+
+#[test]
+fn stores_thread_metadata_in_relational_columns() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("atte.sqlite");
+    let store = std::sync::Arc::new(atte_lib::storage::Store::open(&path).unwrap());
+    let threads = Threads::with_store(vec![atte_lib::agent::prepared_codex()], store).unwrap();
+    threads.create(root.path()).unwrap();
+    let database = rusqlite::Connection::open(&path).unwrap();
+    let mut statement = database.prepare("PRAGMA table_info(threads)").unwrap();
+    let columns = statement
+        .query_map([], |row| row.get::<_, String>(1))
+        .unwrap()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
+
+    assert_eq!(
+        columns,
+        [
+            "id",
+            "title",
+            "working_folder",
+            "agent_id",
+            "session_id",
+            "created_at",
+            "updated_at",
+            "last_prompt_at",
+            "status",
+            "failure",
+            "interrupted",
+            "queued_messages",
+        ]
+    );
 }
 
 #[test]

@@ -256,7 +256,7 @@ async fn shared_connection_isolates_sessions_permissions_and_cancellation() {
     settle(&threads, first.id).await;
     threads.connect(second.id).unwrap();
     let ready = settle(&threads, second.id).await;
-    assert_eq!(ready.remote_session_id.as_deref(), Some("remote-2"));
+    assert_eq!(ready.session_id.as_deref(), Some("remote-2"));
     threads.send_message(first.id, "approval".into()).unwrap();
     let mut stream = subscribe(&threads, first.id);
     let waiting = tokio::time::timeout(Duration::from_secs(5), async {
@@ -1015,10 +1015,7 @@ async fn restores_agent_history_after_restart_without_persisting_a_transcript() 
     drop(threads);
     let restored = Threads::with_store(vec![agent], store).unwrap();
     assert!(restored.get(draft.id).unwrap().turns.is_empty());
-    assert_eq!(
-        restored.list().unwrap()[0].remote_session_id,
-        original.remote_session_id
-    );
+    assert_eq!(restored.list().unwrap()[0].session_id, original.session_id);
     restored.connect(draft.id).unwrap();
     restored.connect(draft.id).unwrap();
     let loaded = settle(&restored, draft.id).await;
@@ -1098,7 +1095,7 @@ async fn failed_restoration_keeps_the_reference_and_never_exposes_partial_replay
         restored.connect(draft.id).unwrap();
         let failed = settle(&restored, draft.id).await;
         assert_eq!(failed.failure, Some(failure), "{mode}");
-        assert_eq!(failed.remote_session_id.as_deref(), Some("remote-1"));
+        assert_eq!(failed.session_id.as_deref(), Some("remote-1"));
         assert!(failed.turns.is_empty());
         assert!(failed.permissions.is_empty());
         agent.env.remove("FIXTURE_MODE");
@@ -1190,7 +1187,7 @@ async fn missing_agent_keeps_the_session_reference_and_can_be_reinstalled_for_ex
     restored.connect(draft.id).unwrap();
     let ready = settle(&restored, draft.id).await;
     assert_eq!(ready.status, ThreadStatus::SessionReady);
-    assert_eq!(ready.remote_session_id.as_deref(), Some("remote-1"));
+    assert_eq!(ready.session_id.as_deref(), Some("remote-1"));
     restored.shutdown().await;
 }
 
@@ -1273,7 +1270,7 @@ async fn real_codex_restores_history_and_context_after_process_and_core_restart(
     restored.connect(draft.id).unwrap();
     let loaded = settle(&restored, draft.id).await;
     assert_eq!(loaded.status, ThreadStatus::SessionReady, "{loaded:?}");
-    assert_eq!(loaded.remote_session_id, original.remote_session_id);
+    assert_eq!(loaded.session_id, original.session_id);
     assert!(loaded
         .turns
         .iter()
@@ -1332,7 +1329,7 @@ async fn cancels_only_the_active_turn_and_continues_the_same_session() {
     threads.send_message(draft.id, "continue".into()).unwrap();
     assert!(threads.cancel_turn(draft.id, turn).is_err());
     let completed = settle(&threads, draft.id).await;
-    assert_eq!(completed.remote_session_id, active.remote_session_id);
+    assert_eq!(completed.session_id, active.session_id);
     assert_eq!(completed.turns.len(), 2);
     assert_eq!(completed.turns[1].response, "Hello world");
     threads.shutdown().await;
@@ -1350,7 +1347,7 @@ async fn connects_a_draft_without_replacing_its_identity_or_duplicating_sessions
     threads.connect(draft.id).unwrap();
     let connected = settle(&threads, draft.id).await;
     assert_eq!(connected.status, ThreadStatus::SessionReady);
-    assert_eq!(connected.remote_session_id.as_deref(), Some("remote-1"));
+    assert_eq!(connected.session_id.as_deref(), Some("remote-1"));
     assert_eq!(connected.id, draft.id);
     assert_eq!(threads.connect(draft.id).unwrap(), connected);
     threads.shutdown().await;
@@ -2073,7 +2070,7 @@ async fn distinguishes_connection_failures_and_keeps_the_draft_for_explicit_retr
             let failed = settle(&threads, draft.id).await;
             assert_eq!(failed.status, ThreadStatus::Failed, "{mode}");
             assert_eq!(failed.failure, Some(expected.clone()), "{mode}");
-            assert_eq!(failed.remote_session_id, None);
+            assert_eq!(failed.session_id, None);
             assert_eq!(
                 failed.authentication,
                 if mode == "auth" {
@@ -2266,7 +2263,7 @@ async fn real_codex_initializes_and_creates_a_session() {
         ThreadStatus::SessionReady,
         "{connected:?}"
     );
-    assert!(connected.remote_session_id.is_some());
+    assert!(connected.session_id.is_some());
     assert_eq!(
         connected.authentication,
         atte_lib::thread::AuthenticationStatus::Unknown
@@ -2330,7 +2327,7 @@ async fn streams_ordered_turns_and_sends_followups_in_the_same_session() {
             .unwrap()
             .unwrap();
         if next.status == ThreadStatus::SessionReady {
-            assert_eq!(next.remote_session_id.as_deref(), Some("remote-1"));
+            assert_eq!(next.session_id.as_deref(), Some("remote-1"));
             assert_eq!(next.turns.len(), 2);
             assert_eq!(next.turns[1].response, "Hello world");
             assert_eq!(next.turns[1].stop_reason.as_deref(), Some("end_turn"));
@@ -2571,7 +2568,7 @@ async fn process_exit_during_approval_clears_permissions_and_preserves_the_queue
     assert_eq!(failed.failure, Some(ConnectionFailure::ProcessExited));
     assert!(failed.interrupted);
     assert!(failed.permissions.is_empty());
-    assert_eq!(failed.remote_session_id, waiting.remote_session_id);
+    assert_eq!(failed.session_id, waiting.session_id);
     assert_eq!(failed.turns, waiting.turns);
     assert_eq!(failed.queued_messages.len(), 1);
     assert_eq!(failed.queued_messages[0].text, "keep for later");
@@ -2626,7 +2623,7 @@ async fn cancelling_permission_resolves_pending_and_late_requests_without_execut
     threads.send_message(draft.id, "follow up".into()).unwrap();
     let completed = settle(&threads, draft.id).await;
     assert_eq!(completed.turns[1].response, "Hello world");
-    assert_eq!(completed.remote_session_id, waiting.remote_session_id);
+    assert_eq!(completed.session_id, waiting.session_id);
     threads.shutdown().await;
 }
 
@@ -2644,7 +2641,7 @@ async fn real_codex_streams_and_continues_without_file_changes() {
             if next.status == ThreadStatus::Failed { return Err(format!("{next:?}")); }
             if next.status == ThreadStatus::SessionReady { break; }
         }
-        let session = threads.get(draft.id).unwrap().remote_session_id;
+        let session = threads.get(draft.id).unwrap().session_id;
         for message in [
             "Do not use tools or read or modify any files. Remember the token cobalt-73 for this thread. Reply with exactly: Remembered cobalt-73.",
             "Do not use tools or read or modify any files. What token did I ask you to remember? Reply with the token only.",
@@ -2657,7 +2654,7 @@ async fn real_codex_streams_and_continues_without_file_changes() {
                 if let Some(turn) = next.turns.last() {
                     if next.status == ThreadStatus::Running && !turn.response.is_empty() { streamed += 1; }
                     if next.status == ThreadStatus::SessionReady {
-                        assert_eq!(next.remote_session_id, session);
+                        assert_eq!(next.session_id, session);
                         assert_eq!(turn.stop_reason.as_deref(), Some("end_turn"));
                         assert!(turn.response.contains("cobalt-73"), "{}", turn.response);
                         assert!(streamed > 0);

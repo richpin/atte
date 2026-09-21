@@ -851,10 +851,7 @@ async fn uninstall_stops_live_acp_and_removes_files_before_returning() {
     assert_ne!(artifact, replacement);
     threads.connect(draft.id).unwrap();
     wait_ready(&threads, draft.id).await;
-    assert_eq!(
-        threads.get(draft.id).unwrap().remote_session_id,
-        state.remote_session_id
-    );
+    assert_eq!(threads.get(draft.id).unwrap().session_id, state.session_id);
     let next = threads
         .create_for_agent(root.path(), "unknown-agent")
         .unwrap();

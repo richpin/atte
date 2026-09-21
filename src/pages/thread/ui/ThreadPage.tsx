@@ -319,7 +319,7 @@ export function ThreadPage(props: {
               >
                 <Show when={thread()?.status === "connecting"}>
                   <p role="status">
-                    {thread()?.remoteSessionId
+                    {thread()?.sessionId
                       ? t("thread.restoring")
                       : t("thread.connecting")}
                   </p>

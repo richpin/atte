@@ -5,7 +5,7 @@ use crate::{
     thread::{QueuedMessage, ThreadMetadata},
 };
 use rusqlite::{params, Connection, OptionalExtension};
-use serde::{Deserialize, Serialize};
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use std::{
     path::{Path, PathBuf},
     sync::Mutex,
@@ -36,6 +36,12 @@ pub enum StorageError {
     Database(#[from] rusqlite::Error),
     #[error("저장 정보 형식을 읽을 수 없습니다.")]
     Data(#[from] serde_json::Error),
+    #[error("저장 정보의 식별자를 읽을 수 없습니다.")]
+    Identifier(#[from] uuid::Error),
+    #[error("저장 정보의 숫자를 읽거나 쓸 수 없습니다.")]
+    Integer(#[from] std::num::TryFromIntError),
+    #[error("저장 정보의 경로를 읽거나 쓸 수 없습니다.")]
+    Path,
     #[error("더 새로운 앱의 저장소입니다. 앱을 업데이트해주세요.")]
     NewerSchema,
     #[error("저장소를 사용할 수 없습니다.")]
@@ -72,9 +78,53 @@ impl Store {
             .connection
             .lock()
             .map_err(|_| StorageError::Unavailable)?;
-        let mut statement = connection.prepare("SELECT metadata FROM threads")?;
-        let rows = statement.query_map([], |row| row.get::<_, String>(0))?;
-        rows.map(|row| Ok(serde_json::from_str(&row?)?)).collect()
+        let mut statement = connection.prepare(
+            "SELECT id, title, working_folder, agent_id, session_id, created_at, updated_at, last_prompt_at, status, failure, interrupted FROM threads",
+        )?;
+        let rows = statement.query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, String>(3)?,
+                row.get::<_, Option<String>>(4)?,
+                row.get::<_, i64>(5)?,
+                row.get::<_, i64>(6)?,
+                row.get::<_, i64>(7)?,
+                row.get::<_, String>(8)?,
+                row.get::<_, Option<String>>(9)?,
+                row.get::<_, bool>(10)?,
+            ))
+        })?;
+        rows.map(|row| {
+            let (
+                id,
+                title,
+                working_folder,
+                agent_id,
+                session_id,
+                created_at,
+                updated_at,
+                last_prompt_at,
+                status,
+                failure,
+                interrupted,
+            ) = row?;
+            Ok(ThreadMetadata {
+                id: uuid::Uuid::parse_str(&id)?,
+                title,
+                working_folder: PathBuf::from(working_folder),
+                agent_id,
+                session_id,
+                created_at: u64::try_from(created_at)?,
+                updated_at: u64::try_from(updated_at)?,
+                last_prompt_at: u64::try_from(last_prompt_at)?,
+                status: decode_enum(status)?,
+                failure: failure.map(decode_enum).transpose()?,
+                interrupted,
+            })
+        })
+        .collect()
     }
 
     pub(crate) fn queued_messages(
@@ -99,22 +149,49 @@ impl Store {
 
     pub(crate) fn save_queue(
         &self,
-        metadata: &ThreadMetadata,
+        id: uuid::Uuid,
         messages: &[QueuedMessage],
     ) -> Result<(), StorageError> {
         let connection = self
             .connection
             .lock()
             .map_err(|_| StorageError::Unavailable)?;
-        connection.execute("INSERT INTO threads (id, metadata, queued_messages) VALUES (?1, ?2, ?3) ON CONFLICT(id) DO UPDATE SET queued_messages=excluded.queued_messages", params![metadata.id.to_string(), serde_json::to_string(metadata)?, serde_json::to_string(messages)?])?;
+        let changed = connection.execute(
+            "UPDATE threads SET queued_messages=?2 WHERE id=?1",
+            params![id.to_string(), serde_json::to_string(messages)?],
+        )?;
+        if changed == 0 {
+            return Err(rusqlite::Error::QueryReturnedNoRows.into());
+        }
         Ok(())
     }
 
     pub(crate) fn save_thread(&self, metadata: &ThreadMetadata) -> Result<(), StorageError> {
-        self.connection.lock().map_err(|_| StorageError::Unavailable)?.execute(
-            "INSERT INTO threads (id, metadata) VALUES (?1, ?2) ON CONFLICT(id) DO UPDATE SET metadata=excluded.metadata",
-            params![metadata.id.to_string(), serde_json::to_string(metadata)?],
-        )?;
+        let status = encode_enum(&metadata.status)?;
+        let failure = metadata.failure.as_ref().map(encode_enum).transpose()?;
+        let created_at = i64::try_from(metadata.created_at)?;
+        let updated_at = i64::try_from(metadata.updated_at)?;
+        let last_prompt_at = i64::try_from(metadata.last_prompt_at)?;
+        let working_folder = metadata.working_folder.to_str().ok_or(StorageError::Path)?;
+        self.connection
+            .lock()
+            .map_err(|_| StorageError::Unavailable)?
+            .execute(
+                "INSERT INTO threads (id, title, working_folder, agent_id, session_id, created_at, updated_at, last_prompt_at, status, failure, interrupted) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11) ON CONFLICT(id) DO UPDATE SET title=excluded.title, working_folder=excluded.working_folder, agent_id=excluded.agent_id, session_id=excluded.session_id, created_at=excluded.created_at, updated_at=excluded.updated_at, last_prompt_at=excluded.last_prompt_at, status=excluded.status, failure=excluded.failure, interrupted=excluded.interrupted",
+                params![
+                    metadata.id.to_string(),
+                    metadata.title,
+                    working_folder,
+                    metadata.agent_id,
+                    metadata.session_id,
+                    created_at,
+                    updated_at,
+                    last_prompt_at,
+                    status,
+                    failure,
+                    metadata.interrupted,
+                ],
+            )?;
         Ok(())
     }
 
@@ -316,4 +393,12 @@ impl Store {
         transaction.commit()?;
         Ok(())
     }
+}
+
+fn encode_enum(value: &impl Serialize) -> Result<String, StorageError> {
+    Ok(serde_json::from_value(serde_json::to_value(value)?)?)
+}
+
+fn decode_enum<T: DeserializeOwned>(value: String) -> Result<T, StorageError> {
+    Ok(serde_json::from_value(serde_json::Value::String(value))?)
 }

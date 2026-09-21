@@ -37,7 +37,7 @@ pub struct Thread {
     /// Connection state owned by the application.
     pub status: ThreadStatus,
     /// Agent-issued ID, scoped by this thread's fixed agent and runtime.
-    pub remote_session_id: Option<String>,
+    pub session_id: Option<String>,
     /// Connection success is not proof of authentication.
     pub authentication: AuthenticationStatus,
     pub failure: Option<ConnectionFailure>,
@@ -178,7 +178,7 @@ pub struct ThreadMetadata {
     pub title: String,
     pub working_folder: PathBuf,
     pub agent_id: String,
-    pub remote_session_id: Option<String>,
+    pub session_id: Option<String>,
     pub created_at: u64,
     pub updated_at: u64,
     #[serde(default)]
@@ -195,7 +195,7 @@ impl Thread {
             title: self.title.clone(),
             working_folder: self.working_folder.clone(),
             agent_id: self.agent_id.clone(),
-            remote_session_id: self.remote_session_id.clone(),
+            session_id: self.session_id.clone(),
             created_at: self.created_at,
             updated_at: self.updated_at,
             last_prompt_at: self.last_prompt_at,
@@ -435,7 +435,7 @@ impl Threads {
                 title: saved.title,
                 working_folder: saved.working_folder,
                 agent_id: saved.agent_id,
-                remote_session_id: saved.remote_session_id,
+                session_id: saved.session_id,
                 created_at: saved.created_at,
                 updated_at: saved.updated_at,
                 last_prompt_at,
@@ -913,7 +913,7 @@ impl Threads {
             })?,
             agent_id: agent_id.into(),
             status: ThreadStatus::Disconnected,
-            remote_session_id: None,
+            session_id: None,
             authentication: AuthenticationStatus::Unknown,
             failure: None,
             turns: Vec::new(),
@@ -981,8 +981,8 @@ impl Threads {
         let mut state = self.lock()?;
         let entry = state.entries.get_mut(&id).ok_or_else(not_found)?;
         let mut current = entry.state.lock().map_err(|_| unavailable())?;
-        let remote_session_id = current.thread.remote_session_id.clone();
-        let agent = remote_session_id.as_ref().and_then(|_| {
+        let session_id = current.thread.session_id.clone();
+        let agent = session_id.as_ref().and_then(|_| {
             agents
                 .iter()
                 .find(|agent| agent.id == current.thread.agent_id)
@@ -1002,7 +1002,7 @@ impl Threads {
         drop(current);
         let mut removed = state.entries.remove(&id).ok_or_else(not_found)?;
         list.remove(id);
-        if let Some(session_id) = remote_session_id {
+        if let Some(session_id) = session_id {
             let (runtime, inputs_to_close) =
                 if let Some(SessionCommands { inputs, runtime }) = removed.runtime.take() {
                     (Some(runtime), Some(inputs))
@@ -1123,7 +1123,7 @@ impl Threads {
         drop(current);
         let session = crate::agent_runtime::Session {
             id,
-            remote_session: thread.remote_session_id.clone(),
+            remote_session: thread.session_id.clone(),
             updates,
             prompts: requests,
             cancellations: cancelled,
@@ -1659,7 +1659,7 @@ impl ThreadState {
     fn save_queue(&mut self, queue: Vec<QueuedMessage>) -> Result<(), ThreadError> {
         if let Some(store) = &self.store {
             store
-                .save_queue(&self.thread.metadata(), &queue)
+                .save_queue(self.thread.id, &queue)
                 .map_err(|error| ThreadError::Unavailable(error.to_string()))?;
         }
         self.thread.queued_messages = queue;
@@ -1767,14 +1767,14 @@ pub(crate) struct RuntimeUpdates {
 impl RuntimeUpdates {
     pub fn session_ready(
         &self,
-        remote_session_id: String,
+        session_id: String,
         configuration: Vec<ThreadConfiguration>,
     ) -> Option<Prompt> {
         let mut state = self.state.lock().ok()?;
         if state.generation != self.generation {
             return None;
         }
-        state.thread.remote_session_id = Some(remote_session_id);
+        state.thread.session_id = Some(session_id);
         state.thread.status = ThreadStatus::SessionReady;
         state.confirmed_configuration = configuration;
         state.desired_configuration.clear();

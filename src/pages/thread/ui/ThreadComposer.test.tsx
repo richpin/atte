@@ -23,7 +23,7 @@ function readyThread(): Thread {
     workingFolder: "/workspace",
     agentId: "agent-1",
     status: "sessionReady",
-    remoteSessionId: "session-1",
+    sessionId: "session-1",
     authentication: "authenticated",
     failure: null,
     turns: [],
