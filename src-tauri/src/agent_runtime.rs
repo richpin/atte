@@ -222,12 +222,12 @@ pub(crate) async fn run(
                 Ok(Err(error)) => return Ok(classify(error, ConnectionFailure::InitializationFailed)),
                 Err(_) => return Ok(ConnectionFailure::TimedOut),
             };
-            let logout = initialized.agent_capabilities.auth.logout.is_some();
+            let logout_supported = initialized.agent_capabilities.auth.logout.is_some();
             if let Ok(mut observations) = authentication_observations.lock() {
                 observations.insert(
                     agent.id.clone(),
                     AuthenticationObservation {
-                        logout,
+                        logout_supported,
                         ..AuthenticationObservation::default()
                     },
                 );
@@ -372,13 +372,17 @@ fn record_auth_status(
     authentication: &Mutex<HashMap<String, crate::thread::AuthenticationStatus>>,
     observations: &Mutex<HashMap<String, AuthenticationObservation>>,
 ) {
-    let logout = observations
+    let logout_supported = observations
         .lock()
         .ok()
-        .and_then(|observations| observations.get(agent_id).map(|value| value.logout))
+        .and_then(|observations| {
+            observations
+                .get(agent_id)
+                .map(|value| value.logout_supported)
+        })
         .unwrap_or(false);
     if let Ok(mut observations) = observations.lock() {
-        observations.insert(agent_id.into(), status.observation(logout));
+        observations.insert(agent_id.into(), status.observation(logout_supported));
     }
     if let Ok(mut authentication) = authentication.lock() {
         authentication.insert(

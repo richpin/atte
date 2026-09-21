@@ -21,4 +21,5 @@
 
 - Added negotiated `authStatus` account metadata, standard capability-gated ACP logout, and an agent-name confirmation flow on the management page.
 - Successful logout clears only app-run authentication evidence; failures retain the known account and existing threads/runtimes are left untouched.
+- Review follow-up preserves the live runtime's negotiated logout capability after evidence is cleared and covers active-turn plus cold-restart behavior.
 - Verification passed for the app integration test, TypeScript typecheck, Biome/FSD checks, strict Clippy, and the ACP session integration target.

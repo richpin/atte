@@ -377,7 +377,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             response["result"] = result;
         }
         send(&mut output, response)?;
-        if (method == "initialize" || method == "authenticate" || method == "logout")
+        if (method == "initialize"
+            || method == "authenticate"
+            || method == "logout"
+            || method == "session/prompt")
             && mode.starts_with("account-")
         {
             send(

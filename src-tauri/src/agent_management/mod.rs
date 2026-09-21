@@ -260,8 +260,8 @@ impl AgentManagement {
                             state.required = evidence == AuthenticationStatus::Required;
                             if evidence == AuthenticationStatus::Authenticated {
                                 if let Some(observation) = threads.authentication_observation(id) {
-                                    state.logout = observation.logout;
-                                    if observation.reported {
+                                    state.logout_supported = observation.logout_supported;
+                                    if observation.status_reported {
                                         state.email = observation.email;
                                         state.plan = observation.plan;
                                     }

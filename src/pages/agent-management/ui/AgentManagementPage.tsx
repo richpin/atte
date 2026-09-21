@@ -106,7 +106,7 @@ export function AgentManagementPage(props: {
                   connected: false,
                   authenticated: false,
                   required: false,
-                  logout: false,
+                  logoutSupported: false,
                   email: null,
                   plan: null,
                 },
@@ -182,7 +182,7 @@ export function AgentManagementPage(props: {
                         agent.authentication.authenticated &&
                         (agent.authentication.email ||
                           agent.authentication.plan ||
-                          agent.authentication.logout)
+                          agent.authentication.logoutSupported)
                       }
                     >
                       <div class="space-y-2 pt-3 text-sm">
@@ -206,7 +206,7 @@ export function AgentManagementPage(props: {
                             </p>
                           )}
                         </Show>
-                        <Show when={agent.authentication.logout}>
+                        <Show when={agent.authentication.logoutSupported}>
                           <LogoutAgentDialog
                             name={agent.name}
                             pending={logoutWork[agent.id]?.pending ?? false}

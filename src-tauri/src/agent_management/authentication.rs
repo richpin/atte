@@ -45,7 +45,7 @@ pub struct Authentication {
     pub connected: bool,
     pub authenticated: bool,
     pub required: bool,
-    pub logout: bool,
+    pub logout_supported: bool,
     pub email: Option<String>,
     pub plan: Option<String>,
     pub methods: Vec<LoginMethod>,
@@ -53,8 +53,8 @@ pub struct Authentication {
 
 #[derive(Clone, Debug, Default)]
 pub(crate) struct AuthenticationObservation {
-    pub logout: bool,
-    pub reported: bool,
+    pub logout_supported: bool,
+    pub status_reported: bool,
     pub email: Option<String>,
     pub plan: Option<String>,
 }
@@ -67,8 +67,20 @@ struct AuthStatusAccount {
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub(crate) struct AuthStatus {
-    kind: String,
+    kind: AuthStatusKind,
     account: Option<AuthStatusAccount>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum AuthStatusKind {
+    Account,
+    ApiKey,
+    Gateway,
+    External,
+    None,
+    #[serde(other)]
+    Unknown,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, agent_client_protocol::JsonRpcNotification)]
@@ -81,18 +93,21 @@ pub(crate) struct AuthStatusUpdate {
 impl AuthStatus {
     pub(crate) fn authenticated(&self) -> bool {
         matches!(
-            self.kind.as_str(),
-            "account" | "api_key" | "gateway" | "external"
+            self.kind,
+            AuthStatusKind::Account
+                | AuthStatusKind::ApiKey
+                | AuthStatusKind::Gateway
+                | AuthStatusKind::External
         )
     }
 
-    pub(crate) fn observation(&self, logout: bool) -> AuthenticationObservation {
-        let account = (self.kind == "account")
+    pub(crate) fn observation(&self, logout_supported: bool) -> AuthenticationObservation {
+        let account = matches!(self.kind, AuthStatusKind::Account)
             .then_some(self.account.as_ref())
             .flatten();
         AuthenticationObservation {
-            logout,
-            reported: true,
+            logout_supported,
+            status_reported: true,
             email: account.and_then(|account| account.email.clone()),
             plan: account.and_then(|account| account.plan.clone()),
         }
@@ -142,6 +157,9 @@ pub(crate) async fn inspect_cancellable(
     .await
 }
 
+/// Logs out through a separate setup connection without disturbing thread runtimes.
+///
+/// Returns an error when the agent does not advertise ACP logout or rejects the request.
 pub(crate) async fn logout(
     agent: &AgentDefinition,
     folder: &Path,
@@ -215,7 +233,7 @@ async fn run(
                     if initialized.protocol_version != ProtocolVersion::V1 {
                         return Err(ManagementError::Connection);
                     }
-                    let logout = initialized.agent_capabilities.auth.logout.is_some();
+                    let logout_supported = initialized.agent_capabilities.auth.logout.is_some();
                     let auth_status_supported =
                         supports_auth_status(&initialized.agent_capabilities);
                     if auth_status_supported && auth_status.borrow().is_none() {
@@ -226,7 +244,7 @@ async fn run(
                         connected: true,
                         authenticated: false,
                         required: false,
-                        logout,
+                        logout_supported,
                         email: None,
                         plan: None,
                         methods: initialized
@@ -244,7 +262,7 @@ async fn run(
                     if auth_status_supported {
                         if let Some(status) = auth_status.borrow().as_ref() {
                             state.authenticated = status.authenticated();
-                            let observation = status.observation(logout);
+                            let observation = status.observation(logout_supported);
                             state.email = observation.email;
                             state.plan = observation.plan;
                         }
@@ -284,13 +302,13 @@ async fn run(
                                 .await;
                             }
                             if let Some(status) = auth_status.borrow().as_ref() {
-                                let observation = status.observation(logout);
+                                let observation = status.observation(logout_supported);
                                 state.email = observation.email;
                                 state.plan = observation.plan;
                             }
                         }
                     } else if matches!(action, AuthenticationAction::Logout) {
-                        if !logout {
+                        if !logout_supported {
                             return Err(ManagementError::UnsupportedLogout);
                         }
                         connection

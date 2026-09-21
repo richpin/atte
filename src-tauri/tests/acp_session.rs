@@ -2759,7 +2759,7 @@ async fn negotiated_account_status_and_logout_preserve_existing_threads() {
     let before = settle(&threads, draft.id).await;
     let account = &management.catalog(&threads).unwrap()[0].authentication;
     assert!(account.authenticated);
-    assert!(account.logout);
+    assert!(account.logout_supported);
     assert_eq!(account.email.as_deref(), Some("person@example.com"));
     assert_eq!(account.plan.as_deref(), Some("Pro"));
 
@@ -2770,6 +2770,150 @@ async fn negotiated_account_status_and_logout_preserve_existing_threads() {
     assert!(account.email.is_none());
     assert!(account.plan.is_none());
     assert_eq!(threads.get(draft.id).unwrap(), before);
+
+    std::fs::write(&login, "authenticated again").unwrap();
+    threads
+        .send_message(draft.id, "confirm restored account".into())
+        .unwrap();
+    settle(&threads, draft.id).await;
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while !management.catalog(&threads).unwrap()[0]
+            .authentication
+            .authenticated
+        {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .unwrap();
+    let restored = &management.catalog(&threads).unwrap()[0].authentication;
+    assert!(restored.authenticated);
+    assert!(restored.logout_supported);
+    assert_eq!(restored.email.as_deref(), Some("person@example.com"));
+    threads.shutdown().await;
+}
+
+#[tokio::test]
+async fn logout_does_not_cancel_an_active_turn_or_replace_its_runtime() {
+    use atte_lib::{
+        agent_management::AgentManagement,
+        storage::{Installation, Store},
+    };
+    let root = tempfile::tempdir().unwrap();
+    let login = root.path().join("login");
+    let gate = root.path().join("gate");
+    let mut agent = mock_agent();
+    agent.id = "codex".into();
+    agent
+        .env
+        .insert("FIXTURE_MODE".into(), "account-auth".into());
+    agent
+        .env
+        .insert("AUTH_FILE".into(), login.to_string_lossy().into_owned());
+    agent
+        .env
+        .insert("PROMPT_GATE".into(), gate.to_string_lossy().into_owned());
+    std::fs::write(&login, "authenticated").unwrap();
+    Store::open(&root.path().join("atte.sqlite"))
+        .unwrap()
+        .save_installation(&Installation {
+            definition: agent,
+            version: "1.12.0".into(),
+            artifact: root.path().into(),
+        })
+        .unwrap();
+    let management = AgentManagement::open(root.path()).unwrap();
+    let threads = Threads::new(vec![]);
+    management.restore(&threads).unwrap();
+    let draft = threads.create(root.path()).unwrap();
+    threads.connect(draft.id).unwrap();
+    settle(&threads, draft.id).await;
+    threads
+        .send_message(draft.id, "remain active".into())
+        .unwrap();
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while threads
+            .get(draft.id)
+            .unwrap()
+            .turns
+            .last()
+            .is_none_or(|turn| turn.response != "Hello")
+        {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .unwrap();
+
+    management.logout("codex", &threads).await.unwrap();
+
+    assert_eq!(threads.get(draft.id).unwrap().status, ThreadStatus::Running);
+    std::fs::write(&login, "authenticated again").unwrap();
+    std::fs::write(gate, "continue").unwrap();
+    let finished = settle(&threads, draft.id).await;
+    assert_eq!(finished.status, ThreadStatus::SessionReady);
+    assert_eq!(finished.turns[0].response, "Hello world");
+    threads.shutdown().await;
+}
+
+#[tokio::test]
+async fn restart_discards_account_evidence_without_launching_agents() {
+    use atte_lib::{
+        agent_management::AgentManagement,
+        storage::{Installation, Store},
+    };
+    let root = tempfile::tempdir().unwrap();
+    let login = root.path().join("login");
+    let requests = root.path().join("requests");
+    let mut agent = mock_agent();
+    agent.id = "codex".into();
+    agent
+        .env
+        .insert("FIXTURE_MODE".into(), "account-auth".into());
+    agent
+        .env
+        .insert("AUTH_FILE".into(), login.to_string_lossy().into_owned());
+    agent.env.insert(
+        "REQUEST_LOG".into(),
+        requests.to_string_lossy().into_owned(),
+    );
+    agent
+        .env
+        .insert("ACCOUNT_EMAIL".into(), "temporary@example.com".into());
+    std::fs::write(&login, "authenticated").unwrap();
+    Store::open(&root.path().join("atte.sqlite"))
+        .unwrap()
+        .save_installation(&Installation {
+            definition: agent,
+            version: "1.12.0".into(),
+            artifact: root.path().into(),
+        })
+        .unwrap();
+    {
+        let management = AgentManagement::open(root.path()).unwrap();
+        let threads = Threads::new(vec![]);
+        management.restore(&threads).unwrap();
+        management
+            .authenticate("codex", None, &threads)
+            .await
+            .unwrap();
+        assert!(
+            management.catalog(&threads).unwrap()[0]
+                .authentication
+                .authenticated
+        );
+        threads.shutdown().await;
+    }
+    std::fs::remove_file(&requests).unwrap();
+
+    let management = AgentManagement::open(root.path()).unwrap();
+    let threads = Threads::new(vec![]);
+    management.restore(&threads).unwrap();
+    let account = &management.catalog(&threads).unwrap()[0].authentication;
+    assert!(!account.authenticated);
+    assert!(account.email.is_none());
+    assert!(account.plan.is_none());
+    assert!(!requests.exists());
     threads.shutdown().await;
 }
 
@@ -2891,7 +3035,7 @@ async fn account_email_and_plan_are_independent_optional_extension_fields() {
         let account = inspect(&agent, root.path(), None).await.unwrap();
 
         assert!(account.authenticated);
-        assert!(account.logout);
+        assert!(account.logout_supported);
         assert_eq!(account.email.as_deref(), email);
         assert_eq!(account.plan.as_deref(), plan);
     }

@@ -427,7 +427,11 @@ impl Threads {
     pub(crate) fn clear_authentication_evidence(&self, agent_id: &str) {
         self.record_authentication(agent_id, AuthenticationStatus::Unknown);
         if let Ok(mut observations) = self.authentication_observations.lock() {
-            observations.remove(agent_id);
+            if let Some(observation) = observations.get_mut(agent_id) {
+                observation.status_reported = false;
+                observation.email = None;
+                observation.plan = None;
+            }
         }
     }
 
