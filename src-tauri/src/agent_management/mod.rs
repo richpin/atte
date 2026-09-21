@@ -22,6 +22,7 @@ use std::{
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
 };
+use tokio_util::sync::CancellationToken;
 
 #[derive(Debug, Serialize, thiserror::Error)]
 #[serde(tag = "code", content = "message", rename_all = "camelCase")]
@@ -84,6 +85,8 @@ pub struct AgentManagement {
     authentication: Mutex<HashMap<String, Authentication>>,
     node_runtimes: Mutex<HashMap<String, node_runtime::NodeRuntime>>,
     busy: Mutex<HashSet<String>>,
+    update_cancellations: Mutex<HashMap<String, CancellationToken>>,
+    operation_finished: tokio::sync::Notify,
 }
 
 impl AgentManagement {
@@ -110,6 +113,8 @@ impl AgentManagement {
             authentication: Mutex::new(HashMap::new()),
             node_runtimes: Mutex::new(HashMap::new()),
             busy: Mutex::new(HashSet::new()),
+            update_cancellations: Mutex::new(HashMap::new()),
+            operation_finished: tokio::sync::Notify::new(),
         })
     }
 
@@ -332,8 +337,14 @@ impl AgentManagement {
                 let entry = agent.registry.as_ref()?;
                 let distribution = entry.distribution(&registry::platform())?;
                 let installed = agent.installation.as_ref()?;
-                let current = matches_selected_identity(&agent, &entry.version, &distribution);
-                (!current && crate::installation::has_launch_files(installed)).then_some(agent.id)
+                let active_is_current = matches_identity(
+                    agent.installation_identity.as_ref(),
+                    &entry.version,
+                    &distribution,
+                );
+                ((!active_is_current || agent.pending.is_some())
+                    && crate::installation::has_launch_files(installed))
+                .then_some(agent.id)
             })
             .collect();
         stream::iter(targets)
@@ -357,7 +368,7 @@ impl AgentManagement {
             .acquire()
             .await
             .map_err(|_| ManagementError::Busy)?;
-        let _operation = self.begin(id)?;
+        let (_operation, cancellation) = self.begin_update(id)?;
         loop {
             let stored = self
                 .store
@@ -369,37 +380,58 @@ impl AgentManagement {
             let distribution = entry
                 .distribution(&registry::platform())
                 .ok_or(ManagementError::Unsupported)?;
-            if matches_selected_identity(&stored, &entry.version, &distribution) {
+            let active_is_current = matches_identity(
+                stored.installation_identity.as_ref(),
+                &entry.version,
+                &distribution,
+            );
+            if active_is_current && stored.pending.is_none() {
                 return Ok(());
             }
-            let prepared = installer
-                .install(id, entry, &distribution, &self.root.join("agents"), &|_| {})
-                .await?;
-            let installation =
-                crate::installation::commit(&self.root, &entry.version, &distribution, prepared)?;
-            let latest = self
-                .store
-                .agents()?
-                .into_iter()
-                .find(|agent| agent.id == id)
-                .and_then(|agent| agent.registry)
-                .and_then(|entry| {
-                    let distribution = entry.distribution(&registry::platform())?;
-                    Some((entry.version, distribution))
-                });
-            if latest.as_ref().is_none_or(|(version, source)| {
-                version != &entry.version || source != &distribution
-            }) {
-                let _ = crate::installation_files::remove(&self.root, &installation.artifact);
-                continue;
-            }
-            let previous_pending = self.store.save_pending(&installation)?;
-            if let Some(previous) = previous_pending.filter(|path| path != &installation.artifact) {
-                let _ = crate::installation_files::remove(&self.root, &previous);
+            let pending_is_current = matches_identity(
+                stored.pending_identity.as_ref(),
+                &entry.version,
+                &distribution,
+            );
+            if !pending_is_current {
+                let agents_root = self.root.join("agents");
+                let prepared = tokio::select! {
+                    biased;
+                    _ = cancellation.cancelled() => return Err(ManagementError::Busy),
+                    result = installer.install(id, entry, &distribution, &agents_root, &ignore_progress) => result?,
+                };
+                let installation = crate::installation::commit(
+                    &self.root,
+                    &entry.version,
+                    &distribution,
+                    prepared,
+                )?;
+                let latest = self
+                    .store
+                    .agents()?
+                    .into_iter()
+                    .find(|agent| agent.id == id)
+                    .and_then(|agent| agent.registry)
+                    .and_then(|entry| {
+                        let distribution = entry.distribution(&registry::platform())?;
+                        Some((entry.version, distribution))
+                    });
+                if latest.as_ref().is_none_or(|(version, source)| {
+                    version != &entry.version || source != &distribution
+                }) {
+                    let _ = crate::installation_files::remove(&self.root, &installation.artifact);
+                    continue;
+                }
+                let previous_pending = self.store.save_pending(&installation)?;
+                if let Some(previous) =
+                    previous_pending.filter(|path| path != &installation.artifact)
+                {
+                    let _ = crate::installation_files::remove(&self.root, &previous);
+                }
             }
             let mut previous_active = None;
-            let promoted = threads
-                .replace_agent_if_idle(id, || {
+            threads
+                .drain_and_replace_agent_until(id, &cancellation, || {
                     let (previous, pending) = self
                         .store
                         .promote_pending(id)
@@ -420,15 +452,13 @@ impl AgentManagement {
                 })
                 .await
                 .map_err(|_| ManagementError::Connection)?;
-            if promoted {
-                if let Some(previous) = previous_active {
-                    let _ = crate::installation_files::remove(&self.root, &previous);
-                }
-                self.authentication
-                    .lock()
-                    .map_err(|_| ManagementError::Connection)?
-                    .remove(id);
+            if let Some(previous) = previous_active {
+                let _ = crate::installation_files::remove(&self.root, &previous);
             }
+            self.authentication
+                .lock()
+                .map_err(|_| ManagementError::Connection)?
+                .remove(id);
             return Ok(());
         }
     }
@@ -491,6 +521,39 @@ impl AgentManagement {
             id: id.into(),
         })
     }
+
+    fn begin_update(
+        &self,
+        id: &str,
+    ) -> Result<(Operation<'_>, CancellationToken), ManagementError> {
+        let operation = self.begin(id)?;
+        let cancellation = CancellationToken::new();
+        self.update_cancellations
+            .lock()
+            .map_err(|_| ManagementError::Busy)?
+            .insert(id.into(), cancellation.clone());
+        Ok((operation, cancellation))
+    }
+
+    async fn begin_removal(&self, id: &str) -> Result<Operation<'_>, ManagementError> {
+        loop {
+            let notified = self.operation_finished.notified();
+            if let Some(cancellation) = self
+                .update_cancellations
+                .lock()
+                .map_err(|_| ManagementError::Busy)?
+                .get(id)
+                .cloned()
+            {
+                cancellation.cancel();
+            }
+            match self.begin(id) {
+                Ok(operation) => return Ok(operation),
+                Err(ManagementError::Busy) => notified.await,
+                Err(error) => return Err(error),
+            }
+        }
+    }
 }
 
 fn matches_identity(
@@ -504,18 +567,6 @@ fn matches_identity(
     })
 }
 
-fn matches_selected_identity(
-    agent: &crate::storage::StoredAgent,
-    registry_version: &str,
-    source: &Distribution,
-) -> bool {
-    matches_identity(
-        agent.installation_identity.as_ref(),
-        registry_version,
-        source,
-    ) || matches_identity(agent.pending_identity.as_ref(), registry_version, source)
-}
-
 struct Operation<'a> {
     manager: &'a AgentManagement,
     id: String,
@@ -525,6 +576,10 @@ impl Drop for Operation<'_> {
         if let Ok(mut busy) = self.manager.busy.lock() {
             busy.remove(&self.id);
         }
+        if let Ok(mut cancellations) = self.manager.update_cancellations.lock() {
+            cancellations.remove(&self.id);
+        }
+        self.manager.operation_finished.notify_waiters();
     }
 }
 
@@ -534,3 +589,5 @@ fn now() -> i64 {
         .unwrap_or_default()
         .as_secs() as i64
 }
+
+fn ignore_progress(_: &str) {}

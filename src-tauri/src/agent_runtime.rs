@@ -23,7 +23,10 @@ use std::{
     collections::HashMap,
     path::PathBuf,
     process::Stdio,
-    sync::{Arc, Mutex},
+    sync::{
+        atomic::{AtomicU32, Ordering},
+        Arc, Mutex,
+    },
     time::Duration,
 };
 use tokio::{
@@ -69,8 +72,13 @@ pub(crate) async fn run(
     folder: PathBuf,
     mut commands: mpsc::UnboundedReceiver<RuntimeCommand>,
     mut stop: oneshot::Receiver<()>,
-) {
-    let Ok(launch) = crate::agent_management::node_runtime::resolve_launch(&agent).await else {
+    pid: Arc<AtomicU32>,
+) -> bool {
+    let launch = tokio::select! {
+        _ = &mut stop => return true,
+        launch = crate::agent_management::node_runtime::resolve_launch(&agent) => launch,
+    };
+    let Ok(launch) = launch else {
         commands.close();
         while let Some(command) = commands.recv().await {
             if let RuntimeCommand::StartSession(session) = command {
@@ -79,7 +87,7 @@ pub(crate) async fn run(
                     .connection_failed(ConnectionFailure::ExecutableNotFound);
             }
         }
-        return;
+        return true;
     };
     let mut command = Command::new(launch.program);
     command
@@ -113,15 +121,18 @@ pub(crate) async fn run(
                     }
                 }
             }
-            return;
+            return true;
         }
     };
-    let group = ProcessGroup(child.id());
+    let mut group = ProcessGroup::new(child.id());
+    if let Some(id) = child.id() {
+        pid.store(id, Ordering::Release);
+    }
     let Some(stdin) = child.stdin.take() else {
-        return;
+        return false;
     };
     let Some(stdout) = child.stdout.take() else {
-        return;
+        return false;
     };
     let routes: Routes = Arc::default();
     let participants = Arc::new(Mutex::new(HashMap::<Uuid, RuntimeUpdates>::new()));
@@ -260,11 +271,26 @@ pub(crate) async fn run(
             } else { Some(failure) }
         },
     };
-    drop(group);
     drop(protocol);
     commands.close();
-    let _ = child.kill().await;
-    let _ = child.wait().await;
+    let reaped_gracefully = failure.is_none()
+        && tokio::time::timeout(Duration::from_secs(1), child.wait())
+            .await
+            .is_ok_and(|result| result.is_ok());
+    let reaped = if reaped_gracefully {
+        group.disarm();
+        true
+    } else {
+        let group_signalled = tokio::task::spawn_blocking(move || {
+            let signalled = group.kill();
+            group.disarm();
+            signalled
+        })
+        .await
+        .unwrap_or(false);
+        let _ = child.kill().await;
+        group_signalled && child.wait().await.is_ok()
+    };
     let mut all = participants
         .lock()
         .map(|mut all| std::mem::take(&mut *all))
@@ -285,6 +311,7 @@ pub(crate) async fn run(
             None => updates.connection_closed(),
         }
     }
+    reaped
 }
 
 async fn run_session(
@@ -366,8 +393,7 @@ async fn run_session(
         Ok(Err(failure)) => return failure,
         Err(_) => return ConnectionFailure::TimedOut,
     };
-    updates.session_ready(remote.to_string());
-    let mut next_prompt = None;
+    let mut next_prompt = updates.session_ready(remote.to_string());
     loop {
         let prompt = match next_prompt.take() {
             Some(prompt) => prompt,

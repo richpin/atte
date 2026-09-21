@@ -2150,6 +2150,342 @@ async fn replacing_a_definition_preserves_live_connections_and_applies_to_new_co
 }
 
 #[tokio::test]
+async fn draining_an_agent_waits_for_every_active_turn() {
+    let root = tempfile::tempdir().unwrap();
+    let first_folder = root.path().join("first");
+    let second_folder = root.path().join("second");
+    std::fs::create_dir_all(&first_folder).unwrap();
+    std::fs::create_dir_all(&second_folder).unwrap();
+    let gate = root.path().join("release-old-turns");
+    let mut old = mock_agent();
+    old.env
+        .insert("PROMPT_GATE".into(), gate.to_string_lossy().into());
+    let threads = std::sync::Arc::new(Threads::new(vec![old]));
+    let first = threads.create(&first_folder).unwrap();
+    let second = threads.create(&second_folder).unwrap();
+    for id in [first.id, second.id] {
+        threads.connect(id).unwrap();
+        settle(&threads, id).await;
+        threads.send_message(id, format!("old-{id}")).unwrap();
+        let mut updates = subscribe(&threads, id);
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while updates
+                .recv()
+                .await
+                .unwrap()
+                .turns
+                .last()
+                .is_none_or(|turn| turn.response != "Hello")
+            {}
+        })
+        .await
+        .unwrap();
+    }
+
+    let transition = {
+        let threads = threads.clone();
+        tokio::spawn(async move {
+            threads
+                .drain_and_replace_agent("fixture", || Ok(mock_agent()))
+                .await
+        })
+    };
+    tokio::task::yield_now().await;
+    assert!(!transition.is_finished());
+
+    std::fs::write(&gate, "continue").unwrap();
+    transition.await.unwrap().unwrap();
+    threads.shutdown().await;
+}
+
+#[tokio::test]
+async fn draining_dispatches_a_preserved_message_only_on_the_replacement() {
+    let root = tempfile::tempdir().unwrap();
+    let gate = root.path().join("release-old-turn");
+    let old_log = root.path().join("old.log");
+    let new_log = root.path().join("new.log");
+    let mut old = mock_agent();
+    old.env
+        .insert("PROMPT_GATE".into(), gate.to_string_lossy().into());
+    old.env
+        .insert("REQUEST_LOG".into(), old_log.to_string_lossy().into());
+    let threads = std::sync::Arc::new(Threads::new(vec![old]));
+    let draft = threads.create(root.path()).unwrap();
+    threads.connect(draft.id).unwrap();
+    settle(&threads, draft.id).await;
+    threads.send_message(draft.id, "old".into()).unwrap();
+    let mut updates = subscribe(&threads, draft.id);
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while updates
+            .recv()
+            .await
+            .unwrap()
+            .turns
+            .last()
+            .is_none_or(|turn| turn.response != "Hello")
+        {}
+    })
+    .await
+    .unwrap();
+    let transition = {
+        let threads = threads.clone();
+        let new_log = new_log.clone();
+        tokio::spawn(async move {
+            threads
+                .drain_and_replace_agent("fixture", || {
+                    let mut replacement = mock_agent();
+                    replacement
+                        .env
+                        .insert("REQUEST_LOG".into(), new_log.to_string_lossy().into());
+                    Ok(replacement)
+                })
+                .await
+        })
+    };
+    tokio::task::yield_now().await;
+    threads.send_message(draft.id, "preserved".into()).unwrap();
+    std::fs::write(gate, "continue").unwrap();
+    transition.await.unwrap().unwrap();
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while !threads.get(draft.id).unwrap().queued_messages.is_empty() {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+
+    assert_eq!(
+        (
+            std::fs::read_to_string(old_log)
+                .unwrap()
+                .matches("session/prompt")
+                .count(),
+            std::fs::read_to_string(new_log)
+                .unwrap()
+                .matches("session/prompt")
+                .count(),
+        ),
+        (1, 1)
+    );
+    threads.shutdown().await;
+}
+
+#[tokio::test]
+async fn shutdown_cancels_a_transition_without_waiting_for_the_active_turn() {
+    let folder = tempfile::tempdir().unwrap();
+    let mut agent = mock_agent();
+    agent.env.insert("FIXTURE_MODE".into(), "concurrent".into());
+    let threads = std::sync::Arc::new(Threads::new(vec![agent]));
+    let draft = threads.create(folder.path()).unwrap();
+    threads.connect(draft.id).unwrap();
+    settle(&threads, draft.id).await;
+    threads.send_message(draft.id, "hold".into()).unwrap();
+    let transition = {
+        let threads = threads.clone();
+        tokio::spawn(async move {
+            threads
+                .drain_and_replace_agent("fixture", || Ok(mock_agent()))
+                .await
+        })
+    };
+    tokio::task::yield_now().await;
+
+    tokio::time::timeout(Duration::from_secs(3), threads.shutdown())
+        .await
+        .unwrap();
+    assert!(transition.await.unwrap().is_err());
+}
+
+#[tokio::test]
+async fn a_new_connection_cannot_start_on_the_old_definition_during_promotion() {
+    let root = tempfile::tempdir().unwrap();
+    let active_folder = root.path().join("active");
+    let waiting_folder = root.path().join("waiting");
+    std::fs::create_dir_all(&active_folder).unwrap();
+    std::fs::create_dir_all(&waiting_folder).unwrap();
+    let gate = root.path().join("release");
+    let old_log = root.path().join("old.log");
+    let new_log = root.path().join("new.log");
+    let mut old = mock_agent();
+    old.env
+        .insert("PROMPT_GATE".into(), gate.to_string_lossy().into());
+    old.env
+        .insert("REQUEST_LOG".into(), old_log.to_string_lossy().into());
+    let threads = std::sync::Arc::new(Threads::new(vec![old]));
+    let active = threads.create(&active_folder).unwrap();
+    let waiting = threads.create(&waiting_folder).unwrap();
+    threads.connect(active.id).unwrap();
+    settle(&threads, active.id).await;
+    threads
+        .send_message(active.id, "hold transition".into())
+        .unwrap();
+    let mut updates = subscribe(&threads, active.id);
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while updates
+            .recv()
+            .await
+            .unwrap()
+            .turns
+            .last()
+            .is_none_or(|turn| turn.response != "Hello")
+        {}
+    })
+    .await
+    .unwrap();
+    let transition = {
+        let threads = threads.clone();
+        let new_log = new_log.clone();
+        tokio::spawn(async move {
+            threads
+                .drain_and_replace_agent("fixture", || {
+                    let mut replacement = mock_agent();
+                    replacement
+                        .env
+                        .insert("REQUEST_LOG".into(), new_log.to_string_lossy().into());
+                    Ok(replacement)
+                })
+                .await
+        })
+    };
+    tokio::task::yield_now().await;
+    let blocked = threads.connect(waiting.id).is_err();
+    std::fs::write(gate, "continue").unwrap();
+    transition.await.unwrap().unwrap();
+    threads.connect(waiting.id).unwrap();
+    settle(&threads, waiting.id).await;
+
+    assert_eq!(
+        (
+            blocked,
+            std::fs::read_to_string(old_log)
+                .unwrap()
+                .matches("session/new")
+                .count(),
+            std::fs::read_to_string(new_log)
+                .unwrap()
+                .matches("session/new")
+                .count(),
+        ),
+        (true, 1, 1)
+    );
+    threads.shutdown().await;
+}
+
+#[tokio::test]
+async fn draining_forces_only_the_owned_group_after_graceful_shutdown_times_out() {
+    use nix::{sys::signal::kill, unistd::Pid};
+    let folder = tempfile::tempdir().unwrap();
+    let pid_file = folder.path().join("pid");
+    let mut agent = mock_agent();
+    agent.env.insert("DETACHED_CHILD".into(), "1".into());
+    agent
+        .env
+        .insert("PID_FILE".into(), pid_file.to_string_lossy().into());
+    let threads = Threads::new(vec![agent]);
+    let draft = threads.create(folder.path()).unwrap();
+    threads.connect(draft.id).unwrap();
+    settle(&threads, draft.id).await;
+    let pid = std::fs::read_to_string(pid_file)
+        .unwrap()
+        .parse::<i32>()
+        .unwrap();
+    let started = std::time::Instant::now();
+
+    threads
+        .drain_and_replace_agent("fixture", || Ok(mock_agent()))
+        .await
+        .unwrap();
+
+    assert_eq!(
+        (
+            kill(Pid::from_raw(pid), None).is_err(),
+            started.elapsed() >= Duration::from_millis(900),
+            started.elapsed() < Duration::from_secs(3),
+        ),
+        (true, true, true)
+    );
+    threads.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_failed_promotion_retry_resumes_the_preserved_queue() {
+    let root = tempfile::tempdir().unwrap();
+    let gate = root.path().join("release-old-turn");
+    let new_log = root.path().join("new.log");
+    let mut old = mock_agent();
+    old.env
+        .insert("PROMPT_GATE".into(), gate.to_string_lossy().into());
+    let threads = std::sync::Arc::new(Threads::new(vec![old]));
+    let draft = threads.create(root.path()).unwrap();
+    threads.connect(draft.id).unwrap();
+    settle(&threads, draft.id).await;
+    threads.send_message(draft.id, "old turn".into()).unwrap();
+    let mut updates = subscribe(&threads, draft.id);
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while updates
+            .recv()
+            .await
+            .unwrap()
+            .turns
+            .last()
+            .is_none_or(|turn| turn.response != "Hello")
+        {}
+    })
+    .await
+    .unwrap();
+    let first = {
+        let threads = threads.clone();
+        tokio::spawn(async move {
+            threads
+                .drain_and_replace_agent("fixture", || {
+                    Err(atte_lib::thread::ThreadError::Unavailable(
+                        "injected promotion failure".into(),
+                    ))
+                })
+                .await
+        })
+    };
+    tokio::task::yield_now().await;
+    threads.send_message(draft.id, "preserved".into()).unwrap();
+    std::fs::write(gate, "continue").unwrap();
+    assert!(first.await.unwrap().is_err());
+
+    threads
+        .drain_and_replace_agent("fixture", || {
+            let mut replacement = mock_agent();
+            replacement
+                .env
+                .insert("REQUEST_LOG".into(), new_log.to_string_lossy().into());
+            Ok(replacement)
+        })
+        .await
+        .unwrap();
+    let resumed = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let thread = threads.get(draft.id).unwrap();
+            if thread.queued_messages.is_empty() && thread.status == ThreadStatus::SessionReady {
+                break thread;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+
+    assert_eq!(
+        (
+            resumed.turns.last().map(|turn| turn.message.as_str()),
+            std::fs::read_to_string(new_log)
+                .unwrap()
+                .matches("session/prompt")
+                .count(),
+        ),
+        (Some("preserved"), 1)
+    );
+    threads.shutdown().await;
+}
+
+#[tokio::test]
 async fn management_observes_expiry_and_login_without_restarting_the_failed_thread() {
     use atte_lib::{
         agent_management::AgentManagement,

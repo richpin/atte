@@ -457,6 +457,90 @@ async fn automatic_update_promotes_when_agent_is_idle_and_removes_previous_insta
 }
 
 #[tokio::test]
+async fn reap_failure_preserves_active_and_pending_until_the_update_retries() {
+    let root = tempfile::tempdir().unwrap();
+    let manager = AgentManagement::open(root.path()).unwrap();
+    let threads = Threads::new(vec![]);
+    manager.set_registry(registry()).unwrap();
+    manager
+        .install(
+            "codex-acp",
+            &threads,
+            &ControlledInstaller { fail: false },
+            &|_| {},
+        )
+        .await
+        .unwrap();
+    let old = manager
+        .catalog(&threads)
+        .unwrap()
+        .into_iter()
+        .find(|agent| agent.id == "codex-acp")
+        .unwrap()
+        .artifact
+        .unwrap();
+    let mut newer = registry();
+    let entry = newer
+        .agents
+        .iter_mut()
+        .find(|entry| entry.id == "codex-acp")
+        .unwrap();
+    entry.version = "2.0.0".into();
+    entry.distribution.npx.as_mut().unwrap().package =
+        "@agentclientprotocol/codex-acp@2.0.0".into();
+    manager.set_registry(newer).unwrap();
+    threads.fail_next_runtime_stop_for_test();
+
+    manager
+        .prepare_updates(&threads, &ControlledInstaller { fail: false })
+        .await
+        .unwrap();
+    let store = Store::open(&root.path().join("atte.sqlite")).unwrap();
+    let failed = store
+        .agents()
+        .unwrap()
+        .into_iter()
+        .find(|agent| agent.id == "codex-acp")
+        .unwrap();
+    let pending = failed.pending.as_ref().unwrap().artifact.clone();
+    assert_eq!(
+        (
+            failed
+                .installation
+                .as_ref()
+                .map(|item| item.version.as_str()),
+            failed.pending.as_ref().map(|item| item.version.as_str()),
+            old.exists(),
+            pending.exists(),
+        ),
+        (Some("1.12.0"), Some("2.0.0"), true, true)
+    );
+
+    manager
+        .prepare_updates(&threads, &ControlledInstaller { fail: false })
+        .await
+        .unwrap();
+    let recovered = store
+        .agents()
+        .unwrap()
+        .into_iter()
+        .find(|agent| agent.id == "codex-acp")
+        .unwrap();
+    assert_eq!(
+        (
+            recovered
+                .installation
+                .as_ref()
+                .map(|item| item.version.as_str()),
+            recovered.pending.is_none(),
+            old.exists(),
+            pending.exists(),
+        ),
+        (Some("2.0.0"), true, false, true)
+    );
+}
+
+#[tokio::test]
 async fn same_version_source_change_updates_once() {
     let root = tempfile::tempdir().unwrap();
     let manager = AgentManagement::open(root.path()).unwrap();
@@ -556,6 +640,69 @@ async fn automatic_updates_prepare_at_most_three_agents_concurrently() {
     task.await.unwrap().unwrap();
     overlapping.await.unwrap().unwrap();
     assert_eq!(installer.maximum.load(Ordering::SeqCst), 3);
+}
+
+#[tokio::test]
+async fn uninstall_cancels_automatic_preparation_and_removes_the_selected_agent() {
+    let root = tempfile::tempdir().unwrap();
+    let manager = Arc::new(AgentManagement::open(root.path()).unwrap());
+    let threads = Arc::new(Threads::new(vec![]));
+    manager.set_registry(registry()).unwrap();
+    manager
+        .install(
+            "codex-acp",
+            &threads,
+            &ControlledInstaller { fail: false },
+            &|_| {},
+        )
+        .await
+        .unwrap();
+    let mut newer = registry();
+    let entry = newer
+        .agents
+        .iter_mut()
+        .find(|entry| entry.id == "codex-acp")
+        .unwrap();
+    entry.version = "2.0.0".into();
+    entry.distribution.npx.as_mut().unwrap().package =
+        "@agentclientprotocol/codex-acp@2.0.0".into();
+    manager.set_registry(newer).unwrap();
+    let installer = Arc::new(ConcurrentInstaller {
+        current: AtomicUsize::new(0),
+        maximum: AtomicUsize::new(0),
+        started: tokio::sync::Notify::new(),
+        release: tokio::sync::Semaphore::new(0),
+    });
+    let preparation = {
+        let manager = manager.clone();
+        let threads = threads.clone();
+        let installer = installer.clone();
+        tokio::spawn(async move { manager.prepare_updates(&threads, installer.as_ref()).await })
+    };
+    tokio::time::timeout(std::time::Duration::from_secs(2), async {
+        while installer.current.load(Ordering::SeqCst) == 0 {
+            installer.started.notified().await;
+        }
+    })
+    .await
+    .unwrap();
+
+    tokio::time::timeout(
+        std::time::Duration::from_secs(2),
+        manager.uninstall("codex-acp", &threads),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    preparation.await.unwrap().unwrap();
+
+    let removed = manager
+        .catalog(&threads)
+        .unwrap()
+        .into_iter()
+        .find(|agent| agent.id == "codex-acp")
+        .unwrap();
+    assert!(!removed.installed);
 }
 
 #[tokio::test]

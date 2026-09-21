@@ -4,21 +4,39 @@ use nix::{
     unistd::Pid,
 };
 
-pub(crate) struct ProcessGroup(pub(crate) Option<u32>);
+pub(crate) struct ProcessGroup(Option<Pid>);
+
+impl ProcessGroup {
+    pub(crate) fn new(id: Option<u32>) -> Self {
+        Self(id.and_then(|id| i32::try_from(id).ok()).map(Pid::from_raw))
+    }
+
+    pub(crate) fn kill(&mut self) -> bool {
+        if let Some(pid) = self.0 {
+            #[cfg(target_os = "macos")]
+            let descendants_signalled = kill_descendants(pid);
+            #[cfg(not(target_os = "macos"))]
+            let descendants_signalled = true;
+            let group_signalled = signal_succeeded(killpg(pid, Signal::SIGKILL));
+            descendants_signalled && group_signalled
+        } else {
+            true
+        }
+    }
+
+    pub(crate) fn disarm(&mut self) {
+        self.0 = None;
+    }
+}
 
 impl Drop for ProcessGroup {
     fn drop(&mut self) {
-        if let Some(id) = self.0 {
-            let pid = Pid::from_raw(id as i32);
-            #[cfg(target_os = "macos")]
-            kill_descendants(pid);
-            let _ = killpg(pid, Signal::SIGKILL);
-        }
+        let _ = self.kill();
     }
 }
 
 #[cfg(target_os = "macos")]
-fn kill_descendants(root: Pid) {
+fn kill_descendants(root: Pid) -> bool {
     use nix::{libc, sys::signal::kill};
     let mut pending = vec![root];
     let mut stopped = Vec::new();
@@ -52,9 +70,15 @@ fn kill_descendants(root: Pid) {
                 .map(Pid::from_raw),
         );
     }
+    let mut signalled = true;
     for pid in stopped.into_iter().rev() {
-        let _ = kill(pid, Signal::SIGKILL);
+        signalled &= signal_succeeded(kill(pid, Signal::SIGKILL));
     }
+    signalled
+}
+
+fn signal_succeeded(result: nix::Result<()>) -> bool {
+    matches!(result, Ok(()) | Err(nix::errno::Errno::ESRCH))
 }
 
 #[cfg(target_os = "macos")]

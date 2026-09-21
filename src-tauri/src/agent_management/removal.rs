@@ -3,7 +3,7 @@ use crate::thread::{AuthenticationStatus, Threads};
 
 impl AgentManagement {
     pub async fn uninstall(&self, id: &str, threads: &Threads) -> Result<(), ManagementError> {
-        let _operation = self.begin(id)?;
+        let _operation = self.begin_removal(id).await?;
         let stored = self
             .store
             .agents()?

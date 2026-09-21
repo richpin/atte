@@ -78,7 +78,7 @@ pub async fn inspect(
     #[cfg(unix)]
     command.process_group(0);
     let mut child = command.spawn().map_err(|_| ManagementError::Connection)?;
-    let group = ProcessGroup(child.id());
+    let mut group = ProcessGroup::new(child.id());
     let stdin = child.stdin.take().ok_or(ManagementError::Connection)?;
     let stdout = child.stdout.take().ok_or(ManagementError::Connection)?;
     let protocol = Client.builder().connect_with(
@@ -151,7 +151,7 @@ pub async fn inspect(
         protocol,
     )
     .await;
-    drop(group);
+    let _ = tokio::task::spawn_blocking(move || group.kill()).await;
     let _ = child.kill().await;
     let _ = child.wait().await;
     match result {

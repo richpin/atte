@@ -4,14 +4,15 @@ use crate::agent::{prepared_codex, AgentDefinition, PreparedAgent};
 use crate::storage::{StorageError, Store};
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     path::{Path, PathBuf},
     sync::{
-        atomic::{AtomicU64, Ordering},
+        atomic::{AtomicU32, AtomicU64, Ordering},
         Arc, Mutex,
     },
 };
 use tokio::sync::{mpsc, oneshot};
+use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
 static LAST_PROMPT_AT: AtomicU64 = AtomicU64::new(0);
@@ -170,6 +171,8 @@ pub struct Threads {
     store: Option<Arc<Store>>,
     agents: Mutex<Vec<AgentDefinition>>,
     lifecycle: tokio::sync::Mutex<()>,
+    shutdown: CancellationToken,
+    runtime_stop_failures: AtomicU64,
     authentication: Arc<Mutex<HashMap<String, AuthenticationStatus>>>,
     state: Mutex<State>,
 }
@@ -178,7 +181,14 @@ pub struct Threads {
 struct State {
     entries: HashMap<Uuid, Entry>,
     runtimes: Vec<Runtime>,
+    agent_transitions: HashMap<String, AgentTransition>,
     closed: bool,
+}
+
+#[derive(Default)]
+struct AgentTransition {
+    draining: bool,
+    resume: HashSet<Uuid>,
 }
 
 struct Entry {
@@ -196,7 +206,8 @@ struct Runtime {
     folder: PathBuf,
     commands: mpsc::UnboundedSender<crate::agent_runtime::RuntimeCommand>,
     stop: Option<oneshot::Sender<()>>,
-    task: Option<tokio::task::JoinHandle<()>>,
+    task: Option<tokio::task::JoinHandle<bool>>,
+    pid: Arc<AtomicU32>,
 }
 
 impl Drop for Runtime {
@@ -226,11 +237,13 @@ fn runtime_for(
     }
     let (commands, receiver) = mpsc::unbounded_channel();
     let (stop, stopped) = oneshot::channel();
+    let pid = Arc::new(AtomicU32::new(0));
     let task = handle.spawn(crate::agent_runtime::run(
         agent.clone(),
         folder.clone(),
         receiver,
         stopped,
+        pid.clone(),
     ));
     state.runtimes.push(Runtime {
         agent,
@@ -238,6 +251,7 @@ fn runtime_for(
         commands: commands.clone(),
         stop: Some(stop),
         task: Some(task),
+        pid,
     });
     commands
 }
@@ -265,6 +279,8 @@ impl Threads {
             store: None,
             agents: Mutex::new(agents),
             lifecycle: tokio::sync::Mutex::new(()),
+            shutdown: CancellationToken::new(),
+            runtime_stop_failures: AtomicU64::new(0),
             authentication: Arc::default(),
             state: Mutex::new(State::default()),
         }
@@ -320,6 +336,8 @@ impl Threads {
                         subscribers: Vec::new(),
                         permissions: HashMap::new(),
                         store: Some(store.clone()),
+                        draining: false,
+                        dispatch_queue_on_ready: false,
                     })),
                     runtime: None,
                 },
@@ -344,6 +362,7 @@ impl Threads {
                 entries,
                 closed: false,
                 runtimes: Vec::new(),
+                agent_transitions: HashMap::new(),
             }),
             ..Self::new(agents)
         })
@@ -442,9 +461,209 @@ impl Threads {
             }
             runtimes
         };
-        stop_runtimes(runtimes).await;
+        if let Err(runtimes) = self.stop_runtimes(runtimes).await {
+            self.restore_runtimes(runtimes);
+            return Err(unavailable());
+        }
         self.register_agent(activate()?)?;
         Ok(true)
+    }
+
+    /// Drains every thread using an agent before replacing its execution definition.
+    ///
+    /// New connections and queued input remain blocked from the old definition until
+    /// all active turns finish and every owned runtime has been reaped.
+    pub async fn drain_and_replace_agent(
+        &self,
+        id: &str,
+        activate: impl FnOnce() -> Result<AgentDefinition, ThreadError>,
+    ) -> Result<(), ThreadError> {
+        self.drain_and_replace_agent_until(id, &CancellationToken::new(), activate)
+            .await
+    }
+
+    /// Drains and replaces one agent unless the owning management operation is cancelled.
+    pub async fn drain_and_replace_agent_until(
+        &self,
+        id: &str,
+        cancellation: &CancellationToken,
+        activate: impl FnOnce() -> Result<AgentDefinition, ThreadError>,
+    ) -> Result<(), ThreadError> {
+        let _lifecycle = self.lifecycle.lock().await;
+        let mut updates = self.subscribe_list()?;
+        {
+            let mut state = self.lock()?;
+            let transition = state.agent_transitions.entry(id.into()).or_default();
+            if transition.draining {
+                return Err(unavailable());
+            }
+            transition.draining = true;
+            for entry in state.entries.values() {
+                let mut current = entry.state.lock().map_err(|_| unavailable())?;
+                if current.thread.agent_id == id {
+                    current.draining = true;
+                }
+            }
+        }
+        loop {
+            let active = self.lock()?.entries.values().any(|entry| {
+                entry.state.lock().is_ok_and(|current| {
+                    current.thread.agent_id == id
+                        && matches!(
+                            current.thread.status,
+                            ThreadStatus::Running
+                                | ThreadStatus::WaitingForApproval
+                                | ThreadStatus::Cancelling
+                        )
+                })
+            });
+            if !active {
+                break;
+            }
+            tokio::select! {
+                _ = self.shutdown.cancelled() => {
+                    self.clear_draining(id);
+                    return Err(unavailable());
+                }
+                _ = cancellation.cancelled() => {
+                    self.clear_draining(id);
+                    return Err(unavailable());
+                }
+                update = updates.recv() => {
+                    update.ok_or_else(unavailable)?;
+                }
+            }
+        }
+        let runtimes = {
+            let mut state = self.lock()?;
+            let mut resume = Vec::new();
+            for (thread_id, entry) in &mut state.entries {
+                let mut current = entry.state.lock().map_err(|_| unavailable())?;
+                if current.thread.agent_id != id {
+                    continue;
+                }
+                if entry.runtime.take().is_some() {
+                    resume.push(*thread_id);
+                }
+                current.generation += 1;
+                current.thread.status = ThreadStatus::Disconnected;
+                current.clear_permissions();
+                current.publish();
+            }
+            state
+                .agent_transitions
+                .entry(id.into())
+                .or_default()
+                .resume
+                .extend(resume);
+            let mut runtimes = Vec::new();
+            let mut index = 0;
+            while index < state.runtimes.len() {
+                if state.runtimes[index].agent.id == id {
+                    runtimes.push(state.runtimes.remove(index));
+                } else {
+                    index += 1;
+                }
+            }
+            runtimes
+        };
+        if let Err(runtimes) = self.stop_runtimes(runtimes).await {
+            self.restore_runtimes(runtimes);
+            self.clear_draining(id);
+            return Err(unavailable());
+        }
+        if cancellation.is_cancelled() || self.shutdown.is_cancelled() {
+            self.clear_draining(id);
+            return Err(unavailable());
+        }
+        let definition = match activate() {
+            Ok(definition) => definition,
+            Err(error) => {
+                self.clear_draining(id);
+                return Err(error);
+            }
+        };
+        self.register_agent(definition)?;
+        self.finish_draining(id);
+        Ok(())
+    }
+
+    fn finish_draining(&self, id: &str) {
+        if self.shutdown.is_cancelled() {
+            self.clear_draining(id);
+            return;
+        }
+        let mut resume = Vec::new();
+        if let Ok(mut state) = self.state.lock() {
+            resume.extend(
+                state
+                    .agent_transitions
+                    .remove(id)
+                    .into_iter()
+                    .flat_map(|transition| transition.resume),
+            );
+            for thread_id in &resume {
+                if let Some(entry) = state.entries.get(thread_id) {
+                    if let Ok(mut current) = entry.state.lock() {
+                        current.dispatch_queue_on_ready = true;
+                    }
+                }
+            }
+            for entry in state.entries.values() {
+                if let Ok(mut current) = entry.state.lock() {
+                    if current.thread.agent_id == id {
+                        current.draining = false;
+                    }
+                }
+            }
+        }
+        for thread_id in resume {
+            let _ = self.connect(thread_id);
+        }
+    }
+
+    fn clear_draining(&self, id: &str) {
+        if let Ok(mut state) = self.state.lock() {
+            if let Some(transition) = state.agent_transitions.get_mut(id) {
+                transition.draining = false;
+                if transition.resume.is_empty() {
+                    state.agent_transitions.remove(id);
+                }
+            }
+            for entry in state.entries.values() {
+                if let Ok(mut current) = entry.state.lock() {
+                    if current.thread.agent_id == id {
+                        current.draining = false;
+                    }
+                }
+            }
+        }
+    }
+
+    fn restore_runtimes(&self, runtimes: Vec<Runtime>) {
+        if let Ok(mut state) = self.state.lock() {
+            state.runtimes.extend(runtimes);
+        }
+    }
+
+    async fn stop_runtimes(&self, runtimes: Vec<Runtime>) -> Result<(), Vec<Runtime>> {
+        if self
+            .runtime_stop_failures
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |remaining| {
+                remaining.checked_sub(1)
+            })
+            .is_ok()
+        {
+            return Err(runtimes);
+        }
+        stop_runtimes(runtimes).await
+    }
+
+    /// Injects one pre-reap failure for lifecycle boundary regression tests.
+    #[cfg(debug_assertions)]
+    #[doc(hidden)]
+    pub fn fail_next_runtime_stop_for_test(&self) {
+        self.runtime_stop_failures.fetch_add(1, Ordering::Release);
     }
 
     /// Retires this agent's threads and reaps their processes before file removal.
@@ -454,6 +673,7 @@ impl Threads {
             let mut agents = self.agents.lock().map_err(|_| unavailable())?;
             let mut state = self.lock()?;
             agents.retain(|agent| agent.id != id);
+            state.agent_transitions.remove(id);
             for entry in state.entries.values_mut() {
                 let mut current = entry.state.lock().map_err(|_| unavailable())?;
                 if current.thread.agent_id != id {
@@ -492,7 +712,10 @@ impl Threads {
             }
             runtimes
         };
-        stop_runtimes(runtimes).await;
+        if let Err(runtimes) = self.stop_runtimes(runtimes).await {
+            self.restore_runtimes(runtimes);
+            return Err(unavailable());
+        }
         Ok(())
     }
 
@@ -567,6 +790,8 @@ impl Threads {
                     subscribers: Vec::new(),
                     permissions: HashMap::new(),
                     store: self.store.clone(),
+                    draining: false,
+                    dispatch_queue_on_ready: false,
                 })),
                 runtime: None,
             },
@@ -663,6 +888,23 @@ impl Threads {
         let agents = self.agents.lock().map_err(|_| unavailable())?;
         let mut state = self.lock()?;
         if state.closed {
+            return Err(unavailable());
+        }
+        let agent_id = state
+            .entries
+            .get(&id)
+            .ok_or_else(not_found)?
+            .state
+            .lock()
+            .map_err(|_| unavailable())?
+            .thread
+            .agent_id
+            .clone();
+        if state
+            .agent_transitions
+            .get(&agent_id)
+            .is_some_and(|transition| transition.draining)
+        {
             return Err(unavailable());
         }
         let entry = state.entries.get_mut(&id).ok_or_else(not_found)?;
@@ -777,18 +1019,17 @@ impl Threads {
         }
         let entry = state.entries.get(&id).ok_or_else(not_found)?;
         let mut current = entry.state.lock().map_err(|_| unavailable())?;
-        if matches!(
-            current.thread.status,
-            ThreadStatus::Running | ThreadStatus::WaitingForApproval | ThreadStatus::Cancelling
-        ) {
-            let mut queue = current.thread.queued_messages.clone();
-            queue.push(QueuedMessage {
-                id: Uuid::new_v4(),
-                text,
-            });
-            current.save_queue(queue)?;
-            current.thread.last_prompt_at = next_prompt_at();
-            current.publish();
+        if state
+            .agent_transitions
+            .get(&current.thread.agent_id)
+            .is_some_and(|transition| transition.draining)
+            || current.dispatch_queue_on_ready
+            || matches!(
+                current.thread.status,
+                ThreadStatus::Running | ThreadStatus::WaitingForApproval | ThreadStatus::Cancelling
+            )
+        {
+            current.enqueue(text)?;
             return Ok(());
         }
         if current.thread.status != ThreadStatus::SessionReady {
@@ -910,6 +1151,7 @@ impl Threads {
 
     /// Stops and reaps all owned processes before application exit.
     pub async fn shutdown(&self) {
+        self.shutdown.cancel();
         let _lifecycle = self.lifecycle.lock().await;
         {
             let Ok(mut state) = self.state.lock() else {
@@ -987,7 +1229,7 @@ impl Threads {
             }
             std::mem::take(&mut state.runtimes)
         };
-        stop_runtimes(runtimes).await;
+        let _ = self.stop_runtimes(runtimes).await;
     }
 
     fn lock(&self) -> Result<std::sync::MutexGuard<'_, State>, ThreadError> {
@@ -995,24 +1237,65 @@ impl Threads {
     }
 }
 
-async fn stop_runtimes(runtimes: Vec<Runtime>) {
-    let mut tasks = Vec::new();
-    for mut runtime in runtimes {
+async fn stop_runtimes(runtimes: Vec<Runtime>) -> Result<(), Vec<Runtime>> {
+    let mut runtimes = runtimes;
+    for runtime in &mut runtimes {
         if let Some(stop) = runtime.stop.take() {
             let _ = stop.send(());
         }
-        if let Some(task) = runtime.task.take() {
-            tasks.push(task);
-        }
     }
     let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
-    for mut task in tasks {
-        if tokio::time::timeout_at(deadline, &mut task).await.is_err() {
-            // Runtime guards kill only this app's process group on cancellation.
-            task.abort();
-            let _ = task.await;
+    let mut failed = Vec::new();
+    for mut runtime in runtimes {
+        if let Some(task) = runtime.task.as_mut() {
+            match tokio::time::timeout_at(deadline, task).await {
+                Ok(Ok(true)) => {
+                    runtime.task = None;
+                    continue;
+                }
+                Ok(_) => runtime.task = None,
+                Err(_) => {}
+            }
+        }
+        let pid = runtime.pid.load(Ordering::Acquire);
+        if pid == 0 {
+            if runtime.task.is_some() {
+                failed.push(runtime);
+            }
+            continue;
+        }
+        if process_exists(pid) {
+            let _ = tokio::task::spawn_blocking(move || {
+                let mut group = crate::agent_runtime::ProcessGroup::new(Some(pid));
+                let killed = group.kill();
+                group.disarm();
+                killed
+            })
+            .await;
+            if let Some(task) = runtime.task.as_mut() {
+                if tokio::time::timeout(std::time::Duration::from_secs(1), task)
+                    .await
+                    .is_ok_and(|result| result.is_ok_and(|reaped| reaped))
+                {
+                    runtime.task = None;
+                    continue;
+                }
+            }
+            if process_exists(pid) {
+                failed.push(runtime);
+            }
         }
     }
+    if failed.is_empty() {
+        Ok(())
+    } else {
+        Err(failed)
+    }
+}
+
+fn process_exists(pid: u32) -> bool {
+    i32::try_from(pid)
+        .is_ok_and(|pid| nix::sys::signal::kill(nix::unistd::Pid::from_raw(pid), None).is_ok())
 }
 
 fn unavailable() -> ThreadError {
@@ -1045,9 +1328,23 @@ struct ThreadState {
     generation: u64,
     subscribers: Vec<mpsc::UnboundedSender<ThreadUpdate>>,
     permissions: HashMap<Uuid, oneshot::Sender<String>>,
+    draining: bool,
+    dispatch_queue_on_ready: bool,
 }
 
 impl ThreadState {
+    fn enqueue(&mut self, text: String) -> Result<(), ThreadError> {
+        let mut queue = self.thread.queued_messages.clone();
+        queue.push(QueuedMessage {
+            id: Uuid::new_v4(),
+            text,
+        });
+        self.save_queue(queue)?;
+        self.thread.last_prompt_at = next_prompt_at();
+        self.publish();
+        Ok(())
+    }
+
     fn save_queue(&mut self, queue: Vec<QueuedMessage>) -> Result<(), ThreadError> {
         if let Some(store) = &self.store {
             store
@@ -1062,6 +1359,27 @@ impl ThreadState {
         // Dropped senders resolve every pending ACP request as cancelled.
         self.permissions.clear();
         self.thread.permissions.clear();
+    }
+
+    fn take_next_queued_prompt(&mut self) -> Option<Prompt> {
+        let mut queue = self.thread.queued_messages.clone();
+        let queued = (!queue.is_empty()).then(|| queue.remove(0))?;
+        if let Err(error) = self.save_queue(queue) {
+            self.thread.notice = Some(error.to_string());
+            return None;
+        }
+        let turn = Uuid::new_v4();
+        self.thread.status = ThreadStatus::Running;
+        self.thread.turns.push(Turn {
+            id: turn,
+            message: queued.text.clone(),
+            response: String::new(),
+            stop_reason: None,
+        });
+        Some(Prompt {
+            turn,
+            text: queued.text,
+        })
     }
 
     fn publish(&mut self) {
@@ -1136,11 +1454,20 @@ pub(crate) struct RuntimeUpdates {
 }
 
 impl RuntimeUpdates {
-    pub fn session_ready(&self, remote_session_id: String) {
-        self.modify(|thread| {
-            thread.remote_session_id = Some(remote_session_id);
-            thread.status = ThreadStatus::SessionReady;
-        });
+    pub fn session_ready(&self, remote_session_id: String) -> Option<Prompt> {
+        let mut state = self.state.lock().ok()?;
+        if state.generation != self.generation {
+            return None;
+        }
+        state.thread.remote_session_id = Some(remote_session_id);
+        state.thread.status = ThreadStatus::SessionReady;
+        let next = state
+            .dispatch_queue_on_ready
+            .then(|| state.take_next_queued_prompt())
+            .flatten();
+        state.dispatch_queue_on_ready = false;
+        state.publish();
+        next
     }
 
     pub fn history_restored(&self, turns: Vec<Turn>) {
@@ -1214,29 +1541,11 @@ impl RuntimeUpdates {
         state.thread.status = ThreadStatus::SessionReady;
         state.thread.authentication = AuthenticationStatus::Authenticated;
         state.clear_permissions();
-        let next = if !cancelled
+        let next = if !state.draining
+            && !cancelled
             && reason == agent_client_protocol::schema::v1::StopReason::EndTurn
-            && !state.thread.queued_messages.is_empty()
         {
-            let mut queue = state.thread.queued_messages.clone();
-            let queued = queue.remove(0);
-            if let Err(error) = state.save_queue(queue) {
-                state.thread.notice = Some(error.to_string());
-                state.publish();
-                return None;
-            }
-            let turn = Uuid::new_v4();
-            state.thread.status = ThreadStatus::Running;
-            state.thread.turns.push(Turn {
-                id: turn,
-                message: queued.text.clone(),
-                response: String::new(),
-                stop_reason: None,
-            });
-            Some(Prompt {
-                turn,
-                text: queued.text,
-            })
+            state.take_next_queued_prompt()
         } else {
             None
         };
