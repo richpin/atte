@@ -20,7 +20,10 @@ use serde::Serialize;
 use std::{
     collections::{HashMap, HashSet},
     path::{Path, PathBuf},
-    sync::{Arc, Mutex},
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc, Mutex,
+    },
 };
 use tokio_util::sync::CancellationToken;
 
@@ -45,6 +48,8 @@ pub enum ManagementError {
     Connection,
     #[error("인증하지 못했습니다. 브라우저 또는 터미널에서 로그인을 완료한 뒤 다시 시도해주세요.")]
     Authentication,
+    #[error("로그인이 취소되었습니다.")]
+    AuthenticationCancelled,
     #[error("에이전트가 제공한 이 인증 방식은 아직 지원하지 않습니다.")]
     UnsupportedAuthentication,
     #[error("진행 중인 작업이 있습니다. 완료 후 다시 시도해주세요.")]
@@ -83,6 +88,8 @@ pub struct AgentManagement {
     preparation_slots: tokio::sync::Semaphore,
     last_attempt: Mutex<i64>,
     authentication: Mutex<HashMap<String, Authentication>>,
+    authentication_operations: Mutex<HashMap<String, AuthenticationOperation>>,
+    authentication_generation: AtomicU64,
     node_runtimes: Mutex<HashMap<String, node_runtime::NodeRuntime>>,
     busy: Mutex<HashSet<String>>,
     update_cancellations: Mutex<HashMap<String, CancellationToken>>,
@@ -111,6 +118,8 @@ impl AgentManagement {
             preparation_slots: tokio::sync::Semaphore::new(3),
             last_attempt: Mutex::new(fetched_at),
             authentication: Mutex::new(HashMap::new()),
+            authentication_operations: Mutex::new(HashMap::new()),
+            authentication_generation: AtomicU64::new(0),
             node_runtimes: Mutex::new(HashMap::new()),
             busy: Mutex::new(HashSet::new()),
             update_cancellations: Mutex::new(HashMap::new()),
@@ -469,7 +478,7 @@ impl AgentManagement {
         method: Option<&str>,
         threads: &Threads,
     ) -> Result<Authentication, ManagementError> {
-        let _operation = self.begin(id)?;
+        let operation = self.begin(id)?;
         let mut installation = self
             .store
             .installations()?
@@ -493,7 +502,49 @@ impl AgentManagement {
         if method.is_some() {
             threads.record_authentication(id, AuthenticationStatus::Unknown);
         }
-        let state = authentication::inspect(&installation.definition, &self.root, method).await?;
+        let generation = self
+            .authentication_generation
+            .fetch_add(1, Ordering::Relaxed);
+        let cancellation = CancellationToken::new();
+        self.authentication_operations
+            .lock()
+            .map_err(|_| ManagementError::Connection)?
+            .insert(
+                id.into(),
+                AuthenticationOperation {
+                    generation,
+                    cancellation: cancellation.clone(),
+                },
+            );
+        let result = authentication::inspect_cancellable(
+            &installation.definition,
+            &self.root,
+            method,
+            cancellation.clone(),
+        )
+        .await;
+        let mut operations = self
+            .authentication_operations
+            .lock()
+            .map_err(|_| ManagementError::Connection)?;
+        let current = operations
+            .get(id)
+            .is_some_and(|operation| operation.generation == generation);
+        if !current || cancellation.is_cancelled() {
+            drop(operation);
+            if current {
+                operations.remove(id);
+            }
+            return Err(ManagementError::AuthenticationCancelled);
+        }
+        let state = match result {
+            Ok(state) => state,
+            Err(error) => {
+                drop(operation);
+                operations.remove(id);
+                return Err(error);
+            }
+        };
         if state.authenticated {
             threads.record_authentication(id, AuthenticationStatus::Authenticated);
         }
@@ -501,7 +552,31 @@ impl AgentManagement {
             .lock()
             .map_err(|_| ManagementError::Connection)?
             .insert(id.into(), state.clone());
+        drop(operation);
+        operations.remove(id);
         Ok(state)
+    }
+
+    pub async fn cancel_authentication(&self, id: &str) -> Result<(), ManagementError> {
+        if !registry::valid_id(id) {
+            return Err(ManagementError::Registry);
+        }
+        loop {
+            let finished = self.operation_finished.notified();
+            tokio::pin!(finished);
+            finished.as_mut().enable();
+            let cancellation = self
+                .authentication_operations
+                .lock()
+                .map_err(|_| ManagementError::Connection)?
+                .get(id)
+                .map(|operation| operation.cancellation.clone());
+            let Some(cancellation) = cancellation else {
+                return Ok(());
+            };
+            cancellation.cancel();
+            finished.await;
+        }
     }
 
     fn begin(&self, id: &str) -> Result<Operation<'_>, ManagementError> {
@@ -570,6 +645,11 @@ fn matches_identity(
 struct Operation<'a> {
     manager: &'a AgentManagement,
     id: String,
+}
+
+struct AuthenticationOperation {
+    generation: u64,
+    cancellation: CancellationToken,
 }
 impl Drop for Operation<'_> {
     fn drop(&mut self) {

@@ -247,6 +247,7 @@ pub fn run() {
             install_agent,
             uninstall_agent,
             authenticate_agent,
+            cancel_agent_authentication,
             select_working_folder,
             delete_thread,
             list_threads,
@@ -357,4 +358,15 @@ async fn authenticate_agent(
                 .map_err(|error| error.to_string())
         })
         .await
+}
+
+#[tauri::command]
+async fn cancel_agent_authentication(
+    id: String,
+    management: State<'_, agent_management::AgentManagement>,
+) -> Result<(), String> {
+    management
+        .cancel_authentication(&id)
+        .await
+        .map_err(|error| error.to_string())
 }

@@ -20,6 +20,16 @@ let receiveUpdate: (update: Record<string, unknown>) => void;
 const receive = (thread: Record<string, unknown>) =>
   receiveUpdate({ kind: "thread", thread });
 let pendingSnapshots: Map<string, Record<string, unknown>>;
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (cause: unknown) => void;
+  const promise = new Promise<T>((yes, no) => {
+    resolve = yes;
+    reject = no;
+  });
+  return { promise, resolve, reject };
+}
+
 function subscribeWith(
   args: unknown,
   snapshot: Record<string, unknown>,
@@ -568,7 +578,7 @@ it("loads selected history once and keeps newer list metadata when an older thre
   ).toBe(false);
 });
 
-it("returns from setup to the same thread and resumes only after an explicit retry", async () => {
+it("keeps authentication discovery failures inline and retries on request", async () => {
   const saved = {
     id: "saved-auth",
     title: "인증이 필요한 작업",
@@ -580,30 +590,43 @@ it("returns from setup to the same thread and resumes only after an explicit ret
     permissions: [],
     failure: null,
   };
-  let attempts = 0;
+  let connectAttempts = 0;
+  let discoveryAttempts = 0;
   const original = vi.mocked(invoke).getMockImplementation();
   vi.mocked(invoke).mockImplementation((command, args) => {
     if (command === "list_threads") return Promise.resolve([saved]);
     if (command === "subscribe_thread") return subscribeWith(args, saved);
     if (command === "agent_catalog" || command === "refresh_agent_catalog")
       return Promise.resolve([]);
+    if (command === "authenticate_agent") {
+      discoveryAttempts++;
+      if (discoveryAttempts === 1) return Promise.reject("temporary failure");
+      return Promise.resolve({
+        connected: true,
+        authenticated: false,
+        required: true,
+        methods: [
+          {
+            id: "browser",
+            name: "Continue in browser",
+            description: null,
+            terminal: false,
+            supported: true,
+          },
+        ],
+      });
+    }
     if (command === "connect_thread") {
       expect(args).toEqual({ id: saved.id });
-      attempts++;
-      const snapshot =
-        attempts === 1
-          ? {
-              ...saved,
-              status: "failed",
-              failure: "authenticationRequired",
-            }
-          : {
-              ...saved,
-              status: "sessionReady",
-              notice:
-                "기존 맥락을 재개했습니다. 이 에이전트는 이전 메시지 표시를 지원하지 않습니다.",
-            };
-      queueMicrotask(() => receive(snapshot));
+      connectAttempts++;
+      queueMicrotask(() =>
+        receive({
+          ...saved,
+          status: "failed",
+          authentication: "required",
+          failure: "authenticationRequired",
+        }),
+      );
       return Promise.resolve();
     }
     return original?.(command, args) ?? Promise.resolve();
@@ -612,19 +635,18 @@ it("returns from setup to the same thread and resumes only after an explicit ret
   await userEvent.click(
     await screen.findByRole("button", { name: "인증이 필요한 작업" }),
   );
+  expect(await screen.findByText("temporary failure")).toBeTruthy();
+  expect(connectAttempts).toBe(1);
+  expect(discoveryAttempts).toBe(1);
   await userEvent.click(
-    await screen.findByRole("button", { name: "로그인 안내 열기" }),
-  );
-  await userEvent.click(
-    screen.getByRole("button", { name: "스레드로 돌아가기" }),
+    await screen.findByRole("button", { name: "다시 시도" }),
   );
   expect(screen.getByRole("heading", { name: saved.title })).toBeTruthy();
-  expect(attempts).toBe(1);
-  await userEvent.click(screen.getByRole("button", { name: "다시 연결" }));
   expect(
-    await screen.findByText(/이전 메시지 표시를 지원하지 않습니다/),
+    await screen.findByRole("button", { name: "Continue in browser" }),
   ).toBeTruthy();
-  expect(attempts).toBe(2);
+  expect(discoveryAttempts).toBe(2);
+  expect(connectAttempts).toBe(1);
   expect(
     vi
       .mocked(invoke)
@@ -786,7 +808,7 @@ it("connects the fixed agent and displays backend readiness separately from auth
   });
 });
 
-it("shows authentication failures and retries only when requested", async () => {
+it("keeps the authentication explanation without duplicate timeline actions", async () => {
   const draft = {
     turns: [],
     authentication: "unknown",
@@ -797,6 +819,21 @@ it("shows authentication failures and retries only when requested", async () => 
   };
   let thread = draft;
   requests.mockImplementation(async (command) => {
+    if (command === "authenticate_agent")
+      return {
+        connected: true,
+        authenticated: false,
+        required: true,
+        methods: [
+          {
+            id: "browser",
+            name: "Continue in browser",
+            description: null,
+            terminal: false,
+            supported: true,
+          },
+        ],
+      };
     if (command === "select_working_folder") return draft;
     if (command === "connect_thread") {
       thread = { ...draft, status: "failed" };
@@ -814,18 +851,569 @@ it("shows authentication failures and retries only when requested", async () => 
   });
   render(() => <App />);
   await userEvent.click(screen.getByRole("button", { name: "폴더 선택" }));
-  expect((await screen.findByRole("alert")).textContent).toContain(
-    "로그인이 필요합니다",
-  );
+  expect(await screen.findByText(/에이전트 로그인이 필요합니다/)).toBeTruthy();
   expect(
     screen.queryByText("인증 상태는 아직 확인되지 않았습니다."),
   ).toBeNull();
   expect(
     requests.mock.calls.filter(([command]) => command === "connect_thread"),
   ).toHaveLength(1);
-  await userEvent.click(screen.getByRole("button", { name: "다시 연결" }));
+  expect(screen.queryByRole("button", { name: "다시 연결" })).toBeNull();
+  expect(screen.queryByRole("button", { name: "로그인 안내 열기" })).toBeNull();
   expect(
-    requests.mock.calls.filter(([command]) => command === "connect_thread"),
+    await screen.findByRole("button", { name: "Continue in browser" }),
+  ).toBeTruthy();
+});
+
+it("replaces the composer with the agent's supported login methods", async () => {
+  const authentication = deferred<Record<string, unknown>>();
+  const failed = {
+    id: "auth-thread",
+    title: "Private work",
+    workingFolder: "/project",
+    agentId: "codex",
+    status: "failed",
+    authentication: "required",
+    failure: "authenticationRequired",
+    remoteSessionId: null,
+    createdAt: 1,
+    updatedAt: 1,
+    lastPromptAt: 1,
+    interrupted: false,
+    storageError: null,
+    turns: [],
+    notice: null,
+    permissions: [],
+    queuedMessages: [],
+  };
+  const original = vi.mocked(invoke).getMockImplementation();
+  vi.mocked(invoke).mockImplementation((command, args) => {
+    if (command === "list_threads") return Promise.resolve([failed]);
+    if (command === "subscribe_thread") return subscribeWith(args, failed);
+    if (command === "authenticate_agent") return authentication.promise;
+    return original?.(command, args) ?? Promise.resolve();
+  });
+  render(() => <App />);
+
+  const title = await screen.findByText("Private work");
+  const threadButton = title.closest("button");
+  if (!threadButton) throw new Error("thread title must belong to its button");
+  await userEvent.click(threadButton);
+  expect(await screen.findByText("로그인 방법을 불러오는 중…")).toBeTruthy();
+  expect(screen.queryByRole("textbox")).toBeNull();
+  expect(invoke).toHaveBeenCalledWith("authenticate_agent", {
+    id: "codex",
+    method: null,
+  });
+
+  authentication.resolve({
+    connected: true,
+    authenticated: false,
+    required: true,
+    methods: [
+      {
+        id: "browser",
+        name: "Continue in browser",
+        description: "Use your existing account",
+        terminal: false,
+        supported: true,
+      },
+      {
+        id: "terminal",
+        name: "Continue in Terminal",
+        description: null,
+        terminal: true,
+        supported: true,
+      },
+      {
+        id: "future",
+        name: "Future protocol",
+        description: null,
+        terminal: false,
+        supported: false,
+      },
+    ],
+  });
+
+  const buttons = await screen.findAllByRole("button", { name: /Continue/ });
+  expect(buttons.map((button) => button.textContent)).toEqual([
+    "Continue in browser",
+    "Continue in Terminal",
+  ]);
+  expect(screen.getByText("Use your existing account")).toBeTruthy();
+  expect(screen.queryByRole("button", { name: "Future protocol" })).toBeNull();
+  expect(screen.queryByRole("button", { name: "다시 연결" })).toBeNull();
+  expect(screen.queryByRole("button", { name: "로그인 안내 열기" })).toBeNull();
+});
+
+it("shares agent login progress and ignores completion after cancellation", async () => {
+  const login = deferred<Record<string, unknown>>();
+  const cancellation = deferred<void>();
+  const failed = (id: string, title: string) => ({
+    id,
+    title,
+    workingFolder: "/project",
+    agentId: "codex",
+    status: "failed",
+    authentication: "required",
+    failure: "authenticationRequired",
+    remoteSessionId: null,
+    createdAt: 1,
+    updatedAt: 1,
+    lastPromptAt: 1,
+    interrupted: false,
+    storageError: null,
+    turns: [],
+    notice: null,
+    permissions: [],
+    queuedMessages: [],
+  });
+  const first = failed("auth-a", "First private thread");
+  const second = failed("auth-b", "Second private thread");
+  const original = vi.mocked(invoke).getMockImplementation();
+  vi.mocked(invoke).mockImplementation((command, args) => {
+    if (command === "list_threads") return Promise.resolve([first, second]);
+    if (command === "subscribe_thread") {
+      const id = (args as { id: string }).id;
+      return subscribeWith(args, id === first.id ? first : second, id);
+    }
+    if (command === "authenticate_agent") {
+      if ((args as { method: string | null }).method) return login.promise;
+      return Promise.resolve({
+        connected: true,
+        authenticated: false,
+        required: true,
+        methods: [
+          {
+            id: "browser",
+            name: "Continue in browser",
+            description: null,
+            terminal: false,
+            supported: true,
+          },
+        ],
+      });
+    }
+    if (command === "cancel_agent_authentication") return cancellation.promise;
+    return original?.(command, args) ?? Promise.resolve();
+  });
+  render(() => <App />);
+
+  const firstTitle = await screen.findByText("First private thread");
+  await userEvent.click(firstTitle.closest("button") as HTMLButtonElement);
+  await userEvent.click(
+    await screen.findByRole("button", { name: "Continue in browser" }),
+  );
+  expect(
+    await screen.findByText("Continue in browser 로그인 진행 중"),
+  ).toBeTruthy();
+
+  const secondTitle = screen.getByText("Second private thread");
+  await userEvent.click(secondTitle.closest("button") as HTMLButtonElement);
+  expect(
+    await screen.findByText("Continue in browser 로그인 진행 중"),
+  ).toBeTruthy();
+  expect(
+    vi
+      .mocked(invoke)
+      .mock.calls.filter(
+        ([command, args]) =>
+          command === "authenticate_agent" &&
+          (args as { method?: string }).method === "browser",
+      ),
+  ).toHaveLength(1);
+
+  await userEvent.click(screen.getByRole("button", { name: "로그인 취소" }));
+  expect(invoke).toHaveBeenCalledWith("cancel_agent_authentication", {
+    id: "codex",
+  });
+  expect(screen.getByText("Continue in browser 로그인 진행 중")).toBeTruthy();
+  expect(
+    screen.queryByRole("button", { name: "Continue in browser" }),
+  ).toBeNull();
+
+  cancellation.resolve();
+  expect(
+    await screen.findByRole("button", { name: "Continue in browser" }),
+  ).toBeTruthy();
+
+  login.resolve({
+    connected: true,
+    authenticated: true,
+    required: false,
+    methods: [],
+  });
+  await Promise.resolve();
+  expect(
+    vi
+      .mocked(invoke)
+      .mock.calls.some(([command]) => command === "connect_thread"),
+  ).toBe(false);
+  expect(
+    screen.getByRole("button", { name: "Continue in browser" }),
+  ).toBeTruthy();
+});
+
+it("does not reconnect another same-agent authentication failure when login completes", async () => {
+  const login = deferred<Record<string, unknown>>();
+  const failed = (id: string, title: string) => ({
+    id,
+    title,
+    workingFolder: "/project",
+    agentId: "codex",
+    status: "failed",
+    authentication: "required",
+    failure: "authenticationRequired",
+    remoteSessionId: null,
+    createdAt: 1,
+    updatedAt: 1,
+    lastPromptAt: 1,
+    interrupted: false,
+    storageError: null,
+    turns: [],
+    notice: null,
+    permissions: [],
+    queuedMessages: [],
+  });
+  const origin = failed("auth-origin", "Login origin");
+  const other = failed("auth-other", "Other private thread");
+  const original = vi.mocked(invoke).getMockImplementation();
+  vi.mocked(invoke).mockImplementation((command, args) => {
+    if (command === "list_threads") return Promise.resolve([origin, other]);
+    if (command === "subscribe_thread") {
+      const id = (args as { id: string }).id;
+      return subscribeWith(args, id === origin.id ? origin : other, id);
+    }
+    if (command === "authenticate_agent") {
+      if ((args as { method: string | null }).method) return login.promise;
+      return Promise.resolve({
+        connected: true,
+        authenticated: false,
+        required: true,
+        methods: [
+          {
+            id: "browser",
+            name: "Continue in browser",
+            description: null,
+            terminal: false,
+            supported: true,
+          },
+        ],
+      });
+    }
+    if (command === "connect_thread") return Promise.resolve();
+    return original?.(command, args) ?? Promise.resolve();
+  });
+  render(() => <App />);
+
+  await screen.findByText("Login origin");
+  await userEvent.click(
+    screen.getByText("Login origin").closest("button") as HTMLButtonElement,
+  );
+  await userEvent.click(
+    await screen.findByRole("button", { name: "Continue in browser" }),
+  );
+  await userEvent.click(
+    screen
+      .getByText("Other private thread")
+      .closest("button") as HTMLButtonElement,
+  );
+
+  login.resolve({
+    connected: true,
+    authenticated: true,
+    required: false,
+    methods: [],
+  });
+  await Promise.resolve();
+  expect(
+    vi
+      .mocked(invoke)
+      .mock.calls.filter(([command]) => command === "connect_thread"),
+  ).toHaveLength(0);
+
+  await userEvent.click(
+    screen.getByText("Login origin").closest("button") as HTMLButtonElement,
+  );
+  await waitFor(() =>
+    expect(
+      vi
+        .mocked(invoke)
+        .mock.calls.filter(([command]) => command === "connect_thread"),
+    ).toHaveLength(1),
+  );
+});
+
+it("reconnects the still-selected origin once without sending preserved input", async () => {
+  const login = deferred<Record<string, unknown>>();
+  const ready = {
+    id: "auth-origin",
+    title: "Private work",
+    workingFolder: "/project",
+    agentId: "codex",
+    status: "sessionReady",
+    authentication: "unknown",
+    failure: null,
+    remoteSessionId: "remote-1",
+    createdAt: 1,
+    updatedAt: 1,
+    lastPromptAt: 1,
+    interrupted: false,
+    storageError: null,
+    turns: [],
+    notice: null,
+    permissions: [],
+    queuedMessages: [],
+  };
+  const failed = {
+    ...ready,
+    status: "failed",
+    authentication: "required",
+    failure: "authenticationRequired",
+    queuedMessages: [{ id: "queued", text: "wait for me" }],
+  };
+  const original = vi.mocked(invoke).getMockImplementation();
+  vi.mocked(invoke).mockImplementation((command, args) => {
+    if (command === "list_threads") return Promise.resolve([ready]);
+    if (command === "subscribe_thread") return subscribeWith(args, ready);
+    if (command === "authenticate_agent") {
+      if ((args as { method: string | null }).method) return login.promise;
+      return Promise.resolve({
+        connected: true,
+        authenticated: false,
+        required: true,
+        methods: [
+          {
+            id: "browser",
+            name: "Continue in browser",
+            description: null,
+            terminal: false,
+            supported: true,
+          },
+        ],
+      });
+    }
+    if (command === "connect_thread") return Promise.resolve();
+    return original?.(command, args) ?? Promise.resolve();
+  });
+  render(() => <App />);
+
+  const title = await screen.findByText("Private work");
+  await userEvent.click(title.closest("button") as HTMLButtonElement);
+  await userEvent.type(await screen.findByRole("textbox"), "keep this draft");
+  receive(failed);
+  expect(await screen.findByText("wait for me")).toBeTruthy();
+  await userEvent.click(
+    await screen.findByRole("button", { name: "Continue in browser" }),
+  );
+
+  login.resolve({
+    connected: true,
+    authenticated: true,
+    required: false,
+    methods: [],
+  });
+  await waitFor(() =>
+    expect(
+      vi
+        .mocked(invoke)
+        .mock.calls.filter(([command]) => command === "connect_thread"),
+    ).toHaveLength(1),
+  );
+  receive({ ...ready, queuedMessages: failed.queuedMessages });
+  expect(await screen.findByRole("textbox")).toHaveProperty(
+    "value",
+    "keep this draft",
+  );
+  expect(screen.getByText("wait for me")).toBeTruthy();
+  expect(
+    vi
+      .mocked(invoke)
+      .mock.calls.some(([command]) => command === "send_message"),
+  ).toBe(false);
+});
+
+it("defers reconnect after navigation and reconnects once when the failed thread returns", async () => {
+  const login = deferred<Record<string, unknown>>();
+  const failed = {
+    id: "auth-later",
+    title: "Private work",
+    workingFolder: "/project",
+    agentId: "codex",
+    status: "failed",
+    authentication: "required",
+    failure: "authenticationRequired",
+    remoteSessionId: null,
+    createdAt: 2,
+    updatedAt: 2,
+    lastPromptAt: 2,
+    interrupted: false,
+    storageError: null,
+    turns: [],
+    notice: null,
+    permissions: [],
+    queuedMessages: [],
+  };
+  const other = {
+    ...failed,
+    id: "other",
+    title: "Other work",
+    status: "sessionReady",
+    authentication: "authenticated",
+    failure: null,
+    remoteSessionId: "remote-other",
+    lastPromptAt: 1,
+  };
+  const original = vi.mocked(invoke).getMockImplementation();
+  vi.mocked(invoke).mockImplementation((command, args) => {
+    if (command === "list_threads") return Promise.resolve([failed, other]);
+    if (command === "subscribe_thread") {
+      const id = (args as { id: string }).id;
+      return subscribeWith(args, id === failed.id ? failed : other, id);
+    }
+    if (command === "authenticate_agent") {
+      if ((args as { method: string | null }).method) return login.promise;
+      return Promise.resolve({
+        connected: true,
+        authenticated: false,
+        required: true,
+        methods: [
+          {
+            id: "browser",
+            name: "Continue in browser",
+            description: null,
+            terminal: false,
+            supported: true,
+          },
+        ],
+      });
+    }
+    if (command === "connect_thread") return Promise.resolve();
+    return original?.(command, args) ?? Promise.resolve();
+  });
+  render(() => <App />);
+
+  await screen.findByText("Private work");
+  const privateRow = screen.getByText("Private work").closest("button");
+  if (!privateRow) throw new Error("thread title must belong to its button");
+  await userEvent.click(privateRow);
+  await userEvent.click(
+    await screen.findByRole("button", { name: "Continue in browser" }),
+  );
+  const otherTitle = screen.getByText("Other work");
+  await userEvent.click(otherTitle.closest("button") as HTMLButtonElement);
+  login.resolve({
+    connected: true,
+    authenticated: true,
+    required: false,
+    methods: [],
+  });
+  await Promise.resolve();
+  expect(
+    vi
+      .mocked(invoke)
+      .mock.calls.some(([command]) => command === "connect_thread"),
+  ).toBe(false);
+
+  await userEvent.click(
+    screen.getByText("Private work").closest("button") as HTMLButtonElement,
+  );
+  await waitFor(() =>
+    expect(
+      vi
+        .mocked(invoke)
+        .mock.calls.filter(([command]) => command === "connect_thread"),
+    ).toHaveLength(1),
+  );
+  await userEvent.click(
+    screen.getByText("Other work").closest("button") as HTMLButtonElement,
+  );
+  await userEvent.click(
+    screen.getByText("Private work").closest("button") as HTMLButtonElement,
+  );
+  expect(
+    vi
+      .mocked(invoke)
+      .mock.calls.filter(([command]) => command === "connect_thread"),
+  ).toHaveLength(1);
+});
+
+it("returns to login methods when the authenticated reconnect still requires authentication", async () => {
+  const failed = {
+    id: "auth-again",
+    title: "Private work",
+    workingFolder: "/project",
+    agentId: "codex",
+    status: "failed",
+    authentication: "required",
+    failure: "authenticationRequired",
+    remoteSessionId: null,
+    createdAt: 1,
+    updatedAt: 1,
+    lastPromptAt: 1,
+    interrupted: false,
+    storageError: null,
+    turns: [],
+    notice: null,
+    permissions: [],
+    queuedMessages: [],
+  };
+  const methodResult = {
+    connected: true,
+    authenticated: false,
+    required: true,
+    methods: [
+      {
+        id: "browser",
+        name: "Continue in browser",
+        description: null,
+        terminal: false,
+        supported: true,
+      },
+    ],
+  };
+  const original = vi.mocked(invoke).getMockImplementation();
+  vi.mocked(invoke).mockImplementation((command, args) => {
+    if (command === "list_threads") return Promise.resolve([failed]);
+    if (command === "subscribe_thread") return subscribeWith(args, failed);
+    if (command === "authenticate_agent")
+      return Promise.resolve(
+        (args as { method: string | null }).method
+          ? { ...methodResult, authenticated: true, required: false }
+          : methodResult,
+      );
+    if (command === "connect_thread") return Promise.resolve();
+    return original?.(command, args) ?? Promise.resolve();
+  });
+  render(() => <App />);
+
+  const title = await screen.findByText("Private work");
+  await userEvent.click(title.closest("button") as HTMLButtonElement);
+  await userEvent.click(
+    await screen.findByRole("button", { name: "Continue in browser" }),
+  );
+  await waitFor(() =>
+    expect(
+      vi
+        .mocked(invoke)
+        .mock.calls.filter(([command]) => command === "connect_thread"),
+    ).toHaveLength(1),
+  );
+  receive({ ...failed, status: "connecting", failure: null });
+  expect(await screen.findByText("연결 중…")).toBeTruthy();
+  receive(failed);
+
+  expect(
+    await screen.findByRole("button", { name: "Continue in browser" }),
+  ).toBeTruthy();
+  expect(
+    vi
+      .mocked(invoke)
+      .mock.calls.filter(
+        ([command, args]) =>
+          command === "authenticate_agent" &&
+          (args as { method: string | null }).method === null,
+      ),
   ).toHaveLength(2);
 });
 

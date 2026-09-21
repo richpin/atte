@@ -1,4 +1,5 @@
 import { makeResizeObserver } from "@solid-primitives/resize-observer";
+import { useAgentAuthentication } from "features/agent-authentication";
 import { type TranslationKey, useI18n } from "shared/i18n";
 import { LanguageMenu } from "shared/ui";
 import {
@@ -8,7 +9,9 @@ import {
   For,
   on,
   Show,
+  untrack,
 } from "solid-js";
+import { createStore } from "solid-js/store";
 import { preparedAgents } from "../api/threads";
 import { createThreadModel } from "../model/thread";
 import type { ConnectionFailure, Thread } from "../model/types";
@@ -23,6 +26,7 @@ export function ThreadPage(props: {
   onManage: () => void;
 }) {
   const { t, content } = useI18n();
+  const authentication = useAgentAuthentication();
   const model = createThreadModel();
   const {
     thread,
@@ -80,6 +84,12 @@ export function ThreadPage(props: {
     },
   );
   const [selectedAgent, setSelectedAgent] = createSignal("");
+  const [authenticationReconnect, setAuthenticationReconnect] = createStore({
+    attemptedByThread: {} as Record<string, number | undefined>,
+    blockedByThread: {} as Record<string, number | undefined>,
+    completedByAgent: {} as Record<string, number | undefined>,
+  });
+  let previousSelectedThreadId: string | undefined;
   const agentId = () =>
     agents()?.some((agent) => agent.id === selectedAgent())
       ? selectedAgent()
@@ -104,6 +114,49 @@ export function ThreadPage(props: {
     void model.createInFolder(folder, agentId());
   }
 
+  async function authenticateThread(method: string) {
+    const origin = thread();
+    if (!origin) return;
+    const succeeded = await authentication.login(origin.agentId, method);
+    if (!succeeded) return;
+    const state = authentication.state(origin.agentId);
+    if (state.status !== "authenticated") return;
+    setAuthenticationReconnect(
+      "completedByAgent",
+      origin.agentId,
+      state.generation,
+    );
+    const selected = untrack(thread);
+    if (
+      selected?.agentId === origin.agentId &&
+      selected.id !== origin.id &&
+      selected.failure === "authenticationRequired"
+    ) {
+      setAuthenticationReconnect(
+        "blockedByThread",
+        selected.id,
+        state.generation,
+      );
+    }
+  }
+
+  createEffect(() => {
+    const selected = selectedThreadId();
+    if (
+      previousSelectedThreadId &&
+      previousSelectedThreadId !== selected &&
+      authenticationReconnect.blockedByThread[previousSelectedThreadId] !==
+        undefined
+    ) {
+      setAuthenticationReconnect(
+        "blockedByThread",
+        previousSelectedThreadId,
+        undefined,
+      );
+    }
+    previousSelectedThreadId = selected;
+  });
+
   createEffect(
     on(
       () => [props.active, agents.loading, agentId(), pendingFolder()] as const,
@@ -112,6 +165,36 @@ export function ThreadPage(props: {
       },
     ),
   );
+
+  createEffect(() => {
+    const current = thread();
+    if (current?.failure !== "authenticationRequired") return;
+    const state = authentication.state(current.agentId);
+    if (state.status === "authenticated") {
+      if (
+        authenticationReconnect.completedByAgent[current.agentId] !==
+          state.generation ||
+        authenticationReconnect.blockedByThread[current.id] === state.generation
+      )
+        return;
+      if (!actionsEnabled()) return;
+      if (
+        authenticationReconnect.attemptedByThread[current.id] ===
+        state.generation
+      ) {
+        void authentication.requireAuthentication(current.agentId);
+        return;
+      }
+      setAuthenticationReconnect(
+        "attemptedByThread",
+        current.id,
+        state.generation,
+      );
+      untrack(() => void connect());
+      return;
+    }
+    if (state.status === "idle") void authentication.discover(current.agentId);
+  });
 
   return (
     <main class="flex h-dvh flex-col overflow-hidden bg-canvas text-ink">
@@ -265,15 +348,6 @@ export function ThreadPage(props: {
                     </p>
                   )}
                 </Show>
-                <Show when={thread()?.failure === "authenticationRequired"}>
-                  <button
-                    type="button"
-                    class="focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-accent"
-                    onClick={props.onManage}
-                  >
-                    {t("thread.openSignIn")}
-                  </button>
-                </Show>
                 <Show
                   when={
                     thread() &&
@@ -307,7 +381,9 @@ export function ThreadPage(props: {
                 <Show
                   when={
                     !connecting() &&
-                    (thread()?.status === "failed" || connectFailed())
+                    (connectFailed() ||
+                      (thread()?.status === "failed" &&
+                        thread()?.failure !== "authenticationRequired"))
                   }
                 >
                   <button
@@ -353,6 +429,18 @@ export function ThreadPage(props: {
                       stopping={stopping()}
                       actionsEnabled={actionsEnabled()}
                       canSend={canSend()}
+                      authentication={authentication.state(
+                        currentThread().agentId,
+                      )}
+                      onRetryAuthentication={() =>
+                        void authentication.discover(currentThread().agentId)
+                      }
+                      onAuthenticate={(method) =>
+                        void authenticateThread(method)
+                      }
+                      onCancelAuthentication={() =>
+                        void authentication.cancel(currentThread().agentId)
+                      }
                       onDraftChange={setDraft}
                       onSend={() => void send()}
                       onCancel={() => void cancel()}

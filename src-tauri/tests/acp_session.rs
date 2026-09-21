@@ -2539,6 +2539,95 @@ async fn management_observes_expiry_and_login_without_restarting_the_failed_thre
 }
 
 #[tokio::test]
+async fn cancelling_authentication_releases_the_wait_and_ignores_late_success() {
+    use atte_lib::{
+        agent_management::{AgentManagement, ManagementError},
+        storage::{Installation, Store},
+    };
+    let root = tempfile::tempdir().unwrap();
+    let login = root.path().join("login");
+    let started = root.path().join("auth-started");
+    let release = root.path().join("auth-release");
+    let mut agent = mock_agent();
+    agent.id = "codex".into();
+    agent.env.insert("FIXTURE_MODE".into(), "slow-auth".into());
+    agent
+        .env
+        .insert("AUTH_FILE".into(), login.to_string_lossy().into_owned());
+    agent.env.insert(
+        "AUTH_STARTED_FILE".into(),
+        started.to_string_lossy().into_owned(),
+    );
+    agent.env.insert(
+        "AUTH_RELEASE_FILE".into(),
+        release.to_string_lossy().into_owned(),
+    );
+    Store::open(&root.path().join("atte.sqlite"))
+        .unwrap()
+        .save_installation(&Installation {
+            definition: agent,
+            version: "1.12.0".into(),
+            artifact: root.path().into(),
+        })
+        .unwrap();
+    let management = AgentManagement::open(root.path()).unwrap();
+    let threads = Threads::new(vec![]);
+    management.restore(&threads).unwrap();
+
+    let authentication = management.authenticate("codex", Some("fixture-login"), &threads);
+    tokio::pin!(authentication);
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            tokio::select! {
+                result = &mut authentication => panic!("authentication finished early: {result:?}"),
+                () = tokio::time::sleep(Duration::from_millis(10)) => {
+                    if started.exists() {
+                        break;
+                    }
+                }
+            }
+        }
+    })
+    .await
+    .unwrap();
+    assert!(matches!(
+        management
+            .authenticate("codex", Some("fixture-login"), &threads)
+            .await,
+        Err(ManagementError::Busy)
+    ));
+    let (cancelled, result) = tokio::time::timeout(Duration::from_secs(1), async {
+        tokio::join!(
+            management.cancel_authentication("codex"),
+            &mut authentication
+        )
+    })
+    .await
+    .unwrap();
+    cancelled.unwrap();
+    assert!(matches!(
+        result,
+        Err(ManagementError::AuthenticationCancelled)
+    ));
+    assert!(
+        management
+            .authenticate("codex", None, &threads)
+            .await
+            .unwrap()
+            .connected
+    );
+    std::fs::write(release, "continue").unwrap();
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    assert!(!login.exists());
+    assert!(
+        !management.catalog(&threads).unwrap()[0]
+            .authentication
+            .authenticated
+    );
+    threads.shutdown().await;
+}
+
+#[tokio::test]
 async fn authentication_uses_advertised_metadata_without_provider_or_method_assumptions() {
     use atte_lib::agent_management::authentication::inspect;
     let root = tempfile::tempdir().unwrap();

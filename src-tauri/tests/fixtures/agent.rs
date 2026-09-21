@@ -118,6 +118,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     continue;
                 }
                 assert_eq!(request["params"]["methodId"], "fixture-login");
+                if mode == "slow-auth" {
+                    fs::write(
+                        env::var_os("AUTH_STARTED_FILE").ok_or("auth started file missing")?,
+                        "started",
+                    )?;
+                    let release =
+                        env::var_os("AUTH_RELEASE_FILE").ok_or("auth release file missing")?;
+                    while !std::path::Path::new(&release).exists() {
+                        thread::sleep(Duration::from_millis(10));
+                    }
+                }
                 fs::write(
                     env::var_os("AUTH_FILE").ok_or("auth file missing")?,
                     "authenticated",

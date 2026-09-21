@@ -210,6 +210,65 @@ it("keeps the draft when sending fails", async () => {
   expect(model.error()).toBeDefined();
 });
 
+it("preserves independent drafts when switching threads", async () => {
+  const model = setup();
+  await open(model, "A");
+  model.setDraft("A draft");
+  await open(model, "B");
+  expect(model.draft()).toBe("");
+  model.setDraft("B draft");
+
+  await open(model, "A");
+  expect(model.draft()).toBe("A draft");
+  await open(model, "B");
+  expect(model.draft()).toBe("B draft");
+});
+
+it("clears only the sent thread draft after switching threads", async () => {
+  const pending = deferred<void>();
+  commands.set("send_message", () => pending.promise);
+  const model = setup();
+  await open(model, "A");
+  model.setDraft("send A");
+  const sendRequest = model.send();
+  await open(model, "B");
+  model.setDraft("keep B");
+
+  pending.resolve();
+  await sendRequest;
+  expect(model.draft()).toBe("keep B");
+  await open(model, "A");
+  expect(model.draft()).toBe("");
+});
+
+it("does not clear a thread draft edited while its send is pending", async () => {
+  const pending = deferred<void>();
+  commands.set("send_message", () => pending.promise);
+  const model = setup();
+  await open(model, "A");
+  model.setDraft("send this");
+  const sendRequest = model.send();
+  await open(model, "B");
+  await open(model, "A");
+  model.setDraft("new draft");
+
+  pending.resolve();
+  await sendRequest;
+  expect(model.draft()).toBe("new draft");
+});
+
+it("removes the draft when its thread is deleted", async () => {
+  commands.set("delete_thread", async () => undefined);
+  const model = setup();
+  await open(model, "A");
+  model.setDraft("discard me");
+  await open(model, "B");
+
+  await model.removeThread("A");
+  await open(model, "A");
+  expect(model.draft()).toBe("");
+});
+
 it("preserves the snapshot and blocks every mutation while retrying", async () => {
   const model = setup();
   await open(model, "A", running("A"));

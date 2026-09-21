@@ -100,7 +100,19 @@ export function createThreadModel(queryClient?: QueryClient) {
   const connecting = () =>
     Boolean(connectingThreadId()) && connectingThreadId() === thread()?.id;
   const [connectFailed, setConnectFailed] = createSignal(false);
-  const [draft, setDraft] = createSignal("");
+  const [drafts, setDrafts] = createStore<Record<string, string | undefined>>(
+    {},
+  );
+  const draft = () => {
+    const id = selectedThreadId();
+    return id ? (drafts[id] ?? "") : "";
+  };
+  const setThreadDraft = (id: string, value: string) =>
+    setDrafts(id, value || undefined);
+  const setDraft = (value: string) => {
+    const id = selectedThreadId();
+    if (id) setThreadDraft(id, value);
+  };
   const [sending, setSending] = createSignal(false);
   const [answeringPermissionId, setAnsweringPermissionId] =
     createSignal<string>();
@@ -238,7 +250,6 @@ export function createThreadModel(queryClient?: QueryClient) {
     setAnsweringPermissionId(undefined);
     setCancellingTurnId(undefined);
     setConnectingThreadId(undefined);
-    setDraft("");
     setConnectFailed(false);
     clearSubscriptionRetry();
     subscriptionRetries = 0;
@@ -293,12 +304,13 @@ export function createThreadModel(queryClient?: QueryClient) {
   async function send() {
     const expectedView = view;
     const current = thread();
-    if (!current || !canSend() || !draft().trim()) return;
+    const message = draft();
+    if (!current || !canSend() || !message.trim()) return;
     setSending(true);
     setError(undefined);
     try {
-      await sendMessage(current.id, draft());
-      if (isCurrent(expectedView)) setDraft("");
+      await sendMessage(current.id, message);
+      if (drafts[current.id] === message) setThreadDraft(current.id, "");
     } catch (cause) {
       if (isCurrent(expectedView))
         setError(localizedMessage(cause, "thread.error.send"));
@@ -427,6 +439,7 @@ export function createThreadModel(queryClient?: QueryClient) {
   async function removeThread(id: string) {
     await deleteThreadCommand(id);
     deleted.add(id);
+    setThreadDraft(id, "");
     void client.cancelQueries({ queryKey: threadListQueryKey });
     client.setQueryData<ThreadMetadata[]>(threadListQueryKey, (previous) =>
       (previous ?? []).filter((entry) => entry.id !== id),
@@ -443,7 +456,6 @@ export function createThreadModel(queryClient?: QueryClient) {
     setAnsweringPermissionId(undefined);
     setCancellingTurnId(undefined);
     setConnectingThreadId(undefined);
-    setDraft("");
     setConnectFailed(false);
     setSubscriptionError(false);
     setSubscriptionLive(false);

@@ -14,6 +14,7 @@ use serde::{Deserialize, Serialize};
 use std::{path::Path, process::Stdio, time::Duration};
 use tokio::process::Command;
 use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
+use tokio_util::sync::CancellationToken;
 
 // SDK v1 treats unknown auth discriminators as Agent. Retain the wire discriminator
 // so a future authentication protocol cannot silently become an agent login.
@@ -61,6 +62,15 @@ pub async fn inspect(
     agent: &AgentDefinition,
     folder: &Path,
     method: Option<&str>,
+) -> Result<Authentication, ManagementError> {
+    inspect_cancellable(agent, folder, method, CancellationToken::new()).await
+}
+
+pub(crate) async fn inspect_cancellable(
+    agent: &AgentDefinition,
+    folder: &Path,
+    method: Option<&str>,
+    cancellation: CancellationToken,
 ) -> Result<Authentication, ManagementError> {
     let launch = super::node_runtime::resolve_launch(agent).await?;
     let mut command = Command::new(launch.program);
@@ -146,16 +156,19 @@ pub async fn inspect(
             Ok(result)
         },
     );
-    let result = tokio::time::timeout(
-        Duration::from_secs(if method.is_some() { 600 } else { 30 }),
-        protocol,
-    )
-    .await;
+    let result = tokio::select! {
+        () = cancellation.cancelled() => None,
+        result = tokio::time::timeout(
+            Duration::from_secs(if method.is_some() { 600 } else { 30 }),
+            protocol,
+        ) => Some(result),
+    };
     let _ = tokio::task::spawn_blocking(move || group.kill()).await;
     let _ = child.kill().await;
     let _ = child.wait().await;
     match result {
-        Ok(Ok(result)) => result,
+        None => Err(ManagementError::AuthenticationCancelled),
+        Some(Ok(Ok(result))) => result,
         _ => Err(ManagementError::Connection),
     }
 }

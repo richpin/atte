@@ -1,4 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/solid-query";
+import { AgentAuthenticationProvider } from "features/agent-authentication";
 import { AgentManagementPage } from "pages/agent-management";
 import { ThreadPage } from "pages/thread";
 import { I18nProvider } from "shared/i18n";
@@ -12,20 +13,22 @@ export default function App() {
   return (
     <I18nProvider>
       <QueryClientProvider client={queryClient}>
-        <div hidden={management()}>
-          <ThreadPage
-            active={!management()}
-            agentsRevision={agentsRevision()}
-            onManage={() => setManagement(true)}
-          />
-        </div>
-        <div hidden={!management()}>
-          <AgentManagementPage
-            active={management()}
-            onBack={() => setManagement(false)}
-            onAgentsChanged={() => setAgentsRevision((value) => value + 1)}
-          />
-        </div>
+        <AgentAuthenticationProvider>
+          <div hidden={management()}>
+            <ThreadPage
+              active={!management()}
+              agentsRevision={agentsRevision()}
+              onManage={() => setManagement(true)}
+            />
+          </div>
+          <div hidden={!management()}>
+            <AgentManagementPage
+              active={management()}
+              onBack={() => setManagement(false)}
+              onAgentsChanged={() => setAgentsRevision((value) => value + 1)}
+            />
+          </div>
+        </AgentAuthenticationProvider>
       </QueryClientProvider>
     </I18nProvider>
   );
