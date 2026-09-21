@@ -1,6 +1,6 @@
 use atte_lib::{
     agent::AgentDefinition,
-    thread::{ThreadStatus, Threads},
+    thread::{ThreadConfigurationValue, ThreadStatus, Threads},
 };
 use std::{path::PathBuf, process::Command, sync::OnceLock, time::Duration};
 
@@ -1283,6 +1283,159 @@ async fn connects_a_draft_without_replacing_its_identity_or_duplicating_sessions
     assert_eq!(connected.remote_session_id.as_deref(), Some("remote-1"));
     assert_eq!(connected.id, draft.id);
     assert_eq!(threads.connect(draft.id).unwrap(), connected);
+    threads.shutdown().await;
+}
+
+#[tokio::test]
+async fn thread_configuration_round_trips_opaque_typed_agent_values() {
+    let folder = tempfile::tempdir().unwrap();
+    let mut agent = mock_agent();
+    agent.env.insert("CONFIGURATION".into(), "1".into());
+    let threads = Threads::new(vec![agent]);
+    let draft = threads.create(folder.path()).unwrap();
+    threads.connect(draft.id).unwrap();
+
+    let connected = settle(&threads, draft.id).await;
+    assert_eq!(connected.configuration.len(), 3);
+    assert_eq!(connected.configuration[0].id, "opaque-model");
+    assert_eq!(
+        connected.configuration[1].category.as_deref(),
+        Some("thought_level")
+    );
+    assert_eq!(
+        connected.configuration[2].category.as_deref(),
+        Some("future_category")
+    );
+
+    threads
+        .set_configuration(
+            draft.id,
+            "opaque-thinking".into(),
+            ThreadConfigurationValue::Boolean { value: false },
+        )
+        .await
+        .unwrap();
+    let updated = threads.get(draft.id).unwrap();
+    assert_eq!(
+        serde_json::to_value(&updated.configuration[2]).unwrap()["currentValue"],
+        false
+    );
+    assert_eq!(updated.status, ThreadStatus::SessionReady);
+    threads.shutdown().await;
+}
+
+#[tokio::test]
+async fn load_and_resume_restore_agent_configuration_without_local_defaults() {
+    for mode in ["ready", "resume-only"] {
+        let folder = tempfile::tempdir().unwrap();
+        let mut initial_agent = mock_agent();
+        initial_agent.env.insert("CONFIGURATION".into(), "1".into());
+        let (store, id) = persist_remote_session(folder.path(), &initial_agent).await;
+        let mut restoring_agent = mock_agent();
+        restoring_agent
+            .env
+            .insert("CONFIGURATION".into(), "1".into());
+        restoring_agent
+            .env
+            .insert("FIXTURE_MODE".into(), mode.into());
+        let restored = Threads::with_store(vec![restoring_agent], store).unwrap();
+
+        assert!(restored.get(id).unwrap().configuration.is_empty());
+        restored.connect(id).unwrap();
+        let connected = settle(&restored, id).await;
+        assert_eq!(connected.configuration.len(), 3, "restore mode: {mode}");
+        assert_eq!(connected.configuration[0].id, "opaque-model");
+        restored.shutdown().await;
+    }
+}
+
+#[tokio::test]
+async fn agent_configuration_updates_apply_while_idle_and_running() {
+    for update in [
+        "CONFIGURATION_UPDATE_AFTER_SET",
+        "CONFIGURATION_UPDATE_DURING_PROMPT",
+    ] {
+        let folder = tempfile::tempdir().unwrap();
+        let mut agent = mock_agent();
+        agent.env.insert("CONFIGURATION".into(), "1".into());
+        agent.env.insert(update.into(), "1".into());
+        let threads = Threads::new(vec![agent]);
+        let draft = threads.create(folder.path()).unwrap();
+        threads.connect(draft.id).unwrap();
+        settle(&threads, draft.id).await;
+
+        if update == "CONFIGURATION_UPDATE_AFTER_SET" {
+            threads
+                .set_configuration(
+                    draft.id,
+                    "opaque-thinking".into(),
+                    ThreadConfigurationValue::Boolean { value: false },
+                )
+                .await
+                .unwrap();
+        } else {
+            threads.send_message(draft.id, "update".into()).unwrap();
+        }
+
+        let expected = update == "CONFIGURATION_UPDATE_AFTER_SET";
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                let thread = threads.get(draft.id).unwrap();
+                let value = serde_json::to_value(&thread.configuration[2]).unwrap()["currentValue"]
+                    .as_bool();
+                if value == Some(expected) {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
+        threads.shutdown().await;
+    }
+}
+
+#[tokio::test]
+async fn agent_configuration_updates_are_isolated_by_remote_session() {
+    let folder = tempfile::tempdir().unwrap();
+    let mut agent = mock_agent();
+    agent.env.insert("CONFIGURATION".into(), "1".into());
+    agent
+        .env
+        .insert("CONFIGURATION_UPDATE_OTHER".into(), "1".into());
+    let threads = Threads::new(vec![agent]);
+    let first = threads.create(folder.path()).unwrap();
+    let second = threads.create(folder.path()).unwrap();
+    threads.connect(first.id).unwrap();
+    settle(&threads, first.id).await;
+    threads.connect(second.id).unwrap();
+    settle(&threads, second.id).await;
+
+    threads
+        .set_configuration(
+            first.id,
+            "opaque-thinking".into(),
+            ThreadConfigurationValue::Boolean { value: false },
+        )
+        .await
+        .unwrap();
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let configuration = &threads.get(second.id).unwrap().configuration;
+            let value = serde_json::to_value(&configuration[2]).unwrap()["currentValue"].as_bool();
+            if value == Some(false) {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(
+        serde_json::to_value(&threads.get(first.id).unwrap().configuration[2]).unwrap()
+            ["currentValue"],
+        true
+    );
     threads.shutdown().await;
 }
 

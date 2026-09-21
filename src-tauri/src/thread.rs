@@ -45,6 +45,70 @@ pub struct Thread {
     pub notice: Option<String>,
     pub permissions: Vec<PermissionRequest>,
     pub queued_messages: Vec<QueuedMessage>,
+    pub configuration: Vec<ThreadConfiguration>,
+}
+
+/// Agent-provided configuration for one ACP session.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ThreadConfiguration {
+    pub id: String,
+    pub name: String,
+    pub description: Option<String>,
+    pub category: Option<String>,
+    #[serde(flatten)]
+    pub control: ThreadConfigurationControl,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(tag = "type", rename_all = "camelCase")]
+/// The interaction kind and confirmed value for an agent configuration option.
+pub enum ThreadConfigurationControl {
+    Select {
+        #[serde(rename = "currentValue")]
+        current_value: String,
+        options: ThreadConfigurationSelectOptions,
+    },
+    Boolean {
+        #[serde(rename = "currentValue")]
+        current_value: bool,
+    },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(tag = "type", rename_all = "camelCase")]
+/// Flat or agent-grouped choices for a select configuration option.
+pub enum ThreadConfigurationSelectOptions {
+    Flat {
+        options: Vec<ThreadConfigurationChoice>,
+    },
+    Grouped {
+        groups: Vec<ThreadConfigurationGroup>,
+    },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+/// One opaque select value and its agent-provided presentation metadata.
+pub struct ThreadConfigurationChoice {
+    pub value: String,
+    pub name: String,
+    pub description: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+/// An agent-provided group of related select choices.
+pub struct ThreadConfigurationGroup {
+    pub id: String,
+    pub name: String,
+    pub options: Vec<ThreadConfigurationChoice>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "camelCase")]
+/// A typed value sent unchanged to ACP when a user changes an option.
+pub enum ThreadConfigurationValue {
+    Select { value: String },
+    Boolean { value: bool },
 }
 
 /// Atte-owned input waiting for the active turn to finish, in submission order.
@@ -332,6 +396,7 @@ impl Threads {
                 notice: None,
                 permissions: Vec::new(),
                 queued_messages: store.queued_messages(saved.id)?,
+                configuration: Vec::new(),
             };
             entries.insert(
                 thread.id,
@@ -474,6 +539,7 @@ impl Threads {
                 if current.thread.agent_id == id {
                     current.generation += 1;
                     current.thread.status = ThreadStatus::Disconnected;
+                    current.thread.configuration.clear();
                     current.clear_permissions();
                     current.publish();
                     entry.runtime = None;
@@ -716,6 +782,7 @@ impl Threads {
                         | ThreadStatus::Cancelling
                 );
                 current.thread.status = ThreadStatus::Failed;
+                current.thread.configuration.clear();
                 current.thread.failure = Some(ConnectionFailure::AgentRemoved);
                 current.thread.authentication = AuthenticationStatus::Unknown;
                 current.clear_permissions();
@@ -799,6 +866,7 @@ impl Threads {
             notice: None,
             permissions: Vec::new(),
             queued_messages: Vec::new(),
+            configuration: Vec::new(),
         };
         let mut state = self.lock()?;
         if state.closed {
@@ -981,6 +1049,7 @@ impl Threads {
         thread.status = ThreadStatus::Connecting;
         thread.authentication = AuthenticationStatus::Unknown;
         thread.failure = None;
+        thread.configuration.clear();
         current.generation += 1;
         current.thread = thread;
         current.publish();
@@ -992,6 +1061,7 @@ impl Threads {
         };
         let (prompts, requests) = mpsc::unbounded_channel();
         let (cancellations, cancelled) = mpsc::unbounded_channel();
+        let (configuration, configuration_requests) = mpsc::unbounded_channel();
         let folder = thread.working_folder.clone();
         drop(current);
         let session = crate::agent_runtime::Session {
@@ -1000,6 +1070,7 @@ impl Threads {
             updates,
             prompts: requests,
             cancellations: cancelled,
+            configuration: configuration_requests,
         };
         let runtime = runtime_for(
             &mut state,
@@ -1013,6 +1084,7 @@ impl Threads {
             inputs: crate::agent_runtime::SessionInputSenders {
                 prompts,
                 cancellations,
+                configuration,
             },
             runtime: runtime.clone(),
         });
@@ -1105,6 +1177,54 @@ impl Threads {
         });
         current.publish();
         Ok(())
+    }
+
+    /// Applies one typed, opaque ACP configuration value to the connected session.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the thread does not exist, is not connected, the runtime is
+    /// unavailable, or the agent rejects the requested configuration value.
+    pub async fn set_configuration(
+        &self,
+        id: Uuid,
+        config_id: String,
+        value: ThreadConfigurationValue,
+    ) -> Result<(), ThreadError> {
+        let response = {
+            let state = self.lock()?;
+            if state.closed {
+                return Err(unavailable());
+            }
+            let entry = state.entries.get(&id).ok_or_else(not_found)?;
+            let current = entry.state.lock().map_err(|_| unavailable())?;
+            if !matches!(
+                current.thread.status,
+                ThreadStatus::SessionReady
+                    | ThreadStatus::Running
+                    | ThreadStatus::WaitingForApproval
+                    | ThreadStatus::Cancelling
+            ) {
+                return Err(ThreadError::NotReady(
+                    "연결된 스레드에서 설정을 변경해주세요.".into(),
+                ));
+            }
+            let (complete, response) = oneshot::channel();
+            entry
+                .runtime
+                .as_ref()
+                .ok_or_else(unavailable)?
+                .inputs
+                .configuration
+                .send(ConfigurationChange {
+                    config_id,
+                    value,
+                    complete,
+                })
+                .map_err(|_| unavailable())?;
+            response
+        };
+        response.await.map_err(|_| unavailable())?
     }
 
     /// Deletes only input that has not yet been removed for dispatch.
@@ -1364,6 +1484,12 @@ pub(crate) struct Prompt {
     pub text: String,
 }
 
+pub(crate) struct ConfigurationChange {
+    pub config_id: String,
+    pub value: ThreadConfigurationValue,
+    pub complete: oneshot::Sender<Result<(), ThreadError>>,
+}
+
 struct ThreadState {
     list: Arc<Mutex<list::ThreadList>>,
     store: Option<Arc<Store>>,
@@ -1497,13 +1623,18 @@ pub(crate) struct RuntimeUpdates {
 }
 
 impl RuntimeUpdates {
-    pub fn session_ready(&self, remote_session_id: String) -> Option<Prompt> {
+    pub fn session_ready(
+        &self,
+        remote_session_id: String,
+        configuration: Vec<ThreadConfiguration>,
+    ) -> Option<Prompt> {
         let mut state = self.state.lock().ok()?;
         if state.generation != self.generation {
             return None;
         }
         state.thread.remote_session_id = Some(remote_session_id);
         state.thread.status = ThreadStatus::SessionReady;
+        state.thread.configuration = configuration;
         let next = state
             .dispatch_queue_on_ready
             .then(|| state.take_next_queued_prompt())
@@ -1511,6 +1642,10 @@ impl RuntimeUpdates {
         state.dispatch_queue_on_ready = false;
         state.publish();
         next
+    }
+
+    pub fn configuration_updated(&self, configuration: Vec<ThreadConfiguration>) {
+        self.modify(|thread| thread.configuration = configuration);
     }
 
     pub fn history_restored(&self, turns: Vec<Turn>) {
@@ -1540,6 +1675,7 @@ impl RuntimeUpdates {
                 ThreadStatus::Running | ThreadStatus::WaitingForApproval | ThreadStatus::Cancelling
             );
             thread.status = ThreadStatus::Failed;
+            thread.configuration.clear();
             if failure == ConnectionFailure::AuthenticationRequired {
                 thread.authentication = AuthenticationStatus::Required;
             }
@@ -1554,6 +1690,7 @@ impl RuntimeUpdates {
                 ThreadStatus::Running | ThreadStatus::WaitingForApproval | ThreadStatus::Cancelling
             );
             thread.status = ThreadStatus::Disconnected;
+            thread.configuration.clear();
         });
     }
 

@@ -57,6 +57,7 @@ export const ko = {
       selectFolder: "폴더 선택을 완료할 수 없습니다. 다시 시도해주세요.",
       create: "새 스레드를 만들 수 없습니다.",
       agents: "준비된 에이전트를 불러올 수 없습니다.",
+      configure: "스레드 설정을 변경할 수 없습니다.",
     },
     openSidebar: "사이드바 열기",
     newThreadAgent: "새 스레드 에이전트",
@@ -108,6 +109,9 @@ export const ko = {
     queue: "대기 메시지",
     deleteQueued: "대기 메시지 삭제: {{ message }}",
     permission: "승인 요청",
+    settings: "스레드 설정",
+    settingOn: "켜짐",
+    settingOff: "꺼짐",
   },
   sidebar: {
     threads: "스레드 목록",

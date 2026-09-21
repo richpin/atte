@@ -37,7 +37,46 @@ export interface Thread {
   notice: string | null;
   permissions: PermissionRequest[];
   queuedMessages: QueuedMessage[];
+  configuration: ThreadConfiguration[];
 }
+
+export type ThreadConfigurationValue =
+  | { type: "select"; value: string }
+  | { type: "boolean"; value: boolean };
+
+export interface ThreadConfigurationChoice {
+  value: string;
+  name: string;
+  description: string | null;
+}
+
+export type ThreadConfigurationSelectOptions =
+  | { type: "flat"; options: ThreadConfigurationChoice[] }
+  | {
+      type: "grouped";
+      groups: {
+        id: string;
+        name: string;
+        options: ThreadConfigurationChoice[];
+      }[];
+    };
+
+interface ThreadConfigurationBase {
+  id: string;
+  name: string;
+  description: string | null;
+  category: string | null;
+}
+
+export type ThreadConfiguration = ThreadConfigurationBase &
+  (
+    | {
+        type: "select";
+        currentValue: string;
+        options: ThreadConfigurationSelectOptions;
+      }
+    | { type: "boolean"; currentValue: boolean }
+  );
 
 export interface QueuedMessage {
   id: string;

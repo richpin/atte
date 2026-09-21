@@ -1,6 +1,7 @@
 import { Channel, invoke } from "@tauri-apps/api/core";
 import type {
   PreparedAgent,
+  ThreadConfigurationValue,
   ThreadMetadata,
   ThreadUpdate,
 } from "../model/types";
@@ -46,6 +47,14 @@ export function cancelTurn(id: string, turn: string) {
 
 export function answerPermission(id: string, request: string, option: string) {
   return invoke<void>("answer_permission", { id, request, option });
+}
+
+export function setThreadConfiguration(
+  id: string,
+  configId: string,
+  value: ThreadConfigurationValue,
+) {
+  return invoke<void>("set_thread_configuration", { id, configId, value });
 }
 
 export function subscribeThread(

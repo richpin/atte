@@ -119,6 +119,16 @@ async fn answer_permission(
 }
 
 #[tauri::command]
+async fn set_thread_configuration(
+    id: Uuid,
+    config_id: String,
+    value: thread::ThreadConfigurationValue,
+    threads: State<'_, Threads>,
+) -> Result<(), ThreadError> {
+    threads.set_configuration(id, config_id, value).await
+}
+
+#[tauri::command]
 async fn subscribe_thread(
     id: Uuid,
     channel: tauri::ipc::Channel<ThreadUpdate>,
@@ -260,6 +270,7 @@ pub fn run() {
             send_message,
             cancel_turn,
             answer_permission,
+            set_thread_configuration,
             subscribe_thread,
             unsubscribe_thread
         ])

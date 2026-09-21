@@ -236,6 +236,172 @@ it("groups threads by folder, collapses projects and creates within the selected
   expect(invoke).toHaveBeenCalledWith("connect_thread", { id: "new" });
 });
 
+it("presents agent configuration and reconciles it from the thread subscription", async () => {
+  const saved = {
+    id: "configured",
+    title: "Configured thread",
+    workingFolder: "/work/project",
+    agentId: "codex",
+    status: "sessionReady",
+    remoteSessionId: "remote-1",
+    authentication: "authenticated",
+    turns: [],
+    permissions: [],
+    queuedMessages: [],
+    configuration: [
+      {
+        id: "opaque-model",
+        name: "Model",
+        description: "Choose the model",
+        category: "model",
+        type: "select",
+        currentValue: "model-a",
+        options: {
+          type: "flat",
+          options: [
+            { value: "model-a", name: "Model A", description: null },
+            { value: "model-b", name: "Model B", description: null },
+          ],
+        },
+      },
+      {
+        id: "opaque-effort",
+        name: "Reasoning effort",
+        description: "Choose how deeply the agent reasons",
+        category: "thought_level",
+        type: "select",
+        currentValue: "balanced",
+        options: {
+          type: "grouped",
+          groups: [
+            {
+              id: "normal",
+              name: "Standard efforts",
+              options: [
+                {
+                  value: "balanced",
+                  name: "Balanced",
+                  description: "A balanced effort",
+                },
+                {
+                  value: "deep",
+                  name: "Deep",
+                  description: "More deliberate",
+                },
+              ],
+            },
+          ],
+        },
+      },
+      {
+        id: "opaque-mode",
+        name: "Planning mode",
+        description: "Plan before acting",
+        category: "mode",
+        type: "boolean",
+        currentValue: true,
+      },
+      {
+        id: "opaque-sandbox",
+        name: "Sandbox",
+        description: "Limit file access",
+        category: "future_category",
+        type: "select",
+        currentValue: "workspace",
+        options: {
+          type: "grouped",
+          groups: [
+            {
+              id: "safe",
+              name: "Safe modes",
+              options: [
+                {
+                  value: "workspace",
+                  name: "Workspace",
+                  description: "Only the workspace",
+                },
+              ],
+            },
+          ],
+        },
+      },
+      {
+        id: "opaque-notifications",
+        name: "Notifications",
+        description: "Show agent notifications",
+        category: null,
+        type: "boolean",
+        currentValue: false,
+      },
+    ],
+  };
+  requests.mockImplementation(async (command) => {
+    if (command === "subscription_snapshot") return saved;
+    return undefined;
+  });
+  const original = vi.mocked(invoke).getMockImplementation();
+  vi.mocked(invoke).mockImplementation(async (command, args) => {
+    if (command === "list_threads") return [saved];
+    return original?.(command, args);
+  });
+  render(() => <App />);
+  await userEvent.click(
+    await screen.findByRole("button", { name: "Configured thread" }),
+  );
+
+  expect(
+    screen
+      .getByRole("combobox", { name: "Reasoning effort: Balanced" })
+      .getAttribute("title"),
+  ).toBe("Choose how deeply the agent reasons");
+  expect(screen.getByRole("group", { name: "Standard efforts" })).toBeTruthy();
+  expect(
+    screen
+      .getByRole("switch", { name: "Planning mode: 켜짐" })
+      .getAttribute("title"),
+  ).toBe("Plan before acting");
+
+  const settings = screen.getByText("스레드 설정");
+  settings.focus();
+  expect(document.activeElement).toBe(settings);
+  await userEvent.click(settings);
+  expect(settings.getAttribute("aria-expanded")).toBe("true");
+  expect(screen.getByText("Limit file access")).toBeTruthy();
+  expect(screen.getByRole("group", { name: "Safe modes" })).toBeTruthy();
+  expect(
+    screen.getByRole("switch", { name: "Notifications: 꺼짐" }),
+  ).toBeTruthy();
+
+  await userEvent.selectOptions(
+    await screen.findByRole("combobox", { name: "Model: Model A" }),
+    "model-b",
+  );
+  expect(invoke).toHaveBeenCalledWith("set_thread_configuration", {
+    id: "configured",
+    configId: "opaque-model",
+    value: { type: "select", value: "model-b" },
+  });
+  expect(screen.getByRole("combobox", { name: "Model: Model A" })).toBeTruthy();
+
+  receive({
+    ...saved,
+    configuration: [{ ...saved.configuration[0], currentValue: "model-b" }],
+  });
+  expect(
+    await screen.findByRole("combobox", { name: "Model: Model B" }),
+  ).toBeTruthy();
+
+  receive({ ...saved, status: "connecting", configuration: [] });
+  await waitFor(() =>
+    expect(screen.queryByRole("combobox", { name: /Model:/ })).toBeNull(),
+  );
+
+  receive(saved);
+  expect(
+    await screen.findByRole("switch", { name: "Planning mode: 켜짐" }),
+  ).toBeTruthy();
+});
+
 it("opens the same delete action from the row menu and right click, then cancels safely", async () => {
   const saved = {
     id: "delete-me",
@@ -2342,9 +2508,12 @@ it("confirms logout, blocks duplicates, preserves failures, and clears only afte
   );
   expect(screen.getByRole("alertdialog").textContent).toContain("Codex");
   await userEvent.click(screen.getByRole("button", { name: "취소" }));
+  await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
   expect(attempts).toBe(0);
 
-  await userEvent.click(screen.getByRole("button", { name: "Codex 로그아웃" }));
+  await userEvent.click(
+    await screen.findByRole("button", { name: "Codex 로그아웃" }),
+  );
   await userEvent.click(screen.getByRole("button", { name: "로그아웃 확인" }));
   expect(
     await screen.findByRole("button", { name: "Codex 로그아웃 중" }),

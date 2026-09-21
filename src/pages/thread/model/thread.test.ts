@@ -42,6 +42,7 @@ function thread(id: string, changes: Partial<Thread> = {}): Thread {
     permissions: [],
     queuedMessages: [],
     ...changes,
+    configuration: changes.configuration ?? [],
   };
 }
 
@@ -196,6 +197,47 @@ it("updates the displayed thread only from its subscription", async () => {
     thread: thread("A", { notice: "subscription" }),
   });
   expect(model.thread()?.notice).toBe("subscription");
+});
+
+it("changes thread configuration through a command and displays only subscription state", async () => {
+  commands.set("set_thread_configuration", async () =>
+    thread("A", { notice: "command result" }),
+  );
+  const model = setup();
+  const configuration = [
+    {
+      id: "opaque-model",
+      name: "Model",
+      description: null,
+      category: "model",
+      type: "select" as const,
+      currentValue: "model-a",
+      options: {
+        type: "flat" as const,
+        options: [{ value: "model-a", name: "Model A", description: null }],
+      },
+    },
+  ];
+  await open(model, "A", thread("A", { configuration }));
+
+  await model.configure("opaque-model", {
+    type: "select",
+    value: "model-b",
+  });
+
+  expect(invoke).toHaveBeenCalledWith("set_thread_configuration", {
+    id: "A",
+    configId: "opaque-model",
+    value: { type: "select", value: "model-b" },
+  });
+  expect(model.thread()?.configuration[0].currentValue).toBe("model-a");
+  stream("A")({
+    kind: "thread",
+    thread: thread("A", {
+      configuration: [{ ...configuration[0], currentValue: "model-b" }],
+    }),
+  });
+  expect(model.thread()?.configuration[0].currentValue).toBe("model-b");
 });
 
 it("keeps the draft when sending fails", async () => {

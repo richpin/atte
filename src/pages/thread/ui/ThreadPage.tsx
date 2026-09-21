@@ -54,6 +54,7 @@ export function ThreadPage(props: {
     deleteQueued,
     answer,
     cancel,
+    configure,
     connect,
     removeThread,
     retrySubscription,
@@ -445,6 +446,9 @@ export function ThreadPage(props: {
                       onSend={() => void send()}
                       onCancel={() => void cancel()}
                       onAnswer={answer}
+                      onConfigure={(configId, value) =>
+                        void configure(configId, value)
+                      }
                       onDeleteQueued={deleteQueued}
                     />
                   )}

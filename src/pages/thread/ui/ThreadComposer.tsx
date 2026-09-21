@@ -1,7 +1,13 @@
+import { Popover } from "@kobalte/core/popover";
 import type { AgentAuthenticationState } from "features/agent-authentication";
 import { useI18n } from "shared/i18n";
 import { For, Match, Show, Switch } from "solid-js";
-import type { Thread } from "../model/types";
+import type {
+  Thread,
+  ThreadConfiguration,
+  ThreadConfigurationChoice,
+  ThreadConfigurationValue,
+} from "../model/types";
 import { PermissionInput } from "./PermissionInput";
 import { PromptInput } from "./PromptInput";
 import { QueuedMessage } from "./QueuedMessage";
@@ -22,6 +28,7 @@ export function ThreadComposer(props: {
   onSend: () => void;
   onCancel: () => void;
   onAnswer: (request: string, option: string) => void;
+  onConfigure: (configId: string, value: ThreadConfigurationValue) => void;
   onDeleteQueued: (id: string) => Promise<void>;
   onRetryAuthentication?: () => void;
   onAuthenticate?: (method: string) => void;
@@ -40,6 +47,14 @@ export function ThreadComposer(props: {
       ? (current as Extract<AgentAuthenticationState, { status: Status }>)
       : undefined;
   };
+  const isPromotedConfiguration = (configuration: ThreadConfiguration) =>
+    ["model", "thought_level", "mode"].includes(configuration.category ?? "");
+  const promotedConfiguration = () =>
+    (props.thread.configuration ?? []).filter(isPromotedConfiguration);
+  const additionalConfiguration = () =>
+    (props.thread.configuration ?? []).filter(
+      (configuration) => !isPromotedConfiguration(configuration),
+    );
 
   return (
     <div class="max-h-thread-composer mx-auto flex w-full max-w-4xl flex-col overflow-hidden px-6">
@@ -87,8 +102,44 @@ export function ThreadComposer(props: {
                 />
               )}
             </Show>
-            <div class="mt-3 flex items-center justify-between text-xs text-muted">
-              <span>{props.agentName}</span>
+            <div class="mt-3 flex items-center justify-between gap-3 text-xs text-muted">
+              <div class="flex min-w-0 items-center gap-2">
+                <span class="shrink-0">{props.agentName}</span>
+                <For each={promotedConfiguration()}>
+                  {(configuration) => (
+                    <ThreadConfigurationControl
+                      configuration={configuration}
+                      compact
+                      disabled={!props.actionsEnabled}
+                      onChange={(value) =>
+                        props.onConfigure(configuration.id, value)
+                      }
+                    />
+                  )}
+                </For>
+                <Show when={additionalConfiguration().length > 0}>
+                  <Popover placement="top-start">
+                    <Popover.Trigger class="rounded-md border border-line px-2 py-1 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent">
+                      {t("thread.settings")}
+                    </Popover.Trigger>
+                    <Popover.Portal>
+                      <Popover.Content class="z-20 flex min-w-64 flex-col gap-3 rounded-xl border border-line bg-panel p-3 text-xs text-ink shadow-lg">
+                        <For each={additionalConfiguration()}>
+                          {(configuration) => (
+                            <ThreadConfigurationControl
+                              configuration={configuration}
+                              disabled={!props.actionsEnabled}
+                              onChange={(value) =>
+                                props.onConfigure(configuration.id, value)
+                              }
+                            />
+                          )}
+                        </For>
+                      </Popover.Content>
+                    </Popover.Portal>
+                  </Popover>
+                </Show>
+              </div>
               <button
                 type={props.showStop ? "button" : "submit"}
                 aria-label={
@@ -210,4 +261,138 @@ export function ThreadComposer(props: {
       </Show>
     </div>
   );
+}
+
+function ThreadConfigurationControl(props: {
+  configuration: ThreadConfiguration;
+  compact?: boolean;
+  disabled: boolean;
+  onChange: (value: ThreadConfigurationValue) => void;
+}) {
+  const { t } = useI18n();
+  const selectedName = () => {
+    if (props.configuration.type === "boolean")
+      return props.configuration.currentValue
+        ? t("thread.settingOn")
+        : t("thread.settingOff");
+    return configurationChoices(props.configuration).find(
+      (choice) => choice.value === props.configuration.currentValue,
+    )?.name;
+  };
+  const accessibleName = () =>
+    `${props.configuration.name}: ${selectedName() ?? props.configuration.currentValue}`;
+
+  return (
+    <div class={props.compact ? "min-w-0" : "flex flex-col gap-1"}>
+      <Show when={!props.compact}>
+        <span class="font-medium">{props.configuration.name}</span>
+        <Show when={props.configuration.description}>
+          {(description) => (
+            <span class="text-xs text-muted">{description()}</span>
+          )}
+        </Show>
+      </Show>
+      <Show
+        when={props.configuration.type === "select" && props.configuration}
+        fallback={
+          <button
+            type="button"
+            role="switch"
+            aria-label={accessibleName()}
+            title={props.configuration.description ?? undefined}
+            aria-checked={
+              props.configuration.type === "boolean" &&
+              props.configuration.currentValue
+            }
+            disabled={props.disabled}
+            class="rounded-md border border-line px-2 py-1 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent disabled:opacity-40"
+            onClick={() => {
+              if (props.configuration.type === "boolean")
+                props.onChange({
+                  type: "boolean",
+                  value: !props.configuration.currentValue,
+                });
+            }}
+          >
+            {props.compact
+              ? `${props.configuration.name}: ${selectedName()}`
+              : selectedName()}
+          </button>
+        }
+      >
+        {(configuration) => (
+          <select
+            aria-label={accessibleName()}
+            title={configuration().description ?? undefined}
+            disabled={props.disabled}
+            value={configuration().currentValue}
+            class="max-w-44 rounded-md border border-line bg-panel px-2 py-1 text-ink focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent disabled:opacity-40"
+            onChange={(event) =>
+              props.onChange({
+                type: "select",
+                value: event.currentTarget.value,
+              })
+            }
+          >
+            <Show
+              when={configuration().options.type === "grouped"}
+              fallback={
+                <For each={flatConfigurationOptions(configuration())}>
+                  {(choice) => (
+                    <option
+                      value={choice.value}
+                      title={choice.description ?? undefined}
+                    >
+                      {choice.name}
+                    </option>
+                  )}
+                </For>
+              }
+            >
+              <For each={groupedConfigurationOptions(configuration())}>
+                {(group) => (
+                  <optgroup label={group.name} aria-label={group.name}>
+                    <For each={group.options}>
+                      {(choice) => (
+                        <option
+                          value={choice.value}
+                          title={choice.description ?? undefined}
+                        >
+                          {choice.name}
+                        </option>
+                      )}
+                    </For>
+                  </optgroup>
+                )}
+              </For>
+            </Show>
+          </select>
+        )}
+      </Show>
+    </div>
+  );
+}
+
+function flatConfigurationOptions(
+  configuration: Extract<ThreadConfiguration, { type: "select" }>,
+) {
+  return configuration.options.type === "flat"
+    ? configuration.options.options
+    : [];
+}
+
+function groupedConfigurationOptions(
+  configuration: Extract<ThreadConfiguration, { type: "select" }>,
+) {
+  return configuration.options.type === "grouped"
+    ? configuration.options.groups
+    : [];
+}
+
+function configurationChoices(
+  configuration: Extract<ThreadConfiguration, { type: "select" }>,
+): ThreadConfigurationChoice[] {
+  return configuration.options.type === "flat"
+    ? configuration.options.options
+    : configuration.options.groups.flatMap((group) => group.options);
 }

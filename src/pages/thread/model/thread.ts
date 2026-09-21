@@ -23,10 +23,16 @@ import {
   listThreads,
   selectWorkingFolder,
   sendMessage,
+  setThreadConfiguration,
   subscribeThread,
   subscribeThreadList,
 } from "../api/threads";
-import type { Thread, ThreadMetadata, ThreadUpdate } from "./types";
+import type {
+  Thread,
+  ThreadConfigurationValue,
+  ThreadMetadata,
+  ThreadUpdate,
+} from "./types";
 
 const threadListQueryKey = ["threads"] as const;
 const subscriptionRetryDelay = 5_000;
@@ -377,6 +383,19 @@ export function createThreadModel(queryClient?: QueryClient) {
     }
   }
 
+  async function configure(configId: string, value: ThreadConfigurationValue) {
+    const expectedView = view;
+    const current = thread();
+    if (!current || !actionsEnabled()) return;
+    setError(undefined);
+    try {
+      await setThreadConfiguration(current.id, configId, value);
+    } catch (cause) {
+      if (isCurrent(expectedView))
+        setError(localizedMessage(cause, "thread.error.configure"));
+    }
+  }
+
   async function connect() {
     const expectedView = view;
     const current = thread();
@@ -489,6 +508,7 @@ export function createThreadModel(queryClient?: QueryClient) {
     deleteQueued,
     answer,
     cancel,
+    configure,
     connect,
     selectFolder,
     createInFolder,

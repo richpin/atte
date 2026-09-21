@@ -30,8 +30,99 @@ function readyThread(): Thread {
     notice: null,
     permissions: [],
     queuedMessages: [],
+    configuration: [],
   };
 }
+
+it("renders agent-provided thread configuration and sends typed selections", () => {
+  const onConfigure = vi.fn();
+  const current = readyThread();
+  current.configuration = [
+    {
+      id: "opaque-model",
+      name: "Model",
+      description: "Choose the model",
+      category: "model",
+      type: "select",
+      currentValue: "model-a",
+      options: {
+        type: "flat",
+        options: [
+          { value: "model-a", name: "Model A", description: null },
+          { value: "model-b", name: "Model B", description: "Faster" },
+        ],
+      },
+    },
+    {
+      id: "opaque-sandbox",
+      name: "Sandbox",
+      description: "Limit file access",
+      category: "future_category",
+      type: "select",
+      currentValue: "workspace",
+      options: {
+        type: "grouped",
+        groups: [
+          {
+            id: "safe",
+            name: "Safe modes",
+            options: [
+              { value: "workspace", name: "Workspace", description: null },
+            ],
+          },
+        ],
+      },
+    },
+    {
+      id: "opaque-thinking",
+      name: "Thinking",
+      description: null,
+      category: null,
+      type: "boolean",
+      currentValue: true,
+    },
+  ];
+
+  render(() => (
+    <I18nProvider>
+      <ThreadComposer
+        active={false}
+        thread={current}
+        agentName="Agent"
+        draft=""
+        answerPending={false}
+        cancelPending={false}
+        showStop={false}
+        stopping={false}
+        actionsEnabled={true}
+        canSend={true}
+        onDraftChange={() => {}}
+        onSend={() => {}}
+        onCancel={() => {}}
+        onAnswer={() => {}}
+        onConfigure={onConfigure}
+        onDeleteQueued={async () => {}}
+      />
+    </I18nProvider>
+  ));
+
+  fireEvent.change(screen.getByRole("combobox", { name: "Model: Model A" }), {
+    target: { value: "model-b" },
+  });
+  expect(onConfigure).toHaveBeenCalledWith("opaque-model", {
+    type: "select",
+    value: "model-b",
+  });
+
+  fireEvent.click(screen.getByText("Thread settings"));
+  expect(screen.getByRole("group", { name: "Safe modes" })).toBeTruthy();
+  fireEvent.click(screen.getByRole("switch", { name: "Thinking: On" }));
+  expect(onConfigure).toHaveBeenCalledWith("opaque-thinking", {
+    type: "boolean",
+    value: false,
+  });
+  expect(screen.getByText("Limit file access")).toBeTruthy();
+});
 
 it("switches from PromptInput to PermissionInput when approval is requested", () => {
   const [thread, setThread] = createSignal(readyThread());
@@ -54,6 +145,7 @@ it("switches from PromptInput to PermissionInput when approval is requested", ()
         onSend={() => {}}
         onCancel={() => {}}
         onAnswer={onAnswer}
+        onConfigure={() => {}}
         onDeleteQueued={async () => {}}
       />
     </I18nProvider>
@@ -105,6 +197,7 @@ it("submits PromptInput with Enter", () => {
         onSend={onSend}
         onCancel={() => {}}
         onAnswer={() => {}}
+        onConfigure={() => {}}
         onDeleteQueued={async () => {}}
       />
     </I18nProvider>
@@ -149,6 +242,7 @@ it("disables every thread mutation while the subscription is unavailable", () =>
         onSend={() => {}}
         onCancel={() => {}}
         onAnswer={() => {}}
+        onConfigure={() => {}}
         onDeleteQueued={async () => {}}
       />
     </I18nProvider>

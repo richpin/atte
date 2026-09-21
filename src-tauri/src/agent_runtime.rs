@@ -6,16 +6,25 @@ use crate::{
     agent_management::authentication::{
         supports_auth_status, AuthStatus, AuthStatusUpdate, AuthenticationObservation,
     },
-    thread::{ConnectionFailure, PermissionOption, PermissionRequest, Prompt, RuntimeUpdates},
+    thread::{
+        ConfigurationChange, ConnectionFailure, PermissionOption, PermissionRequest, Prompt,
+        RuntimeUpdates, ThreadConfiguration, ThreadConfigurationChoice, ThreadConfigurationControl,
+        ThreadConfigurationGroup, ThreadConfigurationSelectOptions, ThreadConfigurationValue,
+        ThreadError,
+    },
 };
 use agent_client_protocol::{
     schema::{
         v1::{
-            AgentCapabilities, CancelNotification, ContentBlock, DeleteSessionRequest,
+            AgentCapabilities, BooleanConfigOptionCapabilities, CancelNotification,
+            ClientCapabilities, ClientSessionCapabilities, ContentBlock, DeleteSessionRequest,
             InitializeRequest, LoadSessionRequest, NewSessionRequest, PromptRequest,
             RequestPermissionOutcome, RequestPermissionRequest, RequestPermissionResponse,
-            ResumeSessionRequest, SelectedPermissionOutcome, SessionId, SessionNotification,
-            SessionUpdate, ToolCallContent, ToolCallUpdate, ToolCallUpdateFields,
+            ResumeSessionRequest, SelectedPermissionOutcome, SessionConfigKind,
+            SessionConfigOption, SessionConfigOptionValue, SessionConfigOptionsCapabilities,
+            SessionConfigSelectOption, SessionConfigSelectOptions, SessionId, SessionNotification,
+            SessionUpdate, SetSessionConfigOptionRequest, ToolCallContent, ToolCallUpdate,
+            ToolCallUpdateFields,
         },
         ProtocolVersion,
     },
@@ -45,11 +54,13 @@ pub(crate) struct Session {
     pub updates: RuntimeUpdates,
     pub prompts: mpsc::UnboundedReceiver<Prompt>,
     pub cancellations: mpsc::UnboundedReceiver<Uuid>,
+    pub configuration: mpsc::UnboundedReceiver<ConfigurationChange>,
 }
 
 pub(crate) struct SessionInputSenders {
     pub prompts: mpsc::UnboundedSender<Prompt>,
     pub cancellations: mpsc::UnboundedSender<Uuid>,
+    pub configuration: mpsc::UnboundedSender<ConfigurationChange>,
 }
 
 pub(crate) enum RuntimeCommand {
@@ -186,15 +197,26 @@ pub(crate) async fn run(
         .on_receive_notification(async move |notification: SessionNotification, _cx| {
             if let Ok(mut routes) = notification_routes.lock() {
                 if let Some(route) = routes.get_mut(&notification.session_id.to_string()) {
-                    if let Some(replay) = &mut route.replay {
-                        replay.update(notification.update);
-                    } else if let Some(active) = &mut route.active {
-                        match notification.update {
-                            SessionUpdate::AgentMessageChunk(chunk) => if let ContentBlock::Text(text) = chunk.content { route.updates.append_text(active.turn, text.text); },
-                            SessionUpdate::ToolCall(tool) => { active.update_tool(tool.into()); },
-                            SessionUpdate::ToolCallUpdate(tool) => { active.update_tool(tool); },
-                            _ => {},
+                    match notification.update {
+                        SessionUpdate::ConfigOptionUpdate(update) => route
+                            .updates
+                            .configuration_updated(thread_configuration(update.config_options)),
+                        update if route.replay.is_some() => {
+                            if let Some(replay) = &mut route.replay {
+                                replay.update(update);
+                            }
                         }
+                        update if route.active.is_some() => {
+                            if let Some(active) = &mut route.active {
+                                match update {
+                                    SessionUpdate::AgentMessageChunk(chunk) => if let ContentBlock::Text(text) = chunk.content { route.updates.append_text(active.turn, text.text); },
+                                    SessionUpdate::ToolCall(tool) => { active.update_tool(tool.into()); },
+                                    SessionUpdate::ToolCallUpdate(tool) => { active.update_tool(tool); },
+                                    _ => {},
+                                }
+                            }
+                        }
+                        _ => {}
                     }
                 }
             }
@@ -216,7 +238,15 @@ pub(crate) async fn run(
             Ok(())
         }, agent_client_protocol::on_receive_notification!())
         .connect_with(ByteStreams::new(stdin.compat_write(), stdout.compat()), async |connection: ConnectionTo<Agent>| {
-            let initialized = match tokio::time::timeout(Duration::from_secs(30), connection.send_request(InitializeRequest::new(ProtocolVersion::V1)).block_task()).await {
+            let initialize = InitializeRequest::new(ProtocolVersion::V1).client_capabilities(
+                ClientCapabilities::new().session(
+                    ClientSessionCapabilities::new().config_options(
+                        SessionConfigOptionsCapabilities::new()
+                            .boolean(BooleanConfigOptionCapabilities::new()),
+                    ),
+                ),
+            );
+            let initialized = match tokio::time::timeout(Duration::from_secs(30), connection.send_request(initialize).block_task()).await {
                 Ok(Ok(initialized)) if initialized.protocol_version == ProtocolVersion::V1 => initialized,
                 Ok(Ok(_)) => return Ok(ConnectionFailure::InitializationFailed),
                 Ok(Err(error)) => return Ok(classify(error, ConnectionFailure::InitializationFailed)),
@@ -417,8 +447,8 @@ async fn run_session(
                     },
                 );
             }
-            if capabilities.load_session {
-                connection
+            let configuration = if capabilities.load_session {
+                let response = connection
                     .send_request(LoadSessionRequest::new(id.clone(), &folder))
                     .block_task()
                     .await
@@ -432,8 +462,9 @@ async fn run_session(
                 if let Some(history) = history {
                     updates.history_restored(history.turns);
                 }
+                response.config_options.unwrap_or_default()
             } else if capabilities.session_capabilities.resume.is_some() {
-                connection
+                let response = connection
                     .send_request(ResumeSessionRequest::new(id.clone(), &folder))
                     .block_task()
                     .await
@@ -446,10 +477,11 @@ async fn run_session(
                     }
                 }
                 updates.context_resumed();
+                response.config_options.unwrap_or_default()
             } else {
                 return Err(ConnectionFailure::ResumptionUnsupported);
-            }
-            Ok(SessionId::new(id.clone()))
+            };
+            Ok((SessionId::new(id.clone()), configuration))
         } else {
             let response = connection
                 .send_request(NewSessionRequest::new(&folder))
@@ -467,21 +499,34 @@ async fn run_session(
                     },
                 );
             }
-            Ok(response.session_id)
+            Ok((
+                response.session_id,
+                response.config_options.unwrap_or_default(),
+            ))
         }
     };
-    let remote = match tokio::time::timeout(Duration::from_secs(30), handshake).await {
-        Ok(Ok(remote)) => remote,
-        Ok(Err(failure)) => return failure,
-        Err(_) => return ConnectionFailure::TimedOut,
-    };
-    let mut next_prompt = updates.session_ready(remote.to_string());
+    let (remote, configuration) =
+        match tokio::time::timeout(Duration::from_secs(30), handshake).await {
+            Ok(Ok(remote)) => remote,
+            Ok(Err(failure)) => return failure,
+            Err(_) => return ConnectionFailure::TimedOut,
+        };
+    let mut next_prompt =
+        updates.session_ready(remote.to_string(), thread_configuration(configuration));
     loop {
         let prompt = match next_prompt.take() {
             Some(prompt) => prompt,
-            None => match session.prompts.recv().await {
-                Some(prompt) => prompt,
-                None => return ConnectionFailure::ConnectionClosed,
+            None => loop {
+                tokio::select! {
+                    prompt = session.prompts.recv() => match prompt {
+                        Some(prompt) => break prompt,
+                        None => return ConnectionFailure::ConnectionClosed,
+                    },
+                    change = session.configuration.recv() => match change {
+                        Some(change) => apply_configuration(&connection, &remote, updates, change).await,
+                        None => return ConnectionFailure::ConnectionClosed,
+                    },
+                }
             },
         };
         if let Ok(mut routes) = routes.lock() {
@@ -533,8 +578,112 @@ async fn run_session(
                         if let Err(error) = connection.send_notification(CancelNotification::new(remote.clone())) { return classify(error, ConnectionFailure::ConnectionClosed); }
                     }
                 }
+                change = session.configuration.recv() => match change {
+                    Some(change) => apply_configuration(&connection, &remote, updates, change).await,
+                    None => return ConnectionFailure::ConnectionClosed,
+                }
             }
         }
+    }
+}
+
+async fn apply_configuration(
+    connection: &ConnectionTo<Agent>,
+    session: &SessionId,
+    updates: &RuntimeUpdates,
+    change: ConfigurationChange,
+) {
+    let value = match change.value {
+        ThreadConfigurationValue::Select { value } => SessionConfigOptionValue::value_id(value),
+        ThreadConfigurationValue::Boolean { value } => SessionConfigOptionValue::boolean(value),
+    };
+    let result = connection
+        .send_request(SetSessionConfigOptionRequest::new(
+            session.clone(),
+            change.config_id,
+            value,
+        ))
+        .block_task()
+        .await;
+    match result {
+        Ok(response) => {
+            updates.configuration_updated(thread_configuration(response.config_options));
+            let _ = change.complete.send(Ok(()));
+        }
+        Err(_) => {
+            let _ = change.complete.send(Err(ThreadError::NotReady(
+                "스레드 설정을 변경할 수 없습니다.".into(),
+            )));
+        }
+    }
+}
+
+fn thread_configuration(options: Vec<SessionConfigOption>) -> Vec<ThreadConfiguration> {
+    options
+        .into_iter()
+        .filter_map(|option| {
+            let control = match option.kind {
+                SessionConfigKind::Select(select) => ThreadConfigurationControl::Select {
+                    current_value: select.current_value.to_string(),
+                    options: match select.options {
+                        SessionConfigSelectOptions::Ungrouped(options) => {
+                            ThreadConfigurationSelectOptions::Flat {
+                                options: options
+                                    .into_iter()
+                                    .map(thread_configuration_choice)
+                                    .collect(),
+                            }
+                        }
+                        SessionConfigSelectOptions::Grouped(groups) => {
+                            ThreadConfigurationSelectOptions::Grouped {
+                                groups: groups
+                                    .into_iter()
+                                    .map(|group| ThreadConfigurationGroup {
+                                        id: group.group.to_string(),
+                                        name: group.name,
+                                        options: group
+                                            .options
+                                            .into_iter()
+                                            .map(thread_configuration_choice)
+                                            .collect(),
+                                    })
+                                    .collect(),
+                            }
+                        }
+                        _ => {
+                            eprintln!("unsupported ACP select option collection omitted");
+                            return None;
+                        }
+                    },
+                },
+                SessionConfigKind::Boolean(boolean) => ThreadConfigurationControl::Boolean {
+                    current_value: boolean.current_value,
+                },
+                _ => {
+                    eprintln!("unsupported ACP thread configuration kind omitted");
+                    return None;
+                }
+            };
+            Some(ThreadConfiguration {
+                id: option.id.to_string(),
+                name: option.name,
+                description: option.description,
+                category: option.category.and_then(|category| {
+                    serde_json::to_value(category)
+                        .ok()
+                        .and_then(|value| value.as_str().map(str::to_owned))
+                }),
+                control,
+            })
+        })
+        .collect()
+}
+
+fn thread_configuration_choice(choice: SessionConfigSelectOption) -> ThreadConfigurationChoice {
+    ThreadConfigurationChoice {
+        value: choice.value.to_string(),
+        name: choice.name,
+        description: choice.description,
     }
 }
 

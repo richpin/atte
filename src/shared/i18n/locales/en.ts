@@ -50,6 +50,7 @@ export const en = {
       selectFolder: "The folder could not be selected. Try again.",
       create: "The new thread could not be created.",
       agents: "Ready agents could not be loaded.",
+      configure: "The thread setting could not be changed.",
     },
     openSidebar: "Open sidebar",
     newThreadAgent: "New thread agent",
@@ -101,6 +102,9 @@ export const en = {
     queue: "Queued messages",
     deleteQueued: "Delete queued message: {{ message }}",
     permission: "Permission request",
+    settings: "Thread settings",
+    settingOn: "On",
+    settingOff: "Off",
   },
   sidebar: {
     threads: "Thread list",

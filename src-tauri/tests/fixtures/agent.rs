@@ -31,6 +31,49 @@ fn auth_status() -> Value {
     }
 }
 
+fn configuration() -> Value {
+    json!([
+        {
+            "id": "opaque-model",
+            "name": "Model",
+            "description": "Choose the model",
+            "category": "model",
+            "type": "select",
+            "currentValue": "model-a",
+            "options": [
+                {"value": "model-a", "name": "Model A"},
+                {"value": "model-b", "name": "Model B", "description": "Faster"}
+            ]
+        },
+        {
+            "id": "opaque-effort",
+            "name": "Effort",
+            "category": "thought_level",
+            "type": "select",
+            "currentValue": "medium",
+            "options": [
+                {"group": "normal", "name": "Normal", "options": [
+                    {"value": "medium", "name": "Medium"},
+                    {"value": "high", "name": "High"}
+                ]}
+            ]
+        },
+        {
+            "id": "opaque-thinking",
+            "name": "Thinking",
+            "category": "future_category",
+            "type": "boolean",
+            "currentValue": true
+        },
+        {
+            "id": "opaque-future",
+            "name": "Future control",
+            "type": "future_control",
+            "currentValue": "future"
+        }
+    ])
+}
+
 // Also reap the descendant on normal EOF; the cleanup test kills the process group.
 struct Descendant(Child);
 
@@ -66,6 +109,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         return Ok(());
     }
     let mode = env::var("FIXTURE_MODE").unwrap_or_else(|_| "ready".into());
+    let supports_configuration = env::var_os("CONFIGURATION").is_some();
     if mode == "concurrent" {
         return concurrent::run();
     }
@@ -116,6 +160,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 assert_ne!(capabilities["terminal"], true);
                 if let Some(fs) = capabilities["fs"].as_object() {
                     assert!(!fs.values().any(|value| value == true));
+                }
+                if supports_configuration {
+                    assert!(capabilities["session"]["configOptions"]["boolean"].is_object());
                 }
                 if mode == "exit-init" {
                     process::exit(12);
@@ -195,12 +242,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     assert_eq!(response["result"]["outcome"]["outcome"], "cancelled");
                 }
                 sessions += 1;
-                json!({"sessionId": format!("remote-{sessions}")})
+                let mut response = json!({"sessionId": format!("remote-{sessions}")});
+                if supports_configuration {
+                    response["configOptions"] = configuration();
+                }
+                response
             }
             "session/resume" => {
                 assert_eq!(mode, "resume-only");
                 assert_eq!(request["params"]["sessionId"], "remote-1");
-                json!({})
+                let mut response = json!({});
+                if supports_configuration {
+                    response["configOptions"] = configuration();
+                }
+                response
             }
             "session/load" => {
                 assert_ne!(mode, "resume-only");
@@ -233,7 +288,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 if mode == "load-exit" {
                     process::exit(16);
                 }
-                json!({})
+                let mut response = json!({});
+                if supports_configuration {
+                    response["configOptions"] = configuration();
+                }
+                response
+            }
+            "session/set_config_option" => {
+                assert!(supports_configuration);
+                assert_eq!(request["params"]["sessionId"], "remote-1");
+                assert_eq!(request["params"]["configId"], "opaque-thinking");
+                assert_eq!(request["params"]["type"], "boolean");
+                assert_eq!(request["params"]["value"], false);
+                let mut options = configuration();
+                if env::var_os("CONFIGURATION_UPDATE_OTHER").is_none() {
+                    options[2]["currentValue"] = json!(false);
+                }
+                json!({"configOptions": options})
             }
             "session/prompt" => {
                 prompts += 1;
@@ -243,6 +314,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     fs::write(path, serde_json::to_vec(&history)?)?;
                 }
                 assert_eq!(request["params"]["sessionId"], "remote-1");
+                if env::var_os("CONFIGURATION_UPDATE_DURING_PROMPT").is_some() {
+                    let mut foreign = configuration();
+                    foreign[2]["currentValue"] = json!(true);
+                    send(
+                        &mut output,
+                        json!({"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"foreign","update":{"sessionUpdate":"config_option_update","configOptions":foreign}}}),
+                    )?;
+                    let mut current = configuration();
+                    current[2]["currentValue"] = json!(false);
+                    send(
+                        &mut output,
+                        json!({"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"remote-1","update":{"sessionUpdate":"config_option_update","configOptions":current}}}),
+                    )?;
+                }
                 if matches!(mode.as_str(), "cancel" | "cancel-race") && prompts == 1 {
                     send(
                         &mut output,
@@ -365,7 +450,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         };
         if matches!(
             method,
-            "session/new" | "session/prompt" | "session/load" | "session/resume"
+            "session/new"
+                | "session/prompt"
+                | "session/load"
+                | "session/resume"
+                | "session/set_config_option"
         ) && env::var_os("AUTH_FILE").is_some_and(|path| !std::path::Path::new(&path).exists())
         {
             error = Some(json!({"code": -32000, "message": "Authentication required"}));
@@ -386,6 +475,30 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             send(
                 &mut output,
                 json!({"jsonrpc": "2.0", "method": "_auth/status_update", "params": {"authStatus": auth_status()}}),
+            )?;
+        }
+        if method == "session/set_config_option"
+            && env::var_os("CONFIGURATION_UPDATE_AFTER_SET").is_some()
+        {
+            let mut foreign = configuration();
+            foreign[2]["currentValue"] = json!(false);
+            send(
+                &mut output,
+                json!({"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"foreign","update":{"sessionUpdate":"config_option_update","configOptions":foreign}}}),
+            )?;
+            send(
+                &mut output,
+                json!({"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"remote-1","update":{"sessionUpdate":"config_option_update","configOptions":configuration()}}}),
+            )?;
+        }
+        if method == "session/set_config_option"
+            && env::var_os("CONFIGURATION_UPDATE_OTHER").is_some()
+        {
+            let mut other = configuration();
+            other[2]["currentValue"] = json!(false);
+            send(
+                &mut output,
+                json!({"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"remote-2","update":{"sessionUpdate":"config_option_update","configOptions":other}}}),
             )?;
         }
         if method == "session/prompt" && mode == "prompt-auth-exit" {
