@@ -96,6 +96,7 @@ impl AgentManagement {
     pub fn open_with_runtime(root: &Path, runtime: NodeRuntime) -> Result<Self, ManagementError> {
         std::fs::create_dir_all(root).map_err(|_| ManagementError::Install)?;
         let root = root.canonicalize().map_err(|_| ManagementError::Install)?;
+        runtime.set_managed_root(root.join("agents/runtime"))?;
         let store = Store::open(&root.join("atte.sqlite"))?;
         crate::installation::recover(&root, &store)?;
         let fetched_at = store.registry_fetched_at()?;

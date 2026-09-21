@@ -26,6 +26,7 @@ pub struct NodeRuntime {
     directory: Arc<str>,
     candidates: CandidatePaths,
     cached: Arc<Mutex<Option<(PathBuf, PreparedNode)>>>,
+    managed_root: Arc<std::sync::Mutex<Option<PathBuf>>>,
 }
 
 #[derive(Clone, Debug)]
@@ -95,6 +96,7 @@ impl NodeRuntime {
             directory: directory.into(),
             candidates,
             cached: Arc::new(Mutex::new(None)),
+            managed_root: Arc::new(std::sync::Mutex::new(None)),
         }
     }
 
@@ -137,6 +139,10 @@ impl NodeRuntime {
         progress: &(dyn Fn(&str) + Send + Sync),
     ) -> Result<PreparedNode, ManagementError> {
         let root = root.canonicalize().unwrap_or_else(|_| root.to_owned());
+        *self
+            .managed_root
+            .lock()
+            .map_err(|_| ManagementError::NodeMissing)? = Some(root.clone());
         let mut cached = self.cached.lock().await;
         if let Some((_, prepared)) = cached
             .as_ref()
@@ -157,6 +163,25 @@ impl NodeRuntime {
         let prepared = self.prepare_managed(&root, downloads, progress).await?;
         *cached = Some((root, prepared.clone()));
         Ok(prepared)
+    }
+
+    pub(crate) fn set_managed_root(&self, root: PathBuf) -> Result<(), ManagementError> {
+        *self
+            .managed_root
+            .lock()
+            .map_err(|_| ManagementError::NodeMissing)? = Some(root);
+        Ok(())
+    }
+
+    async fn resolve_for_launch(&self) -> Result<PreparedNode, ManagementError> {
+        let root = self
+            .managed_root
+            .lock()
+            .map_err(|_| ManagementError::NodeMissing)?
+            .clone()
+            .ok_or(ManagementError::NodeMissing)?;
+        self.resolve(&root, &super::download::HttpDownloader, &|_| {})
+            .await
     }
 
     async fn system_paths(&self) -> Vec<OsString> {
@@ -402,22 +427,11 @@ pub(crate) async fn resolve_launch(
             path: None,
         });
     }
-    let agents_root = agent
-        .command
-        .ancestors()
-        .find(|path| path.file_name().is_some_and(|name| name == "agents"))
-        .ok_or(ManagementError::NodeMissing)?;
     let runtime = agent
         .node_runtime
         .as_ref()
         .ok_or(ManagementError::NodeMissing)?;
-    let prepared = runtime
-        .resolve(
-            &agents_root.join("runtime"),
-            &super::download::HttpDownloader,
-            &|_| {},
-        )
-        .await?;
+    let prepared = runtime.resolve_for_launch().await?;
     let mut args = vec![agent.command.to_string_lossy().into_owned()];
     args.extend(agent.args.clone());
     Ok(ResolvedLaunch {
