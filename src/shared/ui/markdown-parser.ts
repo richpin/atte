@@ -11,6 +11,7 @@ const allowedTags = [
   "h4",
   "h5",
   "h6",
+  "a",
   "input",
   "li",
   "ol",
@@ -26,7 +27,13 @@ const allowedTags = [
   "ul",
 ] as const;
 
-const allowedAttributes = ["checked", "class", "disabled", "type"] as const;
+const allowedAttributes = [
+  "checked",
+  "class",
+  "disabled",
+  "href",
+  "type",
+] as const;
 
 function escapeHtml(value: string) {
   return value
@@ -35,6 +42,18 @@ function escapeHtml(value: string) {
     .replaceAll(">", "&gt;")
     .replaceAll('"', "&quot;")
     .replaceAll("'", "&#39;");
+}
+
+export function safeWebUrl(destination: string) {
+  if (!/^https?:\/\//i.test(destination)) return undefined;
+  try {
+    const url = new URL(destination);
+    return url.protocol === "http:" || url.protocol === "https:"
+      ? url.href
+      : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 const parser = new Marked({
@@ -48,11 +67,20 @@ const parser = new Marked({
     html({ text }) {
       return escapeHtml(text);
     },
-    link({ tokens }) {
-      return this.parser.parseInline(tokens);
+    link({ href, tokens }) {
+      const label = this.parser.parseInline(tokens);
+      const destination = safeWebUrl(href);
+      return destination
+        ? `<a href="${escapeHtml(destination)}">${label}</a>`
+        : label;
     },
     image({ href, text }) {
-      return escapeHtml(text || href);
+      const label = escapeHtml(text);
+      const destination = safeWebUrl(href);
+      const readableDestination = destination
+        ? `<a href="${escapeHtml(destination)}">${escapeHtml(href)}</a>`
+        : escapeHtml(href);
+      return `${label}${label ? " " : ""}(${readableDestination})`;
     },
   },
 });

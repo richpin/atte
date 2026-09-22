@@ -1,6 +1,7 @@
+import { openUrl } from "@tauri-apps/plugin-opener";
 import morphdom from "morphdom";
 import { createEffect, on, onCleanup } from "solid-js";
-import { renderMarkdown } from "./markdown-parser";
+import { renderMarkdown, safeWebUrl } from "./markdown-parser";
 
 const maximumFormattedSourceLength = 100_000;
 
@@ -75,6 +76,25 @@ export function Markdown(props: MarkdownProps) {
     });
   }
 
+  function activatedLink(event: Event) {
+    const target = event.target;
+    if (!(target instanceof Element)) return undefined;
+    const link = target.closest<HTMLAnchorElement>("a[href]");
+    return link && body.contains(link) ? link : undefined;
+  }
+
+  function openLink(event: Event) {
+    const link = activatedLink(event);
+    const destination = link && safeWebUrl(link.getAttribute("href") ?? "");
+    if (!destination) return;
+    event.preventDefault();
+    void openUrl(destination).catch(() => undefined);
+  }
+
+  function openLinkFromKeyboard(event: KeyboardEvent) {
+    if (event.key === "Enter") openLink(event);
+  }
+
   createEffect(
     on(
       () => [props.source, props.streaming ?? false, props.generation] as const,
@@ -103,6 +123,8 @@ export function Markdown(props: MarkdownProps) {
   return (
     <div
       ref={body}
+      on:click={openLink}
+      on:keydown={openLinkFromKeyboard}
       data-markdown-body=""
       data-variant={props.variant}
       class="markdown-body min-w-0 max-w-full break-words"

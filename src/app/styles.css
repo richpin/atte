@@ -110,6 +110,10 @@ button:enabled {
     @apply border-current border-s-2 ps-3 opacity-80;
   }
 
+  .markdown-body a {
+    @apply cursor-pointer underline underline-offset-2;
+  }
+
   .markdown-body pre,
   .markdown-body code {
     @apply font-mono;

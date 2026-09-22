@@ -216,6 +216,7 @@ fn unsubscribe_thread(
 pub fn run() {
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_opener::init())
         .setup(|app| {
             let management = agent_management::AgentManagement::open(&app.path().app_data_dir()?)?;
             let threads = management.restore_threads()?;

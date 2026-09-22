@@ -3,6 +3,10 @@ import { batch, createSignal } from "solid-js";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { Markdown } from "./markdown";
 
+const openUrl = vi.hoisted(() => vi.fn(() => Promise.resolve()));
+
+vi.mock("@tauri-apps/plugin-opener", () => ({ openUrl }));
+
 let animationFrames: Map<number, FrameRequestCallback>;
 let nextAnimationFrame: number;
 
@@ -13,6 +17,7 @@ function flushAnimationFrame() {
 }
 
 beforeEach(() => {
+  openUrl.mockClear();
   animationFrames = new Map();
   nextAnimationFrame = 1;
   vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
@@ -23,6 +28,97 @@ beforeEach(() => {
   vi.stubGlobal("cancelAnimationFrame", (id: number) => {
     animationFrames.delete(id);
   });
+});
+
+it("activates only absolute HTTP and HTTPS Markdown links", () => {
+  const { container } = render(() => (
+    <Markdown
+      source={`[Secure](https://example.com/docs)
+[Plain HTTP](http://example.com)
+[Script](javascript:alert(1))
+[Data](data:text/plain,hello)
+[File](file:///tmp/secret)
+[Command](command:run)
+[Relative](../docs)
+[Custom](atte://thread/1)`}
+      variant="agent"
+    />
+  ));
+
+  const links = container.querySelectorAll<HTMLAnchorElement>("a");
+  expect([...links].map((link) => link.textContent)).toEqual([
+    "Secure",
+    "Plain HTTP",
+  ]);
+  expect([...links].map((link) => link.getAttribute("href"))).toEqual([
+    "https://example.com/docs",
+    "http://example.com/",
+  ]);
+  for (const label of [
+    "Script",
+    "Data",
+    "File",
+    "Command",
+    "Relative",
+    "Custom",
+  ]) {
+    expect(container.textContent).toContain(label);
+  }
+});
+
+it("opens links through the system browser without WebView navigation", () => {
+  render(() => (
+    <Markdown
+      source="[Pointer](https://example.com/pointer) and [Keyboard](http://example.com/keyboard)"
+      variant="agent"
+    />
+  ));
+  const pointerLink = screen.getByRole("link", { name: "Pointer" });
+  const pointerEvent = new MouseEvent("click", {
+    bubbles: true,
+    cancelable: true,
+  });
+
+  expect(pointerLink.dispatchEvent(pointerEvent)).toBe(false);
+  expect(pointerEvent.defaultPrevented).toBe(true);
+  expect(openUrl).toHaveBeenCalledWith("https://example.com/pointer");
+
+  const keyboardLink = screen.getByRole("link", { name: "Keyboard" });
+  keyboardLink.focus();
+  const keyboardEvent = new KeyboardEvent("keydown", {
+    key: "Enter",
+    bubbles: true,
+    cancelable: true,
+  });
+
+  expect(keyboardLink.dispatchEvent(keyboardEvent)).toBe(false);
+  expect(keyboardEvent.defaultPrevented).toBe(true);
+  expect(openUrl).toHaveBeenCalledWith("http://example.com/keyboard");
+});
+
+it("renders Markdown images as readable links without loading resources", () => {
+  const { container } = render(() => (
+    <Markdown
+      source={`![Architecture diagram](https://images.example.com/diagram.png)
+![Local secret](file:///tmp/secret.png)`}
+      variant="agent"
+    />
+  ));
+
+  expect(container.textContent).toContain("Architecture diagram");
+  expect(container.textContent).toContain(
+    "https://images.example.com/diagram.png",
+  );
+  expect(container.textContent).toContain("Local secret");
+  expect(container.textContent).toContain("file:///tmp/secret.png");
+  expect(screen.getByRole("link").getAttribute("href")).toBe(
+    "https://images.example.com/diagram.png",
+  );
+  expect(
+    container.querySelector(
+      "img, source, video, audio, iframe, object, embed, [src], [srcset]",
+    ),
+  ).toBeNull();
 });
 
 afterEach(() => {
