@@ -1,9 +1,11 @@
 import { openUrl } from "@tauri-apps/plugin-opener";
 import morphdom from "morphdom";
 import { createEffect, on, onCleanup } from "solid-js";
+import { useI18n } from "../i18n";
 import { renderMarkdown, safeWebUrl } from "./markdown-parser";
 
 const maximumFormattedSourceLength = 100_000;
+const copyFeedbackDuration = 2_000;
 
 export type MarkdownProps = {
   source: string;
@@ -13,12 +15,17 @@ export type MarkdownProps = {
 };
 
 export function Markdown(props: MarkdownProps) {
+  const { locale, t } = useI18n();
   let body!: HTMLDivElement;
   let disposed = false;
   let frame: number | undefined;
   let latestSource = "";
   let renderGeneration = 0;
   let sourceGeneration: string | undefined;
+  let codeSources: string[] = [];
+  let copyRequest = 0;
+  const copyRequests = new WeakMap<HTMLElement, number>();
+  const feedbackTimers = new Map<HTMLElement, ReturnType<typeof setTimeout>>();
 
   function decorateTables(target: HTMLElement) {
     for (const table of target.querySelectorAll<HTMLTableElement>("table")) {
@@ -31,6 +38,60 @@ export function Markdown(props: MarkdownProps) {
     }
   }
 
+  function copyButton(index: number) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.dataset.codeCopy = String(index);
+    button.className =
+      "markdown-code-copy rounded px-2 py-1 text-xs font-medium hover:bg-current/10 focus-visible:outline-2 focus-visible:outline-offset-2";
+    button.setAttribute("aria-label", t("markdown.code.copy"));
+    button.textContent = t("markdown.code.copyVisual");
+    return button;
+  }
+
+  function decorateCodeBlocks(
+    target: HTMLElement,
+    blocks: ReturnType<typeof renderMarkdown>["codeBlocks"],
+  ) {
+    for (const pre of target.querySelectorAll<HTMLPreElement>(
+      "pre[data-code-block-index]",
+    )) {
+      const index = Number(pre.dataset.codeBlockIndex);
+      const block = blocks[index];
+      if (!block) continue;
+
+      const wrapper = document.createElement("div");
+      wrapper.dataset.markdownCodeBlock = "";
+      wrapper.className =
+        "markdown-code-block my-3 min-w-0 max-w-full overflow-hidden rounded-lg border border-line";
+
+      const header = document.createElement("div");
+      header.className =
+        "markdown-code-header flex min-h-9 items-center justify-between gap-3 border-line border-b px-2";
+      if (block.language) {
+        const language = document.createElement("span");
+        language.dataset.codeLanguage = block.language.id;
+        language.className = "truncate px-1 text-xs text-muted";
+        language.textContent = block.language.label;
+        header.append(language);
+      } else {
+        header.append(document.createElement("span"));
+      }
+      header.append(copyButton(index));
+
+      const feedback = document.createElement("span");
+      feedback.dataset.codeCopyFeedback = "";
+      feedback.setAttribute("role", "status");
+      feedback.setAttribute("aria-live", "polite");
+      feedback.className = "sr-only";
+
+      pre.before(wrapper);
+      pre.className = "min-w-0 max-w-full overflow-x-auto p-3";
+      delete pre.dataset.codeBlockIndex;
+      wrapper.append(header, pre, feedback);
+    }
+  }
+
   function cancelFrame() {
     if (frame === undefined) return;
     cancelAnimationFrame(frame);
@@ -38,6 +99,7 @@ export function Markdown(props: MarkdownProps) {
   }
 
   function showPlainText(source: string) {
+    codeSources = [];
     body.replaceChildren(document.createTextNode(source));
     body.dataset.fallback = "true";
   }
@@ -50,12 +112,14 @@ export function Markdown(props: MarkdownProps) {
     }
 
     try {
-      const html = renderMarkdown(source);
+      const rendered = renderMarkdown(source);
       const next = document.createElement("div");
-      next.innerHTML = html;
+      next.innerHTML = rendered.html;
       decorateTables(next);
+      decorateCodeBlocks(next, rendered.codeBlocks);
       if (disposed || generation !== renderGeneration) return;
       morphdom(body, next, { childrenOnly: true });
+      codeSources = rendered.codeBlocks.map((block) => block.source);
       delete body.dataset.fallback;
     } catch {
       showPlainText(source);
@@ -95,9 +159,87 @@ export function Markdown(props: MarkdownProps) {
     if (event.key === "Enter") openLink(event);
   }
 
+  function resetCopyFeedback(block: HTMLElement) {
+    const timer = feedbackTimers.get(block);
+    if (timer !== undefined) clearTimeout(timer);
+    feedbackTimers.delete(block);
+    const button = block.querySelector<HTMLButtonElement>("[data-code-copy]");
+    const feedback = block.querySelector<HTMLElement>(
+      "[data-code-copy-feedback]",
+    );
+    if (button) {
+      button.setAttribute("aria-label", t("markdown.code.copy"));
+      button.textContent = t("markdown.code.copyVisual");
+    }
+    if (feedback) {
+      feedback.textContent = "";
+      feedback.className = "sr-only";
+    }
+  }
+
+  function showCopyFeedback(block: HTMLElement, copied: boolean) {
+    resetCopyFeedback(block);
+    const button = block.querySelector<HTMLButtonElement>("[data-code-copy]");
+    const feedback = block.querySelector<HTMLElement>(
+      "[data-code-copy-feedback]",
+    );
+    if (!button || !feedback) return;
+
+    if (copied) {
+      button.setAttribute("aria-label", t("markdown.code.copied"));
+      button.textContent = t("markdown.code.copiedVisual");
+      feedback.textContent = t("markdown.code.copiedAnnouncement");
+    } else {
+      feedback.textContent = t("markdown.code.copyFailed");
+      feedback.className =
+        "markdown-code-feedback px-3 py-2 text-xs text-danger";
+    }
+    feedbackTimers.set(
+      block,
+      setTimeout(() => resetCopyFeedback(block), copyFeedbackDuration),
+    );
+  }
+
+  function isCurrentCopyRequest(block: HTMLElement, request: number) {
+    return (
+      !disposed && copyRequests.get(block) === request && body.contains(block)
+    );
+  }
+
+  async function copyCode(event: Event) {
+    const target = event.target;
+    if (!(target instanceof Element)) return;
+    const button = target.closest<HTMLButtonElement>("button[data-code-copy]");
+    const block = button?.closest<HTMLElement>("[data-markdown-code-block]");
+    if (!button || !block || !body.contains(block)) return;
+    const source = codeSources[Number(button.dataset.codeCopy)];
+    if (source === undefined) return;
+
+    resetCopyFeedback(block);
+    const request = ++copyRequest;
+    copyRequests.set(block, request);
+    try {
+      await navigator.clipboard.writeText(source);
+      if (isCurrentCopyRequest(block, request)) showCopyFeedback(block, true);
+    } catch {
+      if (isCurrentCopyRequest(block, request)) showCopyFeedback(block, false);
+    }
+  }
+
+  function handleBodyClick(event: Event) {
+    void copyCode(event);
+    openLink(event);
+  }
+
   createEffect(
     on(
-      () => [props.source, props.streaming ?? false, props.generation] as const,
+      () =>
+        [
+          props.source,
+          props.streaming ?? false,
+          props.generation,
+          locale(),
+        ] as const,
       ([source, streaming, generation], previous) => {
         latestSource = source;
         const changedGeneration = generation !== sourceGeneration;
@@ -118,12 +260,14 @@ export function Markdown(props: MarkdownProps) {
     disposed = true;
     renderGeneration++;
     cancelFrame();
+    for (const timer of feedbackTimers.values()) clearTimeout(timer);
+    feedbackTimers.clear();
   });
 
   return (
     <div
       ref={body}
-      on:click={openLink}
+      on:click={handleBodyClick}
       on:keydown={openLinkFromKeyboard}
       data-markdown-body=""
       data-variant={props.variant}

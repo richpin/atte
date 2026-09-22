@@ -1,4 +1,14 @@
 export const en = {
+  markdown: {
+    code: {
+      copy: "Copy code",
+      copyVisual: "Copy",
+      copied: "Copied code",
+      copiedVisual: "Copied",
+      copiedAnnouncement: "Code copied to clipboard.",
+      copyFailed: "Couldn’t copy code.",
+    },
+  },
   common: {
     cancel: "Cancel",
     delete: "Delete",

@@ -127,6 +127,26 @@ button:enabled {
     @apply max-w-full overflow-x-auto;
   }
 
+  .markdown-body .markdown-code-block {
+    @apply bg-panel text-ink;
+  }
+
+  .markdown-body[data-variant="user"] .markdown-code-block {
+    @apply border-white/20 bg-black/20 text-white;
+  }
+
+  .markdown-body[data-variant="user"] .markdown-code-header {
+    @apply border-white/20;
+  }
+
+  .markdown-body[data-variant="user"] [data-code-language] {
+    @apply text-white/65;
+  }
+
+  .markdown-body .markdown-code-block pre {
+    @apply m-0 whitespace-pre break-normal;
+  }
+
   .markdown-body table {
     @apply w-max min-w-full border-collapse;
   }

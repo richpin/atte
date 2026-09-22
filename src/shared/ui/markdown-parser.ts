@@ -30,10 +30,66 @@ const allowedTags = [
 const allowedAttributes = [
   "checked",
   "class",
+  "data-code-block-index",
   "disabled",
   "href",
   "type",
 ] as const;
+
+const codeLanguages = {
+  bash: { id: "bash", label: "Shell" },
+  c: { id: "c", label: "C" },
+  cpp: { id: "cpp", label: "C++" },
+  cs: { id: "csharp", label: "C#" },
+  csharp: { id: "csharp", label: "C#" },
+  css: { id: "css", label: "CSS" },
+  diff: { id: "diff", label: "Diff" },
+  go: { id: "go", label: "Go" },
+  html: { id: "html", label: "HTML" },
+  java: { id: "java", label: "Java" },
+  javascript: { id: "javascript", label: "JavaScript" },
+  js: { id: "javascript", label: "JavaScript" },
+  json: { id: "json", label: "JSON" },
+  jsx: { id: "jsx", label: "JSX" },
+  kotlin: { id: "kotlin", label: "Kotlin" },
+  markdown: { id: "markdown", label: "Markdown" },
+  md: { id: "markdown", label: "Markdown" },
+  python: { id: "python", label: "Python" },
+  py: { id: "python", label: "Python" },
+  ruby: { id: "ruby", label: "Ruby" },
+  rust: { id: "rust", label: "Rust" },
+  rs: { id: "rust", label: "Rust" },
+  sh: { id: "bash", label: "Shell" },
+  shell: { id: "bash", label: "Shell" },
+  sql: { id: "sql", label: "SQL" },
+  swift: { id: "swift", label: "Swift" },
+  ts: { id: "typescript", label: "TypeScript" },
+  tsx: { id: "tsx", label: "TSX" },
+  typescript: { id: "typescript", label: "TypeScript" },
+  xml: { id: "xml", label: "XML" },
+  yaml: { id: "yaml", label: "YAML" },
+  yml: { id: "yaml", label: "YAML" },
+  zsh: { id: "bash", label: "Shell" },
+} as const;
+
+export type CodeLanguage = { id: string; label: string };
+export type MarkdownCodeBlock = {
+  source: string;
+  language?: CodeLanguage;
+};
+export type RenderedMarkdown = {
+  html: string;
+  codeBlocks: MarkdownCodeBlock[];
+};
+
+let renderedCodeBlocks: MarkdownCodeBlock[] = [];
+
+function normalizeCodeLanguage(value?: string): CodeLanguage | undefined {
+  const name = value?.trim().split(/\s+/, 1)[0]?.toLowerCase();
+  return name && Object.hasOwn(codeLanguages, name)
+    ? codeLanguages[name as keyof typeof codeLanguages]
+    : undefined;
+}
 
 function escapeHtml(value: string) {
   return value
@@ -82,15 +138,29 @@ const parser = new Marked({
         : escapeHtml(href);
       return `${label}${label ? " " : ""}(${readableDestination})`;
     },
+    code({ text, lang }) {
+      const index = renderedCodeBlocks.push({
+        source: text,
+        language: normalizeCodeLanguage(lang),
+      });
+      return `<pre data-code-block-index="${index - 1}"><code>${escapeHtml(text)}</code></pre>\n`;
+    },
   },
 });
 
-export function renderMarkdown(source: string) {
-  const parsed = parser.parse(source, { async: false });
-  if (typeof parsed !== "string") throw new Error("Async Markdown is disabled");
-  return DOMPurify.sanitize(parsed, {
-    ALLOWED_TAGS: [...allowedTags],
-    ALLOWED_ATTR: [...allowedAttributes],
-    ALLOW_DATA_ATTR: false,
-  });
+export function renderMarkdown(source: string): RenderedMarkdown {
+  renderedCodeBlocks = [];
+  try {
+    const parsed = parser.parse(source, { async: false });
+    if (typeof parsed !== "string")
+      throw new Error("Async Markdown is disabled");
+    const html = DOMPurify.sanitize(parsed, {
+      ALLOWED_TAGS: [...allowedTags],
+      ALLOWED_ATTR: [...allowedAttributes],
+      ALLOW_DATA_ATTR: false,
+    });
+    return { html, codeBlocks: renderedCodeBlocks };
+  } finally {
+    renderedCodeBlocks = [];
+  }
 }

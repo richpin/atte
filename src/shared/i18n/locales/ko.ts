@@ -5,6 +5,16 @@ type Localized<T> = {
 };
 
 export const ko = {
+  markdown: {
+    code: {
+      copy: "코드 복사",
+      copyVisual: "복사",
+      copied: "코드 복사됨",
+      copiedVisual: "복사됨",
+      copiedAnnouncement: "코드를 클립보드에 복사했습니다.",
+      copyFailed: "코드를 복사하지 못했습니다.",
+    },
+  },
   common: {
     cancel: "취소",
     delete: "삭제",
