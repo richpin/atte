@@ -211,7 +211,7 @@ export function createThreadModel(queryClient?: QueryClient) {
     }
   }
 
-  function updateThreadInList(updatedThread: Thread) {
+  function updateThreadInList(updatedThread: ThreadMetadata) {
     if (deleted.has(updatedThread.id)) return;
     const {
       id,
@@ -289,8 +289,54 @@ export function createThreadModel(queryClient?: QueryClient) {
       return;
     }
     const current = thread();
-    if (!subscriptionLive() || !current || update.threadId !== current.id)
+    if (!subscriptionLive() || !current) return;
+    if (update.kind === "patch") {
+      if (update.thread.id !== current.id) return;
+      updateThreadInList(update.thread);
+      setState(
+        "thread",
+        reconcile({ ...structuredClone(update.thread), turns: current.turns }),
+      );
+      for (const turnUpdate of update.turnUpdates) {
+        if (turnUpdate.kind === "replaced") {
+          setState(
+            "thread",
+            "turns",
+            reconcile(structuredClone(turnUpdate.turns)),
+          );
+          continue;
+        }
+        if (turnUpdate.kind === "added") {
+          if (thread()?.turns.some((turn) => turn.id === turnUpdate.turn.id)) {
+            subscriptionFailed();
+            return;
+          }
+          setState(
+            "thread",
+            "turns",
+            thread()?.turns.length ?? 0,
+            structuredClone(turnUpdate.turn),
+          );
+          continue;
+        }
+        const turnIndex = thread()?.turns.findIndex(
+          (turn) => turn.id === turnUpdate.turnId,
+        );
+        if (turnIndex === undefined || turnIndex < 0) {
+          subscriptionFailed();
+          return;
+        }
+        setState(
+          "thread",
+          "turns",
+          turnIndex,
+          "stopReason",
+          turnUpdate.stopReason,
+        );
+      }
       return;
+    }
+    if (update.threadId !== current.id) return;
     if (current.turns.at(-1)?.id !== update.turnId) {
       subscriptionFailed();
       return;

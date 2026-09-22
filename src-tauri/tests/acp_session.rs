@@ -2338,6 +2338,37 @@ async fn streams_ordered_turns_and_sends_followups_in_the_same_session() {
 }
 
 #[tokio::test]
+async fn publishes_only_the_new_turn_after_the_initial_snapshot() {
+    use atte_lib::thread::{ThreadUpdate, TurnUpdate};
+
+    let folder = tempfile::tempdir().unwrap();
+    let threads = Threads::new(vec![mock_agent()]);
+    let draft = threads.create(folder.path()).unwrap();
+    threads.connect(draft.id).unwrap();
+    settle(&threads, draft.id).await;
+    let mut updates = threads.subscribe(draft.id).unwrap();
+    assert!(matches!(
+        updates.recv().await,
+        Some(ThreadUpdate::Thread { .. })
+    ));
+
+    threads.send_message(draft.id, "hello".into()).unwrap();
+    let Some(ThreadUpdate::Patch {
+        thread: patch,
+        turn_updates,
+    }) = updates.recv().await
+    else {
+        panic!("new turns are published as lightweight patches");
+    };
+    assert_eq!(patch.metadata.id, draft.id);
+    assert!(matches!(
+        turn_updates.as_slice(),
+        [TurnUpdate::Added { .. }]
+    ));
+    threads.shutdown().await;
+}
+
+#[tokio::test]
 async fn resubscription_is_coherent_and_detaching_does_not_stop_a_turn() {
     let folder = tempfile::tempdir().unwrap();
     let gate = folder.path().join("continue");
@@ -2688,6 +2719,34 @@ impl TranscriptSubscription {
         use atte_lib::thread::ThreadUpdate;
         match self.receiver.recv().await? {
             ThreadUpdate::Thread { thread } => self.thread = Some(*thread),
+            ThreadUpdate::Patch {
+                thread: patch,
+                turn_updates,
+            } => {
+                use atte_lib::thread::TurnUpdate;
+                let thread = self
+                    .thread
+                    .as_mut()
+                    .expect("initial thread precedes patches");
+                assert!(patch.apply_to(thread));
+                for update in turn_updates {
+                    match update {
+                        TurnUpdate::Added { turn } => thread.turns.push(turn),
+                        TurnUpdate::Completed {
+                            turn_id,
+                            stop_reason,
+                        } => {
+                            let turn = thread
+                                .turns
+                                .iter_mut()
+                                .find(|turn| turn.id == turn_id)
+                                .expect("completed turn exists");
+                            turn.stop_reason = stop_reason;
+                        }
+                        TurnUpdate::Replaced { turns } => thread.turns = turns,
+                    }
+                }
+            }
             ThreadUpdate::TextDelta {
                 thread_id,
                 turn_id,

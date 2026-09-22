@@ -112,6 +112,13 @@ export interface Turn {
   stopReason: string | null;
 }
 
+export type ThreadPatch = Omit<Thread, "turns">;
+
+export type TurnUpdate =
+  | { kind: "added"; turn: Turn }
+  | { kind: "completed"; turnId: string; stopReason: string | null }
+  | { kind: "replaced"; turns: Turn[] };
+
 export interface PreparedAgent {
   id: string;
   name: string;
@@ -119,6 +126,7 @@ export interface PreparedAgent {
 
 export type ThreadUpdate =
   | { kind: "thread"; thread: Thread }
+  | { kind: "patch"; thread: ThreadPatch; turnUpdates: TurnUpdate[] }
   | {
       kind: "textDelta";
       threadId: string;

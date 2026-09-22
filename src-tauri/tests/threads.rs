@@ -325,6 +325,29 @@ fn serializes_full_updates_with_a_thread_payload() {
 }
 
 #[test]
+fn serializes_patches_without_the_thread_transcript() {
+    use atte_lib::thread::{ThreadPatch, Turn, TurnUpdate};
+
+    let folder = tempfile::tempdir().unwrap();
+    let thread = Threads::default().create(folder.path()).unwrap();
+    let turn = Turn {
+        id: uuid::Uuid::new_v4(),
+        message: "hello".into(),
+        response: String::new(),
+        stop_reason: None,
+    };
+    let value = serde_json::to_value(ThreadUpdate::Patch {
+        thread: Box::new(ThreadPatch::from(&thread)),
+        turn_updates: vec![TurnUpdate::Added { turn: turn.clone() }],
+    })
+    .unwrap();
+    assert_eq!(value["kind"], "patch");
+    assert!(value["thread"].get("turns").is_none());
+    assert_eq!(value["turnUpdates"][0]["kind"], "added");
+    assert_eq!(value["turnUpdates"][0]["turn"]["id"], turn.id.to_string());
+}
+
+#[test]
 fn serializes_text_deltas_with_a_thread_id() {
     let thread_id = uuid::Uuid::new_v4();
     let turn_id = uuid::Uuid::new_v4();

@@ -184,6 +184,59 @@ it("appends a text delta only to the streamed response dependency", async () => 
   stopTracking();
 });
 
+it("applies lightweight patches without replacing existing turns", async () => {
+  const model = setup();
+  await open(model, "A", running("A"));
+  const initialTurns = model.thread()?.turns;
+  const initialTurn = initialTurns?.[0];
+  const { turns: _, ...patch } = thread("A", {
+    status: "waitingForApproval",
+    updatedAt: 2,
+  });
+
+  stream("A")({ kind: "patch", thread: patch, turnUpdates: [] });
+
+  expect(model.thread()?.status).toBe("waitingForApproval");
+  expect(model.thread()?.turns).toBe(initialTurns);
+  expect(model.thread()?.turns[0]).toBe(initialTurn);
+});
+
+it("applies incremental turn additions and completions", async () => {
+  const model = setup();
+  await open(model, "A");
+  const { turns: _, ...runningPatch } = thread("A", { status: "running" });
+  stream("A")({
+    kind: "patch",
+    thread: runningPatch,
+    turnUpdates: [
+      {
+        kind: "added",
+        turn: {
+          id: "turn-2",
+          message: "hello",
+          response: "",
+          stopReason: null,
+        },
+      },
+    ],
+  });
+  const addedTurn = model.thread()?.turns[0];
+  const { turns: __, ...readyPatch } = thread("A", {
+    status: "sessionReady",
+  });
+
+  stream("A")({
+    kind: "patch",
+    thread: readyPatch,
+    turnUpdates: [
+      { kind: "completed", turnId: "turn-2", stopReason: "end_turn" },
+    ],
+  });
+
+  expect(model.thread()?.turns[0]).toBe(addedTurn);
+  expect(model.thread()?.turns[0]?.stopReason).toBe("end_turn");
+});
+
 it("updates the displayed thread only from its subscription", async () => {
   commands.set("send_message", async () => thread("A", { notice: "command" }));
   const model = setup();

@@ -48,6 +48,73 @@ pub struct Thread {
     pub configuration: Vec<ThreadConfiguration>,
 }
 
+/// Current thread fields excluding the potentially large transcript.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ThreadPatch {
+    #[serde(flatten)]
+    pub metadata: ThreadMetadata,
+    pub storage_error: Option<String>,
+    pub authentication: AuthenticationStatus,
+    pub notice: Option<String>,
+    pub permissions: Vec<PermissionRequest>,
+    pub queued_messages: Vec<QueuedMessage>,
+    pub configuration: Vec<ThreadConfiguration>,
+}
+
+impl From<&Thread> for ThreadPatch {
+    fn from(thread: &Thread) -> Self {
+        Self {
+            metadata: thread.metadata(),
+            storage_error: thread.storage_error.clone(),
+            authentication: thread.authentication.clone(),
+            notice: thread.notice.clone(),
+            permissions: thread.permissions.clone(),
+            queued_messages: thread.queued_messages.clone(),
+            configuration: thread.configuration.clone(),
+        }
+    }
+}
+
+impl ThreadPatch {
+    /// Applies this transport patch without touching the transcript.
+    pub fn apply_to(self, thread: &mut Thread) -> bool {
+        if self.metadata.id != thread.id {
+            return false;
+        }
+        let ThreadMetadata {
+            id: _,
+            title,
+            working_folder,
+            agent_id,
+            session_id,
+            created_at,
+            updated_at,
+            last_prompt_at,
+            status,
+            failure,
+            interrupted,
+        } = self.metadata;
+        thread.title = title;
+        thread.working_folder = working_folder;
+        thread.agent_id = agent_id;
+        thread.session_id = session_id;
+        thread.created_at = created_at;
+        thread.updated_at = updated_at;
+        thread.last_prompt_at = last_prompt_at;
+        thread.status = status;
+        thread.failure = failure;
+        thread.interrupted = interrupted;
+        thread.storage_error = self.storage_error;
+        thread.authentication = self.authentication;
+        thread.notice = self.notice;
+        thread.permissions = self.permissions;
+        thread.queued_messages = self.queued_messages;
+        thread.configuration = self.configuration;
+        true
+    }
+}
+
 /// Agent-provided configuration for one ACP session.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -464,6 +531,8 @@ impl Threads {
                         store: Some(store.clone()),
                         draining: false,
                         dispatch_queue_on_ready: false,
+                        published_turn_count: 0,
+                        published_last_turn: None,
                     })),
                     runtime: None,
                 },
@@ -945,6 +1014,8 @@ impl Threads {
                     store: self.store.clone(),
                     draining: false,
                     dispatch_queue_on_ready: false,
+                    published_turn_count: 0,
+                    published_last_turn: None,
                 })),
                 runtime: None,
             },
@@ -1607,6 +1678,8 @@ struct ThreadState {
     permissions: HashMap<Uuid, oneshot::Sender<String>>,
     draining: bool,
     dispatch_queue_on_ready: bool,
+    published_turn_count: usize,
+    published_last_turn: Option<(Uuid, Option<String>)>,
 }
 
 #[derive(Clone)]
@@ -1693,6 +1766,50 @@ impl ThreadState {
         })
     }
 
+    fn turn_updates(&mut self) -> Vec<TurnUpdate> {
+        let turns = &self.thread.turns;
+        let can_append = self.published_turn_count <= turns.len()
+            && (self.published_turn_count == 0
+                || turns
+                    .get(self.published_turn_count - 1)
+                    .is_some_and(|turn| {
+                        self.published_last_turn
+                            .as_ref()
+                            .is_some_and(|(id, _)| *id == turn.id)
+                    }));
+        let mut updates = if can_append {
+            Vec::new()
+        } else {
+            vec![TurnUpdate::Replaced {
+                turns: turns.clone(),
+            }]
+        };
+        if can_append {
+            if let (Some((turn_id, stop_reason)), Some(turn)) = (
+                self.published_last_turn.as_ref(),
+                self.published_turn_count
+                    .checked_sub(1)
+                    .and_then(|index| turns.get(index)),
+            ) {
+                if turn.stop_reason != *stop_reason {
+                    updates.push(TurnUpdate::Completed {
+                        turn_id: *turn_id,
+                        stop_reason: turn.stop_reason.clone(),
+                    });
+                }
+            }
+            updates.extend(
+                turns[self.published_turn_count..]
+                    .iter()
+                    .cloned()
+                    .map(|turn| TurnUpdate::Added { turn }),
+            );
+        }
+        self.published_turn_count = turns.len();
+        self.published_last_turn = turns.last().map(|turn| (turn.id, turn.stop_reason.clone()));
+        updates
+    }
+
     fn publish(&mut self) {
         self.thread.updated_at = now();
         if let Some(store) = &self.store {
@@ -1704,13 +1821,13 @@ impl ThreadState {
         if let Ok(mut list) = self.list.lock() {
             list.publish(self.thread.metadata());
         }
-        self.subscribers.retain(|sender| {
-            sender
-                .send(ThreadUpdate::Thread {
-                    thread: Box::new(self.thread.clone()),
-                })
-                .is_ok()
-        });
+        let turns = self.turn_updates();
+        let change = ThreadUpdate::Patch {
+            thread: Box::new(ThreadPatch::from(&self.thread)),
+            turn_updates: turns,
+        };
+        self.subscribers
+            .retain(|sender| sender.send(change.clone()).is_ok());
     }
 }
 
@@ -1740,12 +1857,17 @@ fn next_prompt_at() -> u64 {
     wall_clock.max(previous.saturating_add(1))
 }
 
-/// Ordered subscription item. Text chunks carry only their delta, not history.
+/// Ordered subscription item. Only the initial snapshot carries the full transcript.
 #[derive(Clone, Debug, Serialize)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum ThreadUpdate {
     Thread {
         thread: Box<Thread>,
+    },
+    Patch {
+        thread: Box<ThreadPatch>,
+        #[serde(rename = "turnUpdates")]
+        turn_updates: Vec<TurnUpdate>,
     },
     TextDelta {
         #[serde(rename = "threadId")]
@@ -1753,6 +1875,24 @@ pub enum ThreadUpdate {
         #[serde(rename = "turnId")]
         turn_id: Uuid,
         text: String,
+    },
+}
+
+/// A transcript mutation carried with a lightweight thread patch.
+#[derive(Clone, Debug, Serialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum TurnUpdate {
+    Added {
+        turn: Turn,
+    },
+    Completed {
+        #[serde(rename = "turnId")]
+        turn_id: Uuid,
+        #[serde(rename = "stopReason")]
+        stop_reason: Option<String>,
+    },
+    Replaced {
+        turns: Vec<Turn>,
     },
 }
 
@@ -1866,9 +2006,11 @@ impl RuntimeUpdates {
     }
 
     pub fn history_restored(&self, turns: Vec<Turn>) {
-        self.modify(|thread| {
-            thread.turns = turns;
-            thread.notice = None;
+        self.modify_state(|state| {
+            state.thread.turns = turns;
+            state.thread.notice = None;
+            state.published_turn_count = usize::MAX;
+            state.published_last_turn = None;
         });
     }
 
