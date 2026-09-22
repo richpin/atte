@@ -44,7 +44,9 @@ function renderMessage(message: string) {
 }
 
 function setMessageHeight(message: string, height: number) {
-  const content = screen.getByText(message);
+  const text = screen.getByText(message);
+  const content = text.closest<HTMLElement>("[data-user-message-content]");
+  if (!content) throw new Error("Markdown body not found");
   content.style.lineHeight = "20px";
   Object.defineProperty(content, "scrollHeight", {
     configurable: true,
@@ -53,6 +55,32 @@ function setMessageHeight(message: string, height: number) {
   resize();
   return content;
 }
+
+it("renders user and agent message bodies through distinct Markdown variants", () => {
+  const markdownTurn = turn("**User** prompt");
+  markdownTurn.response = "**Agent** response";
+  markdownTurn.stopReason = "end_turn";
+  render(() => (
+    <I18nProvider>
+      <Message turns={[markdownTurn]} />
+    </I18nProvider>
+  ));
+
+  const user = screen.getByText("User").closest("[data-markdown-body]");
+  const agent = screen.getByText("Agent").closest("[data-markdown-body]");
+  expect(user?.getAttribute("data-variant")).toBe("user");
+  expect(agent?.getAttribute("data-variant")).toBe("agent");
+  expect(
+    user
+      ?.closest("[data-message-participant]")
+      ?.getAttribute("data-message-participant"),
+  ).toBe("user");
+  expect(
+    agent
+      ?.closest("[data-message-participant]")
+      ?.getAttribute("data-message-participant"),
+  ).toBe("agent");
+});
 
 it("does not offer expansion when the user message fits within 20 lines", () => {
   renderMessage("Short prompt");

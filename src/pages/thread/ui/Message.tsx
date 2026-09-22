@@ -1,4 +1,5 @@
 import { type TranslationKey, useI18n } from "shared/i18n";
+import { Markdown } from "shared/ui";
 import { createSignal, Index, onCleanup, onMount, Show } from "solid-js";
 import type { Turn } from "../model/types";
 
@@ -16,7 +17,7 @@ function UserMessage(props: { children: string }) {
   const { t } = useI18n();
   const [expanded, setExpanded] = createSignal(false);
   const [collapsible, setCollapsible] = createSignal(false);
-  let content!: HTMLParagraphElement;
+  let content!: HTMLDivElement;
 
   onMount(() => {
     const measure = () => {
@@ -35,15 +36,18 @@ function UserMessage(props: { children: string }) {
   });
 
   return (
-    <div class="ml-auto max-w-[85%] rounded-2xl bg-user-bubble px-4 py-3 text-sm text-white">
+    <div
+      data-message-participant="user"
+      class="ml-auto min-w-0 max-w-[85%] rounded-2xl bg-user-bubble px-4 py-3 text-sm text-white"
+    >
       <div
         class={
           collapsible() && !expanded() ? "max-h-[25rem] overflow-hidden" : ""
         }
       >
-        <p ref={content} class="whitespace-pre-wrap break-words leading-5">
-          {props.children}
-        </p>
+        <div ref={content} data-user-message-content="">
+          <Markdown source={props.children} variant="user" />
+        </div>
       </div>
       <Show when={collapsible()}>
         <button
@@ -82,8 +86,11 @@ export function Message(props: { turns: Turn[] }) {
           <li class="flex min-w-0 flex-col gap-5">
             <UserMessage>{turn().message}</UserMessage>
             <Show when={turn().response}>
-              <div class="w-full whitespace-pre-wrap break-words text-left text-sm leading-7">
-                {turn().response}
+              <div
+                data-message-participant="agent"
+                class="w-full min-w-0 text-left text-sm"
+              >
+                <Markdown source={turn().response} variant="agent" />
               </div>
             </Show>
             <Show when={turn().stopReason}>

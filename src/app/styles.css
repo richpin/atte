@@ -41,3 +41,103 @@
 button:enabled {
   cursor: pointer;
 }
+
+@layer components {
+  .markdown-body {
+    @apply min-w-0 max-w-full break-words leading-7;
+    color: inherit;
+  }
+
+  .markdown-body[data-variant="user"] {
+    @apply leading-5;
+  }
+
+  .markdown-body[data-fallback="true"] {
+    @apply whitespace-pre-wrap;
+  }
+
+  .markdown-body > :first-child,
+  .markdown-body .markdown-table > :first-child {
+    @apply mt-0;
+  }
+
+  .markdown-body > :last-child,
+  .markdown-body .markdown-table > :last-child {
+    @apply mb-0;
+  }
+
+  .markdown-body p,
+  .markdown-body ul,
+  .markdown-body ol,
+  .markdown-body blockquote,
+  .markdown-body .markdown-table {
+    @apply my-3;
+  }
+
+  .markdown-body h3,
+  .markdown-body h4,
+  .markdown-body h5,
+  .markdown-body h6 {
+    @apply mt-4 mb-2 font-semibold leading-tight;
+  }
+
+  .markdown-body h3 {
+    @apply text-lg;
+  }
+
+  .markdown-body h4 {
+    @apply text-base;
+  }
+
+  .markdown-body ul,
+  .markdown-body ol {
+    @apply ps-6;
+  }
+
+  .markdown-body ul {
+    @apply list-disc;
+  }
+
+  .markdown-body ol {
+    @apply list-decimal;
+  }
+
+  .markdown-body li + li {
+    @apply mt-1;
+  }
+
+  .markdown-body blockquote {
+    @apply border-current border-s-2 ps-3 opacity-80;
+  }
+
+  .markdown-body pre,
+  .markdown-body code {
+    @apply font-mono;
+  }
+
+  .markdown-body :not(pre) > code {
+    @apply rounded bg-current/10 px-1 py-0.5 text-[0.9em];
+  }
+
+  .markdown-body pre {
+    @apply max-w-full overflow-x-auto;
+  }
+
+  .markdown-body table {
+    @apply w-max min-w-full border-collapse;
+  }
+
+  .markdown-body th,
+  .markdown-body td {
+    @apply border border-line px-2.5 py-1.5 text-start;
+  }
+
+  .markdown-body[data-variant="user"] th,
+  .markdown-body[data-variant="user"] td {
+    @apply border-white/25;
+  }
+
+  .markdown-body input[type="checkbox"] {
+    @apply pointer-events-none me-1.5;
+  }
+}
