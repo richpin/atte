@@ -68,6 +68,13 @@ export function ThreadPage(props: {
     if (entry) setComposerHeight(entry.contentRect.height);
   });
   const composerInset = () => composerHeight() + 32;
+  const streamingTurnId = () => {
+    const current = thread();
+    return current &&
+      ["running", "waitingForApproval", "cancelling"].includes(current.status)
+      ? current.turns.at(-1)?.id
+      : undefined;
+  };
   const [pendingFolder, setPendingFolder] = createSignal<string>();
   const error = () =>
     model.error() ?? (agentsFailed() ? t("thread.error.agents") : undefined);
@@ -396,7 +403,10 @@ export function ThreadPage(props: {
                     {t("thread.reconnect")}
                   </button>
                 </Show>
-                <Message turns={thread()?.turns ?? []} />
+                <Message
+                  turns={thread()?.turns ?? []}
+                  streamingTurnId={streamingTurnId()}
+                />
                 <Show when={thread()?.notice}>
                   {(notice) => (
                     <p role="status" class="text-sm text-muted">

@@ -1,11 +1,34 @@
 import { cleanup, render, screen } from "@solidjs/testing-library";
-import { createSignal } from "solid-js";
-import { afterEach, expect, it, vi } from "vitest";
+import { batch, createSignal } from "solid-js";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { Markdown } from "./markdown";
+
+let animationFrames: Map<number, FrameRequestCallback>;
+let nextAnimationFrame: number;
+
+function flushAnimationFrame() {
+  const frames = [...animationFrames.values()];
+  animationFrames.clear();
+  for (const frame of frames) frame(performance.now());
+}
+
+beforeEach(() => {
+  animationFrames = new Map();
+  nextAnimationFrame = 1;
+  vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
+    const id = nextAnimationFrame++;
+    animationFrames.set(id, callback);
+    return id;
+  });
+  vi.stubGlobal("cancelAnimationFrame", (id: number) => {
+    animationFrames.delete(id);
+  });
+});
 
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
 });
 
 it("renders chat Markdown with semantic CommonMark and GFM structure", () => {
@@ -103,4 +126,121 @@ it("falls back to the complete plain source when rendering fails", () => {
   expect(body?.dataset.fallback).toBe("true");
   expect(body?.textContent).toBe(failedSource);
   expect(body?.querySelector("script, strong")).toBeNull();
+});
+
+it("coalesces streaming source updates into one render per animation frame", () => {
+  const [source, setSource] = createSignal("Initial");
+  const { container } = render(() => (
+    <Markdown source={source()} variant="agent" streaming />
+  ));
+  const body = container.querySelector<HTMLElement>("[data-markdown-body]");
+
+  setSource("Initial one");
+  setSource("Initial one two");
+  setSource("Initial one two **three**");
+
+  expect(body?.textContent?.trim()).toBe("Initial");
+  expect(animationFrames.size).toBe(1);
+
+  flushAnimationFrame();
+
+  expect(body?.textContent?.trim()).toBe("Initial one two three");
+});
+
+it("flushes the latest source immediately when streaming becomes terminal", () => {
+  const [source, setSource] = createSignal("Initial");
+  const [streaming, setStreaming] = createSignal(true);
+  const { container } = render(() => (
+    <Markdown source={source()} variant="agent" streaming={streaming()} />
+  ));
+  const body = container.querySelector<HTMLElement>("[data-markdown-body]");
+
+  setSource("Final **source**");
+  expect(body?.textContent?.trim()).toBe("Initial");
+  expect(animationFrames.size).toBe(1);
+
+  setStreaming(false);
+
+  expect(body?.textContent?.trim()).toBe("Final source");
+  expect(body?.querySelector("strong")?.textContent).toBe("source");
+  expect(animationFrames.size).toBe(0);
+});
+
+it("preserves unchanged DOM nodes across a streaming append", () => {
+  const [source, setSource] = createSignal("Stable paragraph");
+  const { container } = render(() => (
+    <Markdown source={source()} variant="agent" streaming />
+  ));
+  const body = container.querySelector<HTMLElement>("[data-markdown-body]");
+  const paragraph = body?.querySelector("p");
+
+  setSource("Stable paragraph grows");
+  flushAnimationFrame();
+
+  expect(body?.querySelector("p")).toBe(paragraph);
+  expect(paragraph?.textContent).toBe("Stable paragraph grows");
+});
+
+it("converges to a fresh render after non-append structural changes", () => {
+  const [source, setSource] = createSignal("Paragraph\n\n- first\n- second");
+  const incremental = render(() => (
+    <Markdown source={source()} variant="agent" streaming />
+  ));
+  const current = incremental.container.querySelector<HTMLElement>(
+    "[data-markdown-body]",
+  );
+
+  const latest =
+    "## Revised\n\n1. first\n2. second\n\n| State |\n| --- |\n| done |";
+  setSource(latest);
+  flushAnimationFrame();
+  const fresh = render(() => (
+    <Markdown source={latest} variant="agent" streaming={false} />
+  ));
+
+  expect(current?.innerHTML).toBe(
+    fresh.container.querySelector("[data-markdown-body]")?.innerHTML,
+  );
+});
+
+it("cancels pending work and rejects a stale frame from an older generation", () => {
+  const [source, setSource] = createSignal("Turn one");
+  const [generation, setGeneration] = createSignal("turn-1");
+  const { container, unmount } = render(() => (
+    <Markdown
+      source={source()}
+      variant="agent"
+      streaming
+      generation={generation()}
+    />
+  ));
+  const body = container.querySelector<HTMLElement>("[data-markdown-body]");
+
+  setSource("Stale turn one");
+  const staleFrame = [...animationFrames.values()][0];
+  batch(() => {
+    setGeneration("turn-2");
+    setSource("Fresh turn two");
+  });
+  expect(body?.textContent?.trim()).toBe("Fresh turn two");
+
+  staleFrame?.(performance.now());
+  expect(body?.textContent?.trim()).toBe("Fresh turn two");
+
+  setSource("Pending turn two");
+  expect(animationFrames.size).toBe(1);
+  unmount();
+  expect(animationFrames.size).toBe(0);
+});
+
+it("shows the complete source as plain text above the rendering safety limit", () => {
+  const source = `**${"a".repeat(100_001)}**`;
+  const { container } = render(() => (
+    <Markdown source={source} variant="agent" streaming={false} />
+  ));
+  const body = container.querySelector<HTMLElement>("[data-markdown-body]");
+
+  expect(body?.dataset.fallback).toBe("true");
+  expect(body?.textContent).toBe(source);
+  expect(body?.querySelector("strong")).toBeNull();
 });

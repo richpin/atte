@@ -2187,7 +2187,7 @@ it("appends ordered text deltas and rejects updates for another thread", async (
     text: "wrong",
   });
   receiveUpdate({ ...delta, text: " world" });
-  expect(screen.getByText("Hello world")).toBeTruthy();
+  expect(await screen.findByText("Hello world")).toBeTruthy();
   expect(screen.queryByText(/wrong/)).toBeNull();
 });
 
@@ -2400,7 +2400,7 @@ it("keeps streaming and the fixed thread while management is open", async () => 
   await userEvent.click(
     screen.getByRole("button", { name: "스레드로 돌아가기" }),
   );
-  expect(screen.getByText("Hi there")).toBeTruthy();
+  expect(await screen.findByText("Hi there")).toBeTruthy();
   expect(invoke).not.toHaveBeenCalledWith(
     "unsubscribe_thread",
     expect.anything(),

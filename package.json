@@ -30,6 +30,7 @@
     "@tauri-apps/plugin-opener": "^2",
     "dompurify": "^3.4.15",
     "marked": "^18.0.13",
+    "morphdom": "^2.7.8",
     "solid-js": "^1.9.3"
   },
   "devDependencies": {

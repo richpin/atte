@@ -46,7 +46,7 @@ function UserMessage(props: { children: string }) {
         }
       >
         <div ref={content} data-user-message-content="">
-          <Markdown source={props.children} variant="user" />
+          <Markdown source={props.children} variant="user" streaming={false} />
         </div>
       </div>
       <Show when={collapsible()}>
@@ -77,7 +77,7 @@ function UserMessage(props: { children: string }) {
   );
 }
 
-export function Message(props: { turns: Turn[] }) {
+export function Message(props: { turns: Turn[]; streamingTurnId?: string }) {
   const { t } = useI18n();
   return (
     <ol aria-label={t("thread.messages")} class="flex flex-col gap-8">
@@ -90,7 +90,12 @@ export function Message(props: { turns: Turn[] }) {
                 data-message-participant="agent"
                 class="w-full min-w-0 text-left text-sm"
               >
-                <Markdown source={turn().response} variant="agent" />
+                <Markdown
+                  source={turn().response}
+                  variant="agent"
+                  streaming={turn().id === props.streamingTurnId}
+                  generation={turn().id}
+                />
               </div>
             </Show>
             <Show when={turn().stopReason}>
