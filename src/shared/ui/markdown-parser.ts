@@ -1,5 +1,6 @@
 import DOMPurify from "dompurify";
 import { Marked } from "marked";
+import { type CodeLanguage, normalizeCodeLanguage } from "./code-languages";
 
 const allowedTags = [
   "blockquote",
@@ -36,46 +37,10 @@ const allowedAttributes = [
   "type",
 ] as const;
 
-const codeLanguages = {
-  bash: { id: "bash", label: "Shell" },
-  c: { id: "c", label: "C" },
-  cpp: { id: "cpp", label: "C++" },
-  cs: { id: "csharp", label: "C#" },
-  csharp: { id: "csharp", label: "C#" },
-  css: { id: "css", label: "CSS" },
-  diff: { id: "diff", label: "Diff" },
-  go: { id: "go", label: "Go" },
-  html: { id: "html", label: "HTML" },
-  java: { id: "java", label: "Java" },
-  javascript: { id: "javascript", label: "JavaScript" },
-  js: { id: "javascript", label: "JavaScript" },
-  json: { id: "json", label: "JSON" },
-  jsx: { id: "jsx", label: "JSX" },
-  kotlin: { id: "kotlin", label: "Kotlin" },
-  markdown: { id: "markdown", label: "Markdown" },
-  md: { id: "markdown", label: "Markdown" },
-  python: { id: "python", label: "Python" },
-  py: { id: "python", label: "Python" },
-  ruby: { id: "ruby", label: "Ruby" },
-  rust: { id: "rust", label: "Rust" },
-  rs: { id: "rust", label: "Rust" },
-  sh: { id: "bash", label: "Shell" },
-  shell: { id: "bash", label: "Shell" },
-  sql: { id: "sql", label: "SQL" },
-  swift: { id: "swift", label: "Swift" },
-  ts: { id: "typescript", label: "TypeScript" },
-  tsx: { id: "tsx", label: "TSX" },
-  typescript: { id: "typescript", label: "TypeScript" },
-  xml: { id: "xml", label: "XML" },
-  yaml: { id: "yaml", label: "YAML" },
-  yml: { id: "yaml", label: "YAML" },
-  zsh: { id: "bash", label: "Shell" },
-} as const;
-
-export type CodeLanguage = { id: string; label: string };
 export type MarkdownCodeBlock = {
   source: string;
   language?: CodeLanguage;
+  closed: boolean;
 };
 export type RenderedMarkdown = {
   html: string;
@@ -84,13 +49,6 @@ export type RenderedMarkdown = {
 
 let renderedCodeBlocks: MarkdownCodeBlock[] = [];
 
-function normalizeCodeLanguage(value?: string): CodeLanguage | undefined {
-  const name = value?.trim().split(/\s+/, 1)[0]?.toLowerCase();
-  return name && Object.hasOwn(codeLanguages, name)
-    ? codeLanguages[name as keyof typeof codeLanguages]
-    : undefined;
-}
-
 function escapeHtml(value: string) {
   return value
     .replaceAll("&", "&amp;")
@@ -98,6 +56,23 @@ function escapeHtml(value: string) {
     .replaceAll(">", "&gt;")
     .replaceAll('"', "&quot;")
     .replaceAll("'", "&#39;");
+}
+
+function hasClosingFence(raw: string) {
+  const lines = raw.split(/\r?\n/);
+  const opening = lines[0]?.match(/^ {0,3}(`{3,}|~{3,})/);
+  if (!opening) return true;
+  const marker = opening[1];
+  if (!marker) return false;
+  const closing = new RegExp(
+    `^ {0,3}${marker[0] === "`" ? "`" : "~"}{${marker.length},}[ \\t]*$`,
+  );
+  for (let index = lines.length - 1; index > 0; index--) {
+    const line = lines[index];
+    if (line && closing.test(line)) return true;
+    if (line?.trim()) return false;
+  }
+  return false;
 }
 
 export function safeWebUrl(destination: string) {
@@ -138,8 +113,9 @@ const parser = new Marked({
         : escapeHtml(href);
       return `${label}${label ? " " : ""}(${readableDestination})`;
     },
-    code({ text, lang }) {
+    code({ raw, text, lang }) {
       const index = renderedCodeBlocks.push({
+        closed: hasClosingFence(raw),
         source: text,
         language: normalizeCodeLanguage(lang),
       });

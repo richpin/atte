@@ -3,6 +3,7 @@ import morphdom from "morphdom";
 import { createEffect, on, onCleanup } from "solid-js";
 import { useI18n } from "../i18n";
 import { renderMarkdown, safeWebUrl } from "./markdown-parser";
+import { type HighlightedCode, highlightCode } from "./syntax-highlighter";
 
 const maximumFormattedSourceLength = 100_000;
 const copyFeedbackDuration = 2_000;
@@ -26,6 +27,7 @@ export function Markdown(props: MarkdownProps) {
   let copyRequest = 0;
   const copyRequests = new WeakMap<HTMLElement, number>();
   const feedbackTimers = new Map<HTMLElement, ReturnType<typeof setTimeout>>();
+  const highlightTargets = new WeakMap<HTMLElement, string>();
 
   function decorateTables(target: HTMLElement) {
     for (const table of target.querySelectorAll<HTMLTableElement>("table")) {
@@ -92,6 +94,59 @@ export function Markdown(props: MarkdownProps) {
     }
   }
 
+  function appendHighlightedCode(code: HTMLElement, result: HighlightedCode) {
+    const fragment = document.createDocumentFragment();
+    for (const [lineIndex, line] of result.tokens.entries()) {
+      for (const token of line) {
+        const span = document.createElement("span");
+        span.textContent = token.content;
+        if (/^#[0-9a-f]{6}(?:[0-9a-f]{2})?$/i.test(token.color ?? "")) {
+          span.style.color = token.color ?? "";
+        }
+        if (token.fontStyle !== undefined && token.fontStyle >= 0) {
+          if (token.fontStyle & 1) span.classList.add("italic");
+          if (token.fontStyle & 2) span.classList.add("font-bold");
+          if (token.fontStyle & 4) span.classList.add("underline");
+        }
+        fragment.append(span);
+      }
+      if (lineIndex < result.tokens.length - 1) fragment.append("\n");
+    }
+    code.replaceChildren(fragment);
+  }
+
+  function highlightCodeBlocks(
+    blocks: ReturnType<typeof renderMarkdown>["codeBlocks"],
+    streaming: boolean,
+  ) {
+    const wrappers = body.querySelectorAll<HTMLElement>(
+      "[data-markdown-code-block]",
+    );
+    for (const [index, block] of blocks.entries()) {
+      const code = wrappers[index]?.querySelector<HTMLElement>("pre code");
+      if (!code) continue;
+      highlightTargets.set(code, "");
+      if (!block.language || (streaming && !block.closed)) continue;
+
+      const appearance = props.variant === "user" ? "dark" : "light";
+      const language = block.language.id;
+      const key = `${appearance}\0${language}\0${block.source}`;
+      highlightTargets.set(code, key);
+      void highlightCode(block.source, language, appearance)
+        .then((result) => {
+          if (
+            disposed ||
+            !body.contains(code) ||
+            highlightTargets.get(code) !== key
+          )
+            return;
+          appendHighlightedCode(code, result);
+          code.dataset.codeHighlighted = language;
+        })
+        .catch(() => undefined);
+    }
+  }
+
   function cancelFrame() {
     if (frame === undefined) return;
     cancelAnimationFrame(frame);
@@ -104,7 +159,7 @@ export function Markdown(props: MarkdownProps) {
     body.dataset.fallback = "true";
   }
 
-  function updateBody(source: string, generation: number) {
+  function updateBody(source: string, generation: number, streaming: boolean) {
     if (disposed || generation !== renderGeneration) return;
     if (source.length > maximumFormattedSourceLength) {
       showPlainText(source);
@@ -121,6 +176,7 @@ export function Markdown(props: MarkdownProps) {
       morphdom(body, next, { childrenOnly: true });
       codeSources = rendered.codeBlocks.map((block) => block.source);
       delete body.dataset.fallback;
+      highlightCodeBlocks(rendered.codeBlocks, streaming);
     } catch {
       showPlainText(source);
     }
@@ -128,7 +184,7 @@ export function Markdown(props: MarkdownProps) {
 
   function flush() {
     cancelFrame();
-    updateBody(latestSource, renderGeneration);
+    updateBody(latestSource, renderGeneration, props.streaming ?? false);
   }
 
   function schedule() {
@@ -136,7 +192,7 @@ export function Markdown(props: MarkdownProps) {
     const generation = renderGeneration;
     frame = requestAnimationFrame(() => {
       frame = undefined;
-      updateBody(latestSource, generation);
+      updateBody(latestSource, generation, props.streaming ?? false);
     });
   }
 
