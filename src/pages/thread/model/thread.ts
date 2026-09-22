@@ -133,6 +133,12 @@ export function createThreadModel(queryClient?: QueryClient) {
   const answerPending = () => Boolean(answeringPermissionId());
   const cancelPending = () => Boolean(cancellingTurnId());
   const activeTurnId = () => thread()?.turns?.at(-1)?.id;
+  const streamingTurnId = () =>
+    ["running", "waitingForApproval", "cancelling"].includes(
+      thread()?.status ?? "",
+    )
+      ? activeTurnId()
+      : undefined;
   const canCancel = () =>
     ["running", "waitingForApproval"].includes(thread()?.status ?? "");
   const showStop = () => canCancel() || thread()?.status === "cancelling";
@@ -569,6 +575,7 @@ export function createThreadModel(queryClient?: QueryClient) {
     answerPending,
     cancelPending,
     activeTurnId,
+    streamingTurnId,
     showStop,
     stopping,
     subscriptionError,

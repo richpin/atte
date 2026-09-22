@@ -18,7 +18,7 @@ export function Markdown(props: MarkdownProps) {
   let frame: number | undefined;
   let latestSource = "";
   let renderGeneration = 0;
-  let sourceGeneration = props.generation;
+  let sourceGeneration: string | undefined;
 
   function decorateTables(target: HTMLElement) {
     for (const table of target.querySelectorAll<HTMLTableElement>("table")) {
