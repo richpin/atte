@@ -37,4 +37,4 @@ Status: done
 - 2026-09-19: 구현 완료. `RuntimeUpdates`에 연결 준비·기록 복원·맥락 재개·실패·정상 종료를 전달하는 interface를 두고 상태·안내·인증 규칙을 스레드 module로 이동했다. 가변 스레드 closure와 인증 갱신 helper는 module 내부로 제한했으며, 호출이 없던 선택적 turn 인자를 제거했다. generation 검사, 승인 정리, 저장·구독 발행 순서와 횟수, capability 선택, 완료·취소·FIFO 정책은 유지했다.
 - 검증: 변경 전후 기존 ACP 통합 테스트 42개 통과. 공개 `Threads`와 기존 Rust fixture로 승인 대기 중 프로세스 종료 시 중단 표시·승인 정리·늦은 승인 거부·본문/참조/큐 보존을 검증하는 회귀 테스트 1개를 보강했다. 동작 보존 리팩터링이므로 새 실패 동작을 만드는 TDD 단계 대신 기존 동작 검증을 사용했다.
 - 최종 검증: `cargo check --locked`, `cargo test --locked` (71개 통과, 실제 Codex/로그인이 필요한 4개 ignored), `cargo fmt --check`, `cargo clippy --all-targets --all-features --locked -- -D warnings` 통과 (Cargo 명령은 `src-tauri/Cargo.toml` 대상). `pnpm typecheck`, `pnpm test` (73개 통과), `git diff --check` 통과. 기존 rustfmt nightly 옵션 및 테스트 환경의 Xcode/jsdom 경고만 관찰했다.
-- 코드 리뷰: 작업 시작점 `2d8d41be849b6cd670899a5efd3b3e9aa2205d19` 대비 작업 트리 변경을 Standards/Spec 두 에이전트가 병렬 검토했고 각 0건. 관련 설계 문서 `docs/research/acp-thread-queue.md`를 갱신했다.
+- 코드 리뷰: 작업 시작점 `2d8d41be849b6cd670899a5efd3b3e9aa2205d19` 대비 작업 트리 변경을 Standards/Spec 두 에이전트가 병렬 검토했고 각 0건.

@@ -12,7 +12,7 @@ Status: done
 
 기존 세 에이전트 대상 구현을 확장한다. Claude·Codex·Antigravity는 검증 사례이며 지원 대상의 고정 목록이 아니다. 기존 설치·저장·인증·스레드 통합을 유지하면서 Registry ID를 기준으로 공통 관리한다. 과거 완료 기록은 이전 범위의 증거이며 아래 확장된 완료 조건을 충족한 것으로 간주하지 않는다.
 
-설계 근거는 [Zed Registry 소스 조사](../../../docs/research/zed-registry-installation.md)의 고정 커밋 `b6171bcc982c406c34e786c09ae26f59620e52ae`다. Zed의 동적 Registry 목록, 플랫폼별 배포 선택, 배포 형식별 공통 설치기, 공통 NodeRuntime 및 실행 정의 방식을 채택한다. Zed의 제품별 설정·원격 실행·에이전트 이름별 인증 예외나 npm 버전 범위 정책까지 일괄 복제하지 않는다.
+Zed의 고정 커밋 `b6171bcc982c406c34e786c09ae26f59620e52ae`에서 확인한 동적 Registry 목록, 플랫폼별 배포 선택, 배포 형식별 공통 설치기, 공통 NodeRuntime 및 실행 정의 방식을 채택한다. Zed의 제품별 설정·원격 실행·에이전트 이름별 인증 예외나 npm 버전 범위 정책까지 일괄 복제하지 않는다.
 
 macOS 우선과 공통 ACP/capability 원칙을 유지한다. 지원 배포는 Zed 조사 시점의 binary와 npx다. uvx 등 미지원 배포는 이유를 표시하며 설치하지 않는다. 모든 Registry 항목의 인증된 실사용을 보증하지 않는다. 실계정 응답 검증은 Codex로 수행하며 나머지는 검증 범위를 명시한다.
 

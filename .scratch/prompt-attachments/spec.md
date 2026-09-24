@@ -59,7 +59,3 @@ Atte의 사용자 입력은 현재 메시지 본문 문자열만 담을 수 있�
 - 입력창의 `@`를 통해 파일 내용을 직접 삽입하는 동작
 
 preview 기능과 embedded resource 기반 `@` 파일 삽입은 첨부 전송과 별도의 후속 명세 및 구현 작업으로 다룬다.
-
-## References
-
-- [ACP 입력 파일 첨부 기술 조사](../../docs/research/acp-prompt-attachments.md)
