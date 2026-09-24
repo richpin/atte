@@ -258,7 +258,7 @@ export function ThreadPage(props: {
               observeComposer(element);
               setComposerHeight(element.getBoundingClientRect().height);
             }}
-            class="absolute inset-x-0 bottom-4 z-10"
+            class="absolute inset-x-0 bottom-4"
           >
             <Show when={thread()}>
               {(currentThread) => (

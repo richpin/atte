@@ -125,7 +125,7 @@ export function ThreadComposer(props: {
                       {t("thread.settings")}
                     </Popover.Trigger>
                     <Popover.Portal>
-                      <Popover.Content class="z-20 flex min-w-64 flex-col gap-3 rounded-xl border border-line bg-panel p-3 text-xs text-ink shadow-lg">
+                      <Popover.Content class="flex min-w-64 flex-col gap-3 rounded-xl border border-line bg-panel p-3 text-xs text-ink shadow-lg">
                         <For each={additionalConfiguration()}>
                           {(configuration) => (
                             <ThreadConfigurationControl

@@ -41,7 +41,7 @@ type SidebarThread = {
 };
 
 const menuClass =
-  "z-30 min-w-32 rounded-lg border border-line bg-panel p-1 text-sm text-ink shadow-lg";
+  "min-w-32 rounded-lg border border-line bg-panel p-1 text-sm text-ink shadow-lg";
 const deleteItemClass =
   "rounded px-3 py-2 text-danger outline-none data-[highlighted]:bg-danger-soft";
 
@@ -346,8 +346,8 @@ export function AppSidebar(props: {
         }}
       >
         <AlertDialog.Portal>
-          <AlertDialog.Overlay class="fixed inset-0 z-40 bg-black/40" />
-          <AlertDialog.Content class="fixed top-1/2 left-1/2 z-50 w-[min(28rem,90vw)] -translate-x-1/2 -translate-y-1/2 space-y-4 rounded-2xl border border-line bg-panel p-6 text-ink shadow-xl">
+          <AlertDialog.Overlay class="fixed inset-0 bg-black/40" />
+          <AlertDialog.Content class="fixed top-1/2 left-1/2 w-[min(28rem,90vw)] -translate-x-1/2 -translate-y-1/2 space-y-4 rounded-2xl border border-line bg-panel p-6 text-ink shadow-xl">
             <AlertDialog.Title class="font-semibold">
               {t("sidebar.deleteTitle")}
             </AlertDialog.Title>

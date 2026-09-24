@@ -34,7 +34,7 @@ export function LanguageMenu() {
         {t("language.label")}
       </DropdownMenu.Trigger>
       <DropdownMenu.Portal>
-        <DropdownMenu.Content class="z-50 min-w-40 rounded-lg border border-line bg-panel p-1 text-sm text-ink shadow-lg">
+        <DropdownMenu.Content class="min-w-40 rounded-lg border border-line bg-panel p-1 text-sm text-ink shadow-lg">
           <DropdownMenu.RadioGroup
             value={preference()}
             onChange={(value) => {
