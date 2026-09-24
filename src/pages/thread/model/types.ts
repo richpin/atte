@@ -81,6 +81,13 @@ export type ThreadConfiguration = ThreadConfigurationBase &
 export interface QueuedMessage {
   id: string;
   text: string;
+  attachments: Attachment[];
+  status: "pending" | "failed";
+}
+
+export interface Attachment {
+  id: string;
+  name: string;
 }
 
 export type ThreadMetadata = Pick<

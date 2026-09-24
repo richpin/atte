@@ -37,6 +37,10 @@ export function deleteQueuedMessage(id: string, message: string) {
   return invoke<void>("delete_queued_message", { id, message });
 }
 
+export function retryQueuedMessage(id: string, message: string) {
+  return invoke<void>("retry_queued_message", { id, message });
+}
+
 export function createThread(folder: string, agentId: string) {
   return invoke<string>("create_thread", { folder, agentId });
 }

@@ -542,8 +542,14 @@ async fn run_session(
         let turn_updates = updates.clone();
         let turn_routes = routes.clone();
         let turn_session = remote.to_string();
+        let prompt_turn = prompt.turn;
+        let queued_message = prompt.queued_message;
+        let queued_prompt = queued_message.is_some();
         if let Err(error) = connection
-            .send_request(PromptRequest::new(remote.clone(), vec![prompt.text.into()]))
+            .send_request(PromptRequest::new(
+                remote.clone(),
+                vec![prompt.input.body.into()],
+            ))
             .on_receiving_result(async move |result| {
                 if let Ok(mut routes) = turn_routes.lock() {
                     if let Some(route) = routes.get_mut(&turn_session) {
@@ -552,15 +558,28 @@ async fn run_session(
                 }
                 let completed = match result {
                     Ok(response) => {
-                        Ok(turn_updates.complete_turn(prompt.turn, response.stop_reason))
+                        Ok(turn_updates.complete_turn(prompt_turn, response.stop_reason))
                     }
-                    Err(error) => Err(classify(error, ConnectionFailure::PromptFailed)),
+                    Err(error) => {
+                        let failure = classify(error, ConnectionFailure::PromptFailed);
+                        if let Some(queued_message) = queued_message {
+                            turn_updates.queued_prompt_failed(
+                                prompt_turn,
+                                queued_message,
+                                failure.clone(),
+                            );
+                        }
+                        Err(failure)
+                    }
                 };
                 let _ = finished.send(completed);
                 Ok(())
             })
         {
             return classify(error, ConnectionFailure::PromptFailed);
+        }
+        if let Some(queued_message) = queued_message {
+            updates.queued_prompt_dispatched(queued_message);
         }
         // v1 prompt responses delimit turns; cancellation does not release the slot.
         loop {
@@ -569,13 +588,15 @@ async fn run_session(
                 result = &mut completion => {
                     match result {
                         Ok(Ok(next)) => next_prompt = next,
+                        Ok(Err(failure)) if queued_prompt
+                            && failure == ConnectionFailure::PromptFailed => {}
                         Ok(Err(failure)) => return failure,
                         Err(_) => return ConnectionFailure::ConnectionClosed,
                     }
                     break;
                 }
                 Some(turn) = session.cancellations.recv() => {
-                    if turn == prompt.turn {
+                    if turn == prompt_turn {
                         if let Err(error) = connection.send_notification(CancelNotification::new(remote.clone())) { return classify(error, ConnectionFailure::ConnectionClosed); }
                     }
                 }

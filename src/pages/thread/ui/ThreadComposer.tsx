@@ -30,6 +30,7 @@ export function ThreadComposer(props: {
   onAnswer: (request: string, option: string) => void;
   onConfigure: (configId: string, value: ThreadConfigurationValue) => void;
   onDeleteQueued: (id: string) => Promise<void>;
+  onRetryQueued: (id: string) => Promise<void>;
   onRetryAuthentication?: () => void;
   onAuthenticate?: (method: string) => void;
   onCancelAuthentication?: () => void;
@@ -62,6 +63,7 @@ export function ThreadComposer(props: {
         messages={props.thread.queuedMessages ?? []}
         disabled={!props.actionsEnabled}
         onDelete={props.onDeleteQueued}
+        onRetry={props.onRetryQueued}
       />
       <Show
         when={props.thread.failure === "authenticationRequired"}

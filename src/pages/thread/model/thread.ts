@@ -21,6 +21,7 @@ import {
   deleteQueuedMessage,
   deleteThread as deleteThreadCommand,
   listThreads,
+  retryQueuedMessage,
   selectWorkingFolder,
   sendMessage,
   setThreadConfiguration,
@@ -419,6 +420,18 @@ export function createThreadModel(queryClient?: QueryClient) {
     }
   }
 
+  async function retryQueued(id: string) {
+    const expectedView = view;
+    const current = thread();
+    if (!current || !actionsEnabled()) return;
+    try {
+      await retryQueuedMessage(current.id, id);
+    } catch (cause) {
+      if (isCurrent(expectedView))
+        setError(localizedMessage(cause, "thread.error.retryQueued"));
+    }
+  }
+
   async function answer(request: string, option: string) {
     const expectedView = view;
     const current = thread();
@@ -591,6 +604,7 @@ export function createThreadModel(queryClient?: QueryClient) {
     openThread,
     send,
     deleteQueued,
+    retryQueued,
     answer,
     cancel,
     configure,

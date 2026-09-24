@@ -42,6 +42,7 @@ export function ThreadPage(props: {
     configure,
     connect,
     retrySubscription,
+    retryQueued,
   } = model;
   const [composerHeight, setComposerHeight] = createSignal(0);
   let composerOverlay: HTMLDivElement | undefined;
@@ -292,6 +293,7 @@ export function ThreadPage(props: {
                     void configure(configId, value)
                   }
                   onDeleteQueued={deleteQueued}
+                  onRetryQueued={retryQueued}
                 />
               )}
             </Show>

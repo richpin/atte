@@ -358,6 +358,29 @@ it("keeps the draft when sending fails", async () => {
   expect(model.error()).toBeDefined();
 });
 
+it("retries a failed queued input through the command boundary", async () => {
+  commands.set("retry_queued_message", async () => undefined);
+  const model = setup();
+  await open(model, "A", {
+    ...thread("A"),
+    queuedMessages: [
+      {
+        id: "failed",
+        text: "retry me",
+        attachments: [],
+        status: "failed",
+      },
+    ],
+  });
+
+  await model.retryQueued("failed");
+
+  expect(invoke).toHaveBeenCalledWith("retry_queued_message", {
+    id: "A",
+    message: "failed",
+  });
+});
+
 it("preserves independent drafts when switching threads", async () => {
   const model = setup();
   await open(model, "A");

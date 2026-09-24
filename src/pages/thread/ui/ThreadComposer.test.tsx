@@ -102,6 +102,7 @@ it("renders agent-provided thread configuration and sends typed selections", () 
         onAnswer={() => {}}
         onConfigure={onConfigure}
         onDeleteQueued={async () => {}}
+        onRetryQueued={async () => {}}
       />
     </I18nProvider>
   ));
@@ -147,6 +148,7 @@ it("switches from PromptInput to PermissionInput when approval is requested", ()
         onAnswer={onAnswer}
         onConfigure={() => {}}
         onDeleteQueued={async () => {}}
+        onRetryQueued={async () => {}}
       />
     </I18nProvider>
   ));
@@ -199,6 +201,7 @@ it("submits PromptInput with Enter", () => {
         onAnswer={() => {}}
         onConfigure={() => {}}
         onDeleteQueued={async () => {}}
+        onRetryQueued={async () => {}}
       />
     </I18nProvider>
   ));
@@ -222,7 +225,14 @@ it("disables every thread mutation while the subscription is unavailable", () =>
         options: [{ id: "allow", name: "Allow" }],
       },
     ],
-    queuedMessages: [{ id: "queued", text: "next" }],
+    queuedMessages: [
+      {
+        id: "queued",
+        text: "next",
+        attachments: [],
+        status: "pending" as const,
+      },
+    ],
   };
 
   render(() => (
@@ -244,6 +254,7 @@ it("disables every thread mutation while the subscription is unavailable", () =>
         onAnswer={() => {}}
         onConfigure={() => {}}
         onDeleteQueued={async () => {}}
+        onRetryQueued={async () => {}}
       />
     </I18nProvider>
   ));

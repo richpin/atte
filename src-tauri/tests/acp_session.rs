@@ -1,6 +1,6 @@
 use atte_lib::{
     agent::AgentDefinition,
-    thread::{ThreadConfigurationValue, ThreadStatus, Threads},
+    thread::{QueuedMessageStatus, ThreadConfigurationValue, ThreadStatus, Threads},
 };
 use std::{path::PathBuf, process::Command, sync::OnceLock, time::Duration};
 
@@ -61,6 +61,16 @@ async fn wait_for_configuration_gate(gate: &std::path::Path, request: usize, sta
     let arrived = gate.join(format!("{request}.{stage}.arrived"));
     tokio::time::timeout(Duration::from_secs(5), async {
         while !arrived.exists() {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+}
+
+async fn wait_for_path(path: &std::path::Path) {
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while !path.exists() {
             tokio::task::yield_now().await;
         }
     })
@@ -205,7 +215,7 @@ async fn shutdown_stops_all_work_and_restores_queues_without_dispatch() {
         let saved = restored.get(id).unwrap();
         assert!(saved.interrupted);
         assert!(saved.turns.is_empty());
-        assert_eq!(saved.queued_messages[0].text, "queued");
+        assert_eq!(saved.queued_messages[0].input.body, "queued");
         restored.connect(id).unwrap();
         let ready = settle(&restored, id).await;
         assert_eq!(ready.status, ThreadStatus::SessionReady);
@@ -844,6 +854,205 @@ async fn queues_followups_and_dispatches_them_in_fifo_order_after_completion() {
 }
 
 #[tokio::test]
+async fn queued_input_is_acknowledged_before_its_turn_completes() {
+    let folder = tempfile::tempdir().unwrap();
+    let gates = folder.path().join("gates");
+    let mut agent = mock_agent();
+    agent
+        .env
+        .insert("PROMPT_GATE_DIR".into(), gates.to_string_lossy().into());
+    let threads = Threads::new(vec![agent]);
+    let draft = threads.create(folder.path()).unwrap();
+    threads.connect(draft.id).unwrap();
+    settle(&threads, draft.id).await;
+    threads.send_message(draft.id, "active".into()).unwrap();
+    threads.send_message(draft.id, "queued".into()).unwrap();
+    wait_for_path(&gates.join("1.arrived")).await;
+    std::fs::write(gates.join("1.release"), []).unwrap();
+    wait_for_path(&gates.join("2.arrived")).await;
+
+    let dispatched = threads.get(draft.id).unwrap();
+    assert_eq!(
+        (
+            dispatched.status,
+            dispatched.queued_messages,
+            dispatched.turns.last().unwrap().message.as_str(),
+        ),
+        (ThreadStatus::Running, Vec::new(), "queued")
+    );
+
+    std::fs::write(gates.join("2.release"), []).unwrap();
+    settle(&threads, draft.id).await;
+    threads.shutdown().await;
+}
+
+#[tokio::test]
+async fn failed_queued_input_blocks_fifo_until_the_user_retries_the_same_input() {
+    let folder = tempfile::tempdir().unwrap();
+    let gate = folder.path().join("continue");
+    let prompt_log = folder.path().join("prompts.log");
+    let mut agent = mock_agent();
+    agent
+        .env
+        .insert("FIXTURE_MODE".into(), "queued-prompt-error-once".into());
+    agent
+        .env
+        .insert("PROMPT_GATE".into(), gate.to_string_lossy().into());
+    agent
+        .env
+        .insert("PROMPT_LOG".into(), prompt_log.to_string_lossy().into());
+    let threads = Threads::new(vec![agent]);
+    let draft = threads.create(folder.path()).unwrap();
+    threads.connect(draft.id).unwrap();
+    settle(&threads, draft.id).await;
+    threads.send_message(draft.id, "active".into()).unwrap();
+    threads.send_message(draft.id, "retry me".into()).unwrap();
+    threads.send_message(draft.id, "after me".into()).unwrap();
+    std::fs::write(gate, "continue").unwrap();
+
+    let failed = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let thread = threads.get(draft.id).unwrap();
+            if thread
+                .queued_messages
+                .first()
+                .is_some_and(|queued| queued.status == QueuedMessageStatus::Failed)
+            {
+                break thread;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(failed.queued_messages.len(), 2);
+    assert_eq!(failed.queued_messages[0].input.body, "retry me");
+    assert_eq!(failed.queued_messages[1].input.body, "after me");
+    assert_eq!(
+        std::fs::read_to_string(&prompt_log).unwrap(),
+        "active\nretry me\n"
+    );
+    threads.send_message(draft.id, "newest".into()).unwrap();
+    let blocked = threads.get(draft.id).unwrap();
+    assert_eq!(blocked.queued_messages.len(), 3);
+    assert_eq!(blocked.queued_messages[2].input.body, "newest");
+    assert_eq!(
+        std::fs::read_to_string(&prompt_log).unwrap(),
+        "active\nretry me\n"
+    );
+
+    threads
+        .retry_queued_message(draft.id, failed.queued_messages[0].id)
+        .unwrap();
+    let completed = settle(&threads, draft.id).await;
+
+    assert!(completed.queued_messages.is_empty());
+    assert_eq!(
+        completed
+            .turns
+            .iter()
+            .map(|turn| turn.message.as_str())
+            .collect::<Vec<_>>(),
+        ["active", "retry me", "after me", "newest"]
+    );
+    assert_eq!(
+        std::fs::read_to_string(prompt_log).unwrap(),
+        "active\nretry me\nretry me\nafter me\nnewest\n"
+    );
+    threads.shutdown().await;
+}
+
+#[tokio::test]
+async fn restored_legacy_text_only_queue_still_dispatches() {
+    let folder = tempfile::tempdir().unwrap();
+    let path = folder.path().join("queue.sqlite");
+    let store = std::sync::Arc::new(atte_lib::storage::Store::open(&path).unwrap());
+    let original = Threads::with_store(vec![mock_agent()], store).unwrap();
+    let draft = original.create(folder.path()).unwrap();
+    original.shutdown().await;
+    rusqlite::Connection::open(&path)
+        .unwrap()
+        .execute(
+            "UPDATE threads SET queued_messages=?2 WHERE id=?1",
+            rusqlite::params![
+                draft.id.to_string(),
+                serde_json::json!([{ "id": uuid::Uuid::new_v4(), "text": "legacy" }]).to_string()
+            ],
+        )
+        .unwrap();
+    let store = std::sync::Arc::new(atte_lib::storage::Store::open(&path).unwrap());
+    let threads = Threads::with_store(vec![mock_agent()], store).unwrap();
+    threads.connect(draft.id).unwrap();
+    settle(&threads, draft.id).await;
+
+    threads.send_message(draft.id, "trigger".into()).unwrap();
+    let completed = settle(&threads, draft.id).await;
+
+    assert!(completed.queued_messages.is_empty());
+    assert_eq!(
+        completed
+            .turns
+            .iter()
+            .map(|turn| turn.message.as_str())
+            .collect::<Vec<_>>(),
+        ["trigger", "legacy"]
+    );
+    threads.shutdown().await;
+}
+
+#[tokio::test]
+async fn deleting_failed_queued_input_resumes_the_next_input() {
+    let folder = tempfile::tempdir().unwrap();
+    let gate = folder.path().join("continue");
+    let mut agent = mock_agent();
+    agent
+        .env
+        .insert("FIXTURE_MODE".into(), "queued-prompt-error-once".into());
+    agent
+        .env
+        .insert("PROMPT_GATE".into(), gate.to_string_lossy().into());
+    let threads = Threads::new(vec![agent]);
+    let draft = threads.create(folder.path()).unwrap();
+    threads.connect(draft.id).unwrap();
+    settle(&threads, draft.id).await;
+    for text in ["active", "delete me", "continue"] {
+        threads.send_message(draft.id, text.into()).unwrap();
+    }
+    std::fs::write(gate, "continue").unwrap();
+    let failed = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let thread = threads.get(draft.id).unwrap();
+            if thread
+                .queued_messages
+                .first()
+                .is_some_and(|queued| queued.status == QueuedMessageStatus::Failed)
+            {
+                break thread;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+
+    threads
+        .delete_queued_message(draft.id, failed.queued_messages[0].id)
+        .unwrap();
+    let completed = settle(&threads, draft.id).await;
+
+    assert!(completed.queued_messages.is_empty());
+    assert_eq!(
+        completed
+            .turns
+            .iter()
+            .map(|turn| turn.message.as_str())
+            .collect::<Vec<_>>(),
+        ["active", "continue"]
+    );
+    threads.shutdown().await;
+}
+
+#[tokio::test]
 async fn cancellation_intent_prevents_queue_dispatch_even_when_completion_wins_on_the_agent() {
     let folder = tempfile::tempdir().unwrap();
     let mut agent = mock_agent();
@@ -861,7 +1070,7 @@ async fn cancellation_intent_prevents_queue_dispatch_even_when_completion_wins_o
     let stopped = settle(&threads, draft.id).await;
     assert!(stopped.interrupted);
     assert_eq!(stopped.turns.len(), 1);
-    assert_eq!(stopped.queued_messages[0].text, "keep");
+    assert_eq!(stopped.queued_messages[0].input.body, "keep");
     threads.shutdown().await;
 }
 
@@ -933,9 +1142,9 @@ async fn failed_removal_storage_keeps_the_followup_without_dispatching_it() {
     .await
     .unwrap();
     writer.execute_batch("ROLLBACK").unwrap();
-    assert_eq!(completed.turns.len(), 1);
+    assert_eq!(completed.turns.len(), 2);
     assert_eq!(completed.turns[0].stop_reason.as_deref(), Some("end_turn"));
-    assert_eq!(completed.queued_messages[0].text, "keep");
+    assert_eq!(completed.queued_messages[0].input.body, "keep");
     assert!(completed.notice.is_some());
     threads.shutdown().await;
     let restored = Threads::with_store(vec![agent], store).unwrap();
@@ -971,7 +1180,7 @@ async fn cancelled_queue_survives_restart_and_load_without_sending() {
         stopped
             .queued_messages
             .iter()
-            .map(|message| message.text.as_str())
+            .map(|message| message.input.body.as_str())
             .collect::<Vec<_>>(),
         ["keep"]
     );
@@ -1718,7 +1927,7 @@ async fn configuration_failure_rolls_back_without_interrupting_turn_or_queue() {
     .unwrap();
     let running = threads.get(draft.id).unwrap();
     assert_eq!(running.status, ThreadStatus::Running);
-    assert_eq!(running.queued_messages[0].text, "queued");
+    assert_eq!(running.queued_messages[0].input.body, "queued");
     assert_eq!(
         serde_json::to_value(&running.configuration[2]).unwrap()["currentValue"],
         true
@@ -2441,7 +2650,7 @@ async fn unsuccessful_turns_preserve_the_queue_without_dispatching() {
         std::fs::write(gate, "continue").unwrap();
         let finished = settle(&threads, draft.id).await;
         assert_eq!(finished.turns.len(), 1, "{mode}");
-        assert_eq!(finished.queued_messages[0].text, "keep", "{mode}");
+        assert_eq!(finished.queued_messages[0].input.body, "keep", "{mode}");
         threads.shutdown().await;
     }
 }
@@ -2602,7 +2811,7 @@ async fn process_exit_during_approval_clears_permissions_and_preserves_the_queue
     assert_eq!(failed.session_id, waiting.session_id);
     assert_eq!(failed.turns, waiting.turns);
     assert_eq!(failed.queued_messages.len(), 1);
-    assert_eq!(failed.queued_messages[0].text, "keep for later");
+    assert_eq!(failed.queued_messages[0].input.body, "keep for later");
     assert!(threads
         .answer_permission(
             draft.id,

@@ -234,7 +234,56 @@ pub enum ThreadConfigurationValue {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct QueuedMessage {
     pub id: Uuid,
-    pub text: String,
+    #[serde(flatten)]
+    pub input: UserInput,
+    #[serde(default)]
+    pub status: QueuedMessageStatus,
+}
+
+impl QueuedMessage {
+    /// Creates a backward-compatible text-only queued input.
+    pub fn text(id: Uuid, body: impl Into<String>) -> Self {
+        Self {
+            id,
+            input: UserInput::text(body.into()),
+            status: QueuedMessageStatus::Pending,
+        }
+    }
+}
+
+/// One user submission, preserving attachment order independently from its message body.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct UserInput {
+    #[serde(rename = "text", alias = "body")]
+    pub body: String,
+    #[serde(default)]
+    pub attachments: Vec<Attachment>,
+}
+
+impl UserInput {
+    fn text(body: String) -> Self {
+        Self {
+            body,
+            attachments: Vec::new(),
+        }
+    }
+}
+
+/// Opaque attachment identity kept in user-selected order.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Attachment {
+    pub id: Uuid,
+    pub name: String,
+}
+
+/// A queued input blocks later input after a delivery failure.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum QueuedMessageStatus {
+    #[default]
+    Pending,
+    Failed,
 }
 
 /// Metadata for listing and reconnecting threads, excluding content and queued input.
@@ -531,6 +580,7 @@ impl Threads {
                         store: Some(store.clone()),
                         draining: false,
                         dispatch_queue_on_ready: false,
+                        dispatching_queued: None,
                         published_turn_count: 0,
                         published_last_turn: None,
                     })),
@@ -1014,6 +1064,7 @@ impl Threads {
                     store: self.store.clone(),
                     draining: false,
                     dispatch_queue_on_ready: false,
+                    dispatching_queued: None,
                     published_turn_count: 0,
                     published_last_turn: None,
                 })),
@@ -1252,8 +1303,23 @@ impl Threads {
     }
 
     /// Sends while ready, or queues input behind an active turn.
+    ///
+    /// # Errors
+    ///
+    /// Returns the same validation, readiness, persistence, and runtime errors as the underlying
+    /// user-input operation.
     pub fn send_message(&self, id: Uuid, text: String) -> Result<(), ThreadError> {
-        if text.trim().is_empty() {
+        self.send_input(id, UserInput::text(text))
+    }
+
+    /// Sends one user input while ready, or queues it behind an active turn.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the input is empty, the thread is unavailable or not ready, durable
+    /// queue storage fails, or the connected runtime can no longer accept prompts.
+    fn send_input(&self, id: Uuid, input: UserInput) -> Result<(), ThreadError> {
+        if input.body.trim().is_empty() && input.attachments.is_empty() {
             return Err(ThreadError::InvalidMessage("메시지를 입력해주세요.".into()));
         }
         let state = self.lock()?;
@@ -1267,12 +1333,17 @@ impl Threads {
             .get(&current.thread.agent_id)
             .is_some_and(|transition| transition.draining)
             || current.dispatch_queue_on_ready
+            || current
+                .thread
+                .queued_messages
+                .first()
+                .is_some_and(|queued| queued.status == QueuedMessageStatus::Failed)
             || matches!(
                 current.thread.status,
                 ThreadStatus::Running | ThreadStatus::WaitingForApproval | ThreadStatus::Cancelling
             )
         {
-            current.enqueue(text)?;
+            current.enqueue(input)?;
             return Ok(());
         }
         if current.thread.status != ThreadStatus::SessionReady {
@@ -1287,7 +1358,8 @@ impl Threads {
             .prompts
             .send(Prompt {
                 turn,
-                text: text.clone(),
+                input: input.clone(),
+                queued_message: None,
             })
             .map_err(|_| unavailable())?;
         current.thread.status = ThreadStatus::Running;
@@ -1295,11 +1367,11 @@ impl Threads {
         current.thread.failure = None;
         current.thread.interrupted = false;
         if current.thread.title == "새 스레드" {
-            current.thread.title = text.trim().chars().take(60).collect();
+            current.thread.title = input.body.trim().chars().take(60).collect();
         }
         current.thread.turns.push(Turn {
             id: turn,
-            message: text,
+            message: input.body,
             response: String::new(),
             stop_reason: None,
         });
@@ -1403,11 +1475,30 @@ impl Threads {
         }
     }
 
-    /// Deletes only input that has not yet been removed for dispatch.
+    /// Deletes queued input and resumes the following input when the failed head is removed.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the thread or queued input does not exist, the input is already being
+    /// dispatched, persistence fails, or resuming the queue cannot reconnect to the agent.
     pub fn delete_queued_message(&self, id: Uuid, message: Uuid) -> Result<(), ThreadError> {
+        let mut reconnect = false;
         let state = self.lock()?;
         let entry = state.entries.get(&id).ok_or_else(not_found)?;
+        let prompts = entry
+            .runtime
+            .as_ref()
+            .map(|runtime| runtime.inputs.prompts.clone());
         let mut current = entry.state.lock().map_err(|_| unavailable())?;
+        if current
+            .dispatching_queued
+            .as_ref()
+            .is_some_and(|queued| queued.id == message)
+        {
+            return Err(ThreadError::NotReady(
+                "이미 에이전트에 전송 중인 메시지입니다.".into(),
+            ));
+        }
         let mut queue = current.thread.queued_messages.clone();
         let index = queue
             .iter()
@@ -1415,9 +1506,103 @@ impl Threads {
             .ok_or_else(|| {
                 ThreadError::NotReady("이미 전송되었거나 삭제된 메시지입니다.".into())
             })?;
+        let resumes_queue = index == 0 && queue[index].status == QueuedMessageStatus::Failed;
         queue.remove(index);
         current.save_queue(queue)?;
+        let next = if resumes_queue {
+            match current.thread.status {
+                ThreadStatus::SessionReady => current.prepare_next_queued_prompt(),
+                ThreadStatus::Disconnected | ThreadStatus::Failed => {
+                    current.dispatch_queue_on_ready = true;
+                    reconnect = true;
+                    None
+                }
+                _ => None,
+            }
+        } else {
+            None
+        };
         current.publish();
+        if let Some(next) = next {
+            current.send_queued_prompt(prompts.as_ref(), next)?;
+        }
+        drop(current);
+        drop(state);
+        if reconnect {
+            self.connect(id)?;
+        }
+        Ok(())
+    }
+
+    /// Retries the failed head without allowing later queued input to overtake it.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the thread is missing, the selected input is not the failed head, the
+    /// thread cannot dispatch or reconnect, persistence fails, or the runtime channel is closed.
+    pub fn retry_queued_message(&self, id: Uuid, message: Uuid) -> Result<(), ThreadError> {
+        let mut reconnect = false;
+        let state = self.lock()?;
+        let entry = state.entries.get(&id).ok_or_else(not_found)?;
+        let prompts = entry
+            .runtime
+            .as_ref()
+            .map(|runtime| runtime.inputs.prompts.clone());
+        let mut current = entry.state.lock().map_err(|_| unavailable())?;
+        let mut queue = current.thread.queued_messages.clone();
+        let Some(first) = queue.first_mut() else {
+            return Err(ThreadError::NotReady(
+                "이미 전송되었거나 삭제된 메시지입니다.".into(),
+            ));
+        };
+        if first.id != message || first.status != QueuedMessageStatus::Failed {
+            return Err(ThreadError::NotReady(
+                "실패한 첫 번째 대기 메시지만 다시 시도할 수 있습니다.".into(),
+            ));
+        }
+        let dispatch_now = match current.thread.status {
+            ThreadStatus::SessionReady => true,
+            ThreadStatus::Disconnected | ThreadStatus::Failed => false,
+            _ => {
+                return Err(ThreadError::NotReady(
+                    "다시 시도할 수 없는 상태입니다.".into(),
+                ))
+            }
+        };
+        first.status = QueuedMessageStatus::Pending;
+        current.save_queue(queue)?;
+        let next = if dispatch_now {
+            current.prepare_next_queued_prompt()
+        } else {
+            current.dispatch_queue_on_ready = true;
+            reconnect = true;
+            None
+        };
+        current.publish();
+        if let Some(next) = next {
+            current.send_queued_prompt(prompts.as_ref(), next)?;
+        }
+        drop(current);
+        drop(state);
+        if reconnect {
+            if let Err(error) = self.connect(id) {
+                if let Ok(state) = self.lock() {
+                    if let Some(entry) = state.entries.get(&id) {
+                        if let Ok(mut current) = entry.state.lock() {
+                            let mut queue = current.thread.queued_messages.clone();
+                            if let Some(first) = queue.first_mut().filter(|item| item.id == message)
+                            {
+                                first.status = QueuedMessageStatus::Failed;
+                                let _ = current.save_queue(queue);
+                                current.dispatch_queue_on_ready = false;
+                                current.publish();
+                            }
+                        }
+                    }
+                }
+                return Err(error);
+            }
+        }
         Ok(())
     }
 
@@ -1657,7 +1842,8 @@ pub struct Turn {
 
 pub(crate) struct Prompt {
     pub turn: Uuid,
-    pub text: String,
+    pub input: UserInput,
+    pub queued_message: Option<Uuid>,
 }
 
 pub(crate) struct ConfigurationChange {
@@ -1678,6 +1864,7 @@ struct ThreadState {
     permissions: HashMap<Uuid, oneshot::Sender<String>>,
     draining: bool,
     dispatch_queue_on_ready: bool,
+    dispatching_queued: Option<QueuedMessage>,
     published_turn_count: usize,
     published_last_turn: Option<(Uuid, Option<String>)>,
 }
@@ -1689,11 +1876,12 @@ struct DesiredConfiguration {
 }
 
 impl ThreadState {
-    fn enqueue(&mut self, text: String) -> Result<(), ThreadError> {
+    fn enqueue(&mut self, input: UserInput) -> Result<(), ThreadError> {
         let mut queue = self.thread.queued_messages.clone();
         queue.push(QueuedMessage {
             id: Uuid::new_v4(),
-            text,
+            input,
+            status: QueuedMessageStatus::Pending,
         });
         self.save_queue(queue)?;
         self.thread.last_prompt_at = next_prompt_at();
@@ -1745,25 +1933,73 @@ impl ThreadState {
         self.thread.permissions.clear();
     }
 
-    fn take_next_queued_prompt(&mut self) -> Option<Prompt> {
-        let mut queue = self.thread.queued_messages.clone();
-        let queued = (!queue.is_empty()).then(|| queue.remove(0))?;
-        if let Err(error) = self.save_queue(queue) {
-            self.thread.notice = Some(error.to_string());
+    fn prepare_next_queued_prompt(&mut self) -> Option<Prompt> {
+        if self.dispatching_queued.is_some() {
             return None;
         }
+        let queued = self.thread.queued_messages.first()?;
+        if queued.status == QueuedMessageStatus::Failed {
+            return None;
+        }
+        let queued = queued.clone();
         let turn = Uuid::new_v4();
+        self.dispatching_queued = Some(queued.clone());
         self.thread.status = ThreadStatus::Running;
         self.thread.turns.push(Turn {
             id: turn,
-            message: queued.text.clone(),
+            message: queued.input.body.clone(),
             response: String::new(),
             stop_reason: None,
         });
         Some(Prompt {
             turn,
-            text: queued.text,
+            input: queued.input,
+            queued_message: Some(queued.id),
         })
+    }
+
+    fn fail_queued_prompt(&mut self, turn: Uuid) {
+        let Some(mut failed) = self.dispatching_queued.take() else {
+            return;
+        };
+        failed.status = QueuedMessageStatus::Failed;
+        let mut queue = self.thread.queued_messages.clone();
+        if let Some(queued) = queue.iter_mut().find(|queued| queued.id == failed.id) {
+            *queued = failed;
+        } else {
+            queue.insert(0, failed);
+        }
+        if let Err(error) = self.save_queue(queue) {
+            self.thread.notice = Some(error.to_string());
+        }
+        if self
+            .thread
+            .turns
+            .last()
+            .is_some_and(|active| active.id == turn)
+        {
+            self.thread.turns.pop();
+        }
+        self.thread.status = ThreadStatus::SessionReady;
+    }
+
+    fn send_queued_prompt(
+        &mut self,
+        prompts: Option<&mpsc::UnboundedSender<Prompt>>,
+        prompt: Prompt,
+    ) -> Result<(), ThreadError> {
+        let turn = prompt.turn;
+        let Some(prompts) = prompts else {
+            self.fail_queued_prompt(turn);
+            self.publish();
+            return Err(unavailable());
+        };
+        if prompts.send(prompt).is_err() {
+            self.fail_queued_prompt(turn);
+            self.publish();
+            return Err(unavailable());
+        }
+        Ok(())
     }
 
     fn turn_updates(&mut self) -> Vec<TurnUpdate> {
@@ -1921,7 +2157,7 @@ impl RuntimeUpdates {
         state.reconcile_configuration();
         let next = state
             .dispatch_queue_on_ready
-            .then(|| state.take_next_queued_prompt())
+            .then(|| state.prepare_next_queued_prompt())
             .flatten();
         state.dispatch_queue_on_ready = false;
         state.publish();
@@ -2029,6 +2265,10 @@ impl RuntimeUpdates {
             self.record_authentication(AuthenticationStatus::Required);
         }
         self.modify_state(|state| {
+            if state.dispatching_queued.is_some() {
+                let turn = state.thread.turns.last().map(|turn| turn.id);
+                state.fail_queued_prompt(turn.unwrap_or_default());
+            }
             state.thread.interrupted |= matches!(
                 state.thread.status,
                 ThreadStatus::Running | ThreadStatus::WaitingForApproval | ThreadStatus::Cancelling
@@ -2044,6 +2284,10 @@ impl RuntimeUpdates {
 
     pub fn connection_closed(&self) {
         self.modify_state(|state| {
+            if state.dispatching_queued.is_some() {
+                let turn = state.thread.turns.last().map(|turn| turn.id);
+                state.fail_queued_prompt(turn.unwrap_or_default());
+            }
             state.thread.interrupted |= matches!(
                 state.thread.status,
                 ThreadStatus::Running | ThreadStatus::WaitingForApproval | ThreadStatus::Cancelling
@@ -2077,6 +2321,21 @@ impl RuntimeUpdates {
                 .ok()
                 .and_then(|value| value.as_str().map(str::to_owned));
         }
+        if let Some(queued_message) = state.dispatching_queued.take() {
+            let mut queue = state.thread.queued_messages.clone();
+            if let Some(index) = queue
+                .iter()
+                .position(|queued| queued.id == queued_message.id)
+            {
+                queue.remove(index);
+                if let Err(error) = state.save_queue(queue) {
+                    state.thread.notice = Some(error.to_string());
+                    state.thread.status = ThreadStatus::SessionReady;
+                    state.publish();
+                    return None;
+                }
+            }
+        }
         state.thread.status = ThreadStatus::SessionReady;
         state.thread.authentication = AuthenticationStatus::Authenticated;
         state.clear_permissions();
@@ -2084,12 +2343,69 @@ impl RuntimeUpdates {
             && !cancelled
             && reason == agent_client_protocol::schema::v1::StopReason::EndTurn
         {
-            state.take_next_queued_prompt()
+            state.prepare_next_queued_prompt()
         } else {
             None
         };
         state.publish();
         next
+    }
+
+    /// Removes a queued input once ACP has recorded its prompt request.
+    pub fn queued_prompt_dispatched(&self, queued_message: Uuid) {
+        let Ok(mut state) = self.state.lock() else {
+            return;
+        };
+        if state.generation != self.generation
+            || !state
+                .dispatching_queued
+                .as_ref()
+                .is_some_and(|queued| queued.id == queued_message)
+        {
+            return;
+        }
+        let mut queue = state.thread.queued_messages.clone();
+        let Some(index) = queue.iter().position(|queued| queued.id == queued_message) else {
+            return;
+        };
+        queue.remove(index);
+        if let Err(error) = state.save_queue(queue) {
+            state.thread.notice = Some(error.to_string());
+        }
+        state.publish();
+    }
+
+    /// Restores a failed queued prompt without terminating an otherwise healthy session.
+    pub fn queued_prompt_failed(
+        &self,
+        turn: Uuid,
+        queued_message: Uuid,
+        failure: ConnectionFailure,
+    ) {
+        if failure == ConnectionFailure::AuthenticationRequired {
+            self.record_authentication(AuthenticationStatus::Required);
+        }
+        let Ok(mut state) = self.state.lock() else {
+            return;
+        };
+        if state.generation != self.generation {
+            return;
+        }
+        if !state
+            .dispatching_queued
+            .as_ref()
+            .is_some_and(|queued| queued.id == queued_message)
+        {
+            return;
+        }
+        state.fail_queued_prompt(turn);
+        if failure == ConnectionFailure::AuthenticationRequired {
+            state.thread.authentication = AuthenticationStatus::Required;
+            state.thread.status = ThreadStatus::Failed;
+            state.thread.failure = Some(failure);
+            state.clear_configuration();
+        }
+        state.publish();
     }
 
     pub fn request_permission(

@@ -1,4 +1,4 @@
-use atte_lib::thread::{ThreadUpdate, Threads};
+use atte_lib::thread::{Attachment, QueuedMessage, ThreadUpdate, Threads};
 
 #[test]
 fn permanently_deletes_a_thread_and_its_queued_input() {
@@ -13,10 +13,10 @@ fn permanently_deletes_a_thread_and_its_queued_input() {
             "UPDATE threads SET queued_messages=?2 WHERE id=?1",
             rusqlite::params![
                 deleted.id.to_string(),
-                serde_json::to_string(&[atte_lib::thread::QueuedMessage {
-                    id: uuid::Uuid::new_v4(),
-                    text: "queued".into(),
-                }])
+                serde_json::to_string(&[atte_lib::thread::QueuedMessage::text(
+                    uuid::Uuid::new_v4(),
+                    "queued",
+                )])
                 .unwrap()
             ],
         )
@@ -188,15 +188,20 @@ fn restores_queued_messages_in_order_and_keeps_the_thread_after_deletion() {
     let empty = original.create(root.path()).unwrap();
     drop(original);
     let database = rusqlite::Connection::open(&path).unwrap();
+    let mut first = atte_lib::thread::QueuedMessage::text(uuid::Uuid::new_v4(), "first");
+    first.input.attachments = vec![
+        Attachment {
+            id: uuid::Uuid::new_v4(),
+            name: "one.rs".into(),
+        },
+        Attachment {
+            id: uuid::Uuid::new_v4(),
+            name: "two.png".into(),
+        },
+    ];
     let messages = vec![
-        atte_lib::thread::QueuedMessage {
-            id: uuid::Uuid::new_v4(),
-            text: "first".into(),
-        },
-        atte_lib::thread::QueuedMessage {
-            id: uuid::Uuid::new_v4(),
-            text: "second".into(),
-        },
+        first,
+        atte_lib::thread::QueuedMessage::text(uuid::Uuid::new_v4(), "second"),
     ];
     database
         .execute(
@@ -244,6 +249,37 @@ fn restores_queued_messages_in_order_and_keeps_the_thread_after_deletion() {
     )
     .unwrap();
     assert!(reopened.get(draft.id).unwrap().queued_messages.is_empty());
+}
+
+#[test]
+fn restores_legacy_text_only_queued_messages_as_pending_user_input() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("atte.sqlite");
+    let store = std::sync::Arc::new(atte_lib::storage::Store::open(&path).unwrap());
+    let original = Threads::with_store(vec![atte_lib::agent::prepared_codex()], store).unwrap();
+    let draft = original.create(root.path()).unwrap();
+    drop(original);
+    let queued_id = uuid::Uuid::new_v4();
+    let database = rusqlite::Connection::open(&path).unwrap();
+    database
+        .execute(
+            "UPDATE threads SET queued_messages=?2 WHERE id=?1",
+            rusqlite::params![
+                draft.id.to_string(),
+                serde_json::json!([{ "id": queued_id, "text": "legacy" }]).to_string()
+            ],
+        )
+        .unwrap();
+
+    let restored = Threads::with_store(
+        vec![],
+        std::sync::Arc::new(atte_lib::storage::Store::open(&path).unwrap()),
+    )
+    .unwrap();
+    assert_eq!(
+        restored.get(draft.id).unwrap().queued_messages,
+        [QueuedMessage::text(queued_id, "legacy")]
+    );
 }
 
 #[test]

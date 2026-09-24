@@ -104,6 +104,15 @@ async fn delete_queued_message(
 }
 
 #[tauri::command]
+async fn retry_queued_message(
+    id: Uuid,
+    message: Uuid,
+    threads: State<'_, Threads>,
+) -> Result<(), ThreadError> {
+    threads.retry_queued_message(id, message)
+}
+
+#[tauri::command]
 async fn cancel_turn(id: Uuid, turn: Uuid, threads: State<'_, Threads>) -> Result<(), ThreadError> {
     threads.cancel_turn(id, turn)
 }
@@ -265,6 +274,7 @@ pub fn run() {
             list_threads,
             create_thread,
             delete_queued_message,
+            retry_queued_message,
             subscribe_thread_list,
             prepared_agents,
             connect_thread,

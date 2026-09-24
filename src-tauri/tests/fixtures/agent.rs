@@ -377,6 +377,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
             "session/prompt" => {
                 prompts += 1;
+                if let Some(path) = env::var_os("PROMPT_LOG") {
+                    writeln!(
+                        fs::OpenOptions::new()
+                            .create(true)
+                            .append(true)
+                            .open(path)?,
+                        "{}",
+                        request["params"]["prompt"][0]["text"]
+                            .as_str()
+                            .unwrap_or_default()
+                    )?;
+                }
                 history.push(json!({"sessionUpdate":"user_message_chunk","content":request["params"]["prompt"][0]}));
                 history.push(json!({"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"Hello world"}}));
                 if let Some(path) = env::var_os("SESSION_FILE") {
@@ -493,6 +505,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         }}),
                     )?;
                     if text == "Hello" {
+                        if let Some(root) = env::var_os("PROMPT_GATE_DIR") {
+                            let root = std::path::PathBuf::from(root);
+                            fs::create_dir_all(&root)?;
+                            fs::write(root.join(format!("{prompts}.arrived")), [])?;
+                            let release = root.join(format!("{prompts}.release"));
+                            let started = std::time::Instant::now();
+                            while !release.exists() {
+                                if started.elapsed() > Duration::from_secs(5) {
+                                    return Err("prompt gate timed out".into());
+                                }
+                                thread::sleep(Duration::from_millis(5));
+                            }
+                        }
                         if let Some(path) = env::var_os("PROMPT_GATE") {
                             let started = std::time::Instant::now();
                             while !std::path::Path::new(&path).exists() {
@@ -510,7 +535,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 if mode == "prompt-auth" || mode == "prompt-auth-exit" {
                     error = Some(json!({"code": -32000, "message": "Authentication required"}));
                 }
-                if mode == "prompt-error" {
+                if mode == "prompt-error" || (mode == "queued-prompt-error-once" && prompts == 2) {
                     error = Some(json!({"code": -32603, "message": "Prompt failed"}));
                 }
                 json!({"stopReason": if matches!(mode.as_str(), "refusal" | "max_tokens" | "max_turn_requests") { mode.as_str() } else { "end_turn" }})
