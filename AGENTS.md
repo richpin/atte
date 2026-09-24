@@ -8,6 +8,7 @@ Until the first release, keep the database at schema v1 by updating the initial 
 Write test fixtures and helper programs in the project's existing Rust or TypeScript stack, using its existing toolchain and dependencies.
 
 Study how established products solve the problem before designing a solution. Adopt their proven patterns and conventions rather than inventing an approach from scratch.
+Treat `docs/research` as temporary working material and keep it out of Git history.
 Choose the simplest implementation that fully meets the current requirements. Avoid speculative abstractions, configuration, and indirection.
 Grow the system in layers. Start from the smallest version that works end to end, and add each new capability on top of a product that already works. Never trade a working product for unfinished complexity.
 Keep components modular and concerns clearly separated.
