@@ -1,13 +1,16 @@
+import { DropdownMenu } from "@kobalte/core/dropdown-menu";
 import { Popover } from "@kobalte/core/popover";
 import type { AgentAuthenticationState } from "features/agent-authentication";
 import { useI18n } from "shared/i18n";
 import { For, Match, Show, Switch } from "solid-js";
 import type {
+  Attachment,
   Thread,
   ThreadConfiguration,
   ThreadConfigurationChoice,
   ThreadConfigurationValue,
 } from "../model/types";
+import { AttachmentChip } from "./AttachmentChip";
 import { PermissionInput } from "./PermissionInput";
 import { PromptInput } from "./PromptInput";
 import { QueuedMessage } from "./QueuedMessage";
@@ -17,6 +20,8 @@ export function ThreadComposer(props: {
   thread: Thread;
   agentName: string;
   draft: string;
+  draftAttachments?: Attachment[];
+  attachmentErrors?: string[];
   answerPending: boolean;
   cancelPending: boolean;
   showStop: boolean;
@@ -25,6 +30,8 @@ export function ThreadComposer(props: {
   canSend: boolean;
   authentication?: AgentAuthenticationState;
   onDraftChange: (message: string) => void;
+  onSelectFiles?: () => void;
+  onRemoveAttachment?: (id: string) => void;
   onSend: () => void;
   onCancel: () => void;
   onAnswer: (request: string, option: string) => void;
@@ -78,17 +85,42 @@ export function ThreadComposer(props: {
             <Show
               when={props.thread.permissions?.[0]}
               fallback={
-                <PromptInput
-                  value={props.draft}
-                  disabled={!props.canSend}
-                  focusKey={
-                    props.active && props.thread.status === "sessionReady"
-                      ? props.thread.id
-                      : undefined
-                  }
-                  onInput={props.onDraftChange}
-                  onSubmit={props.onSend}
-                />
+                <>
+                  <Show when={(props.draftAttachments?.length ?? 0) > 0}>
+                    <div class="mb-3 flex flex-wrap gap-2">
+                      <For each={props.draftAttachments}>
+                        {(attachment) => (
+                          <AttachmentChip
+                            name={attachment.name}
+                            onRemove={() =>
+                              props.onRemoveAttachment?.(attachment.id)
+                            }
+                          />
+                        )}
+                      </For>
+                    </div>
+                  </Show>
+                  <Show when={(props.attachmentErrors?.length ?? 0) > 0}>
+                    <ul role="alert" class="mb-3 text-xs text-danger">
+                      <For each={props.attachmentErrors}>
+                        {(name) => (
+                          <li>{t("thread.fileUnavailable", { name })}</li>
+                        )}
+                      </For>
+                    </ul>
+                  </Show>
+                  <PromptInput
+                    value={props.draft}
+                    disabled={!props.canSend}
+                    focusKey={
+                      props.active && props.thread.status === "sessionReady"
+                        ? props.thread.id
+                        : undefined
+                    }
+                    onInput={props.onDraftChange}
+                    onSubmit={props.onSend}
+                  />
+                </>
               }
             >
               {(request) => (
@@ -106,6 +138,25 @@ export function ThreadComposer(props: {
             </Show>
             <div class="mt-3 flex items-center justify-between gap-3 text-xs text-muted">
               <div class="flex min-w-0 items-center gap-2">
+                <DropdownMenu placement="top-start">
+                  <DropdownMenu.Trigger
+                    aria-label={t("thread.addAttachment")}
+                    disabled={!props.canSend}
+                    class="grid size-7 shrink-0 place-items-center rounded-full border border-line text-base focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent disabled:opacity-40"
+                  >
+                    +
+                  </DropdownMenu.Trigger>
+                  <DropdownMenu.Portal>
+                    <DropdownMenu.Content class="z-50 min-w-32 rounded-lg border border-line bg-panel p-1 text-sm text-ink shadow-lg">
+                      <DropdownMenu.Item
+                        class="rounded px-3 py-2 outline-none data-[highlighted]:bg-canvas"
+                        onSelect={() => props.onSelectFiles?.()}
+                      >
+                        {t("thread.file")}
+                      </DropdownMenu.Item>
+                    </DropdownMenu.Content>
+                  </DropdownMenu.Portal>
+                </DropdownMenu>
                 <span class="shrink-0">{props.agentName}</span>
                 <For each={promotedConfiguration()}>
                   {(configuration) => (
@@ -151,7 +202,9 @@ export function ThreadComposer(props: {
                 disabled={
                   props.showStop
                     ? !props.actionsEnabled || props.stopping
-                    : !props.canSend || !props.draft.trim()
+                    : !props.canSend ||
+                      (!props.draft.trim() &&
+                        !(props.draftAttachments?.length ?? 0))
                 }
                 onClick={() => {
                   if (props.showStop) props.onCancel();

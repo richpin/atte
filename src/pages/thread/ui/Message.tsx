@@ -1,7 +1,8 @@
 import { type TranslationKey, useI18n } from "shared/i18n";
 import { Markdown } from "shared/ui";
-import { createSignal, Index, onCleanup, onMount, Show } from "solid-js";
-import type { Turn } from "../model/types";
+import { createSignal, For, Index, onCleanup, onMount, Show } from "solid-js";
+import type { Attachment, Turn } from "../model/types";
+import { AttachmentChip } from "./AttachmentChip";
 
 const collapsedLines = 20;
 
@@ -13,7 +14,7 @@ const completionKeys: Record<string, TranslationKey> = {
   cancelled: "thread.completion.cancelled",
 };
 
-function UserMessage(props: { children: string }) {
+function UserMessage(props: { message: string; attachments: Attachment[] }) {
   const { t } = useI18n();
   const [expanded, setExpanded] = createSignal(false);
   const [collapsible, setCollapsible] = createSignal(false);
@@ -46,9 +47,22 @@ function UserMessage(props: { children: string }) {
         }
       >
         <div ref={content} data-user-message-content="">
-          <Markdown source={props.children} variant="user" streaming={false} />
+          <Show when={props.message}>
+            <Markdown source={props.message} variant="user" streaming={false} />
+          </Show>
         </div>
       </div>
+      <Show when={props.attachments.length > 0}>
+        <div
+          class={
+            props.message ? "mt-3 flex flex-wrap gap-2" : "flex flex-wrap gap-2"
+          }
+        >
+          <For each={props.attachments}>
+            {(attachment) => <AttachmentChip name={attachment.name} />}
+          </For>
+        </div>
+      </Show>
       <Show when={collapsible()}>
         <button
           type="button"
@@ -84,7 +98,10 @@ export function Message(props: { turns: Turn[]; streamingTurnId?: string }) {
       <Index each={props.turns}>
         {(turn) => (
           <li class="flex min-w-0 flex-col gap-5">
-            <UserMessage>{turn().message}</UserMessage>
+            <UserMessage
+              message={turn().message}
+              attachments={turn().attachments ?? []}
+            />
             <Show when={turn().response}>
               <div
                 data-message-participant="agent"

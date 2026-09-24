@@ -66,6 +66,7 @@ export const ko = {
       cancel: "작업을 중단할 수 없습니다.",
       connect: "연결을 시작할 수 없습니다. 다시 시도해주세요.",
       selectFolder: "폴더 선택을 완료할 수 없습니다. 다시 시도해주세요.",
+      selectFiles: "파일 선택을 완료할 수 없습니다. 다시 시도해주세요.",
       create: "새 스레드를 만들 수 없습니다.",
       agents: "준비된 에이전트를 불러올 수 없습니다.",
       configure: "스레드 설정을 변경할 수 없습니다.",
@@ -75,6 +76,7 @@ export const ko = {
     selecting: "선택 중…",
     selectFolder: "폴더 선택",
     folderDialogTitle: "작업 폴더 선택",
+    fileDialogTitle: "첨부할 파일 선택",
     manageAgents: "에이전트 관리",
     empty: {
       title: "어디에서 작업할까요?",
@@ -101,6 +103,13 @@ export const ko = {
     messagePlaceholder: "메시지를 입력하세요",
     stop: "현재 작업 중단",
     send: "전송",
+    addAttachment: "첨부 추가",
+    file: "파일",
+    attachmentDescription:
+      "원본 파일 경로를 전달합니다. 에이전트가 읽지 못할 수 있습니다.",
+    removeAttachment: "첨부 제거: {{ name }}",
+    fileUnavailable:
+      "{{ name }}은(는) 사용할 수 있는 파일이 아니어서 첨부하지 못했습니다.",
     composer: {
       running: "작업 중에도 다음 메시지를 입력할 수 있습니다.",
       ready: "연결된 스레드에 메시지를 보내세요.",

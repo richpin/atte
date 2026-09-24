@@ -2,12 +2,16 @@
 pub mod agent;
 pub mod agent_management;
 mod agent_runtime;
+mod file_selection;
 mod installation;
 mod installation_files;
 mod lifecycle;
 pub mod storage;
 pub mod thread;
 
+use file_selection::{
+    prepare_file_selection, FileSelection, FileSelectionError, SelectedFiles, SubmittedInput,
+};
 use std::{
     collections::HashMap,
     sync::{Arc, Mutex},
@@ -55,6 +59,41 @@ async fn select_working_folder(
 }
 
 #[tauri::command]
+async fn select_files(
+    app: tauri::AppHandle,
+    dialog_title: String,
+    window: tauri::WebviewWindow,
+) -> Result<FileSelection, ThreadError> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let selections = app
+            .dialog()
+            .file()
+            .set_title(dialog_title)
+            .blocking_pick_files()
+            .unwrap_or_default();
+        let mut paths = Vec::with_capacity(selections.len());
+        let mut invalid = Vec::new();
+        for selection in selections {
+            match selection.into_path() {
+                Ok(path) => paths.push(path),
+                Err(_) => invalid.push(FileSelectionError {
+                    name: "선택한 파일".into(),
+                }),
+            }
+        }
+        let mut result = prepare_file_selection(paths);
+        result.errors.extend(invalid);
+        app.state::<SelectedFiles>()
+            .remember(window.label(), &result)?;
+        Ok(result)
+    })
+    .await
+    .map_err(|_| {
+        ThreadError::Unavailable("파일 선택을 완료할 수 없습니다. 다시 시도해주세요.".into())
+    })?
+}
+
+#[tauri::command]
 async fn create_thread(
     folder: String,
     agent_id: String,
@@ -88,10 +127,24 @@ async fn connect_thread(id: Uuid, threads: State<'_, Threads>) -> Result<(), Thr
 #[tauri::command]
 async fn send_message(
     id: Uuid,
-    text: String,
+    input: SubmittedInput,
+    window: tauri::WebviewWindow,
     threads: State<'_, Threads>,
+    selected_files: State<'_, SelectedFiles>,
 ) -> Result<(), ThreadError> {
-    threads.send_message(id, text)
+    let resolved = selected_files.resolve(window.label(), &input)?;
+    threads.send_input(id, resolved)?;
+    selected_files.forget(window.label(), &input.attachments);
+    Ok(())
+}
+
+#[tauri::command]
+fn release_files(
+    attachments: Vec<Uuid>,
+    window: tauri::WebviewWindow,
+    selected_files: State<'_, SelectedFiles>,
+) {
+    selected_files.forget(window.label(), &attachments);
 }
 
 #[tauri::command]
@@ -253,9 +306,11 @@ pub fn run() {
             Ok(())
         })
         .manage(Subscriptions::default())
+        .manage(SelectedFiles::default())
         .manage(lifecycle::Lifecycle::default())
         .on_window_event(|window, event| {
             if matches!(event, tauri::WindowEvent::Destroyed) {
+                window.state::<SelectedFiles>().forget_owner(window.label());
                 if let Ok(mut entries) = window.state::<Subscriptions>().0.lock() {
                     entries.retain(|_, entry| entry.window != window.label());
                 }
@@ -270,6 +325,7 @@ pub fn run() {
             cancel_agent_authentication,
             logout_agent,
             select_working_folder,
+            select_files,
             delete_thread,
             list_threads,
             create_thread,
@@ -279,6 +335,7 @@ pub fn run() {
             prepared_agents,
             connect_thread,
             send_message,
+            release_files,
             cancel_turn,
             answer_permission,
             set_thread_configuration,

@@ -116,3 +116,38 @@ it("offers retry and delete for a failed queued input", async () => {
   );
   expect(deleted).toBe("failed");
 });
+
+it("shows attachment-only queued input as read-only chips", () => {
+  render(() => (
+    <I18nProvider>
+      <QueuedMessage
+        messages={[
+          {
+            id: "attachments-only",
+            text: "",
+            attachments: [
+              { id: "one", name: "one.png", uri: "file:///secret/one.png" },
+              { id: "two", name: "two.mp3", uri: "file:///secret/two.mp3" },
+            ],
+            status: "pending",
+          },
+        ]}
+        disabled={false}
+        onRetry={async () => {}}
+        onDelete={async () => {}}
+      />
+    </I18nProvider>
+  ));
+
+  expect(screen.getByText("one.png")).toBeTruthy();
+  expect(screen.getByText("two.mp3")).toBeTruthy();
+  expect(
+    screen.queryByRole("button", { name: /Remove attachment/ }),
+  ).toBeNull();
+  expect(screen.queryByText(/secret/)).toBeNull();
+  expect(
+    screen.getByRole("button", {
+      name: /(?:Delete queued message|대기 메시지 삭제)/,
+    }),
+  ).toBeTruthy();
+});

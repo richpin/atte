@@ -1,4 +1,11 @@
-import { cleanup, fireEvent, render, screen } from "@solidjs/testing-library";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@solidjs/testing-library";
+import userEvent from "@testing-library/user-event";
 import { I18nProvider } from "shared/i18n";
 import { createSignal } from "solid-js";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
@@ -210,6 +217,67 @@ it("submits PromptInput with Enter", () => {
     key: "Enter",
   });
   expect(onSend).toHaveBeenCalledOnce();
+});
+
+it("selects files and renders removable duplicate basename chips without paths", async () => {
+  const onSelectFiles = vi.fn();
+  const onRemoveAttachment = vi.fn();
+  render(() => (
+    <I18nProvider>
+      <ThreadComposer
+        active={false}
+        thread={readyThread()}
+        agentName="Agent"
+        draft=""
+        draftAttachments={[
+          {
+            id: "one",
+            name: "notes.txt",
+            uri: "file:///private/one/notes.txt",
+          },
+          {
+            id: "two",
+            name: "notes.txt",
+            uri: "file:///private/two/notes.txt",
+          },
+        ]}
+        attachmentErrors={["folder"]}
+        answerPending={false}
+        cancelPending={false}
+        showStop={false}
+        stopping={false}
+        actionsEnabled={true}
+        canSend={true}
+        onDraftChange={() => {}}
+        onSelectFiles={onSelectFiles}
+        onRemoveAttachment={onRemoveAttachment}
+        onSend={() => {}}
+        onCancel={() => {}}
+        onAnswer={() => {}}
+        onConfigure={() => {}}
+        onDeleteQueued={async () => {}}
+        onRetryQueued={async () => {}}
+      />
+    </I18nProvider>
+  ));
+
+  await userEvent.click(screen.getByRole("button", { name: "Add attachment" }));
+  await userEvent.click(screen.getByRole("menuitem", { name: "File" }));
+  expect(onSelectFiles).toHaveBeenCalledOnce();
+  expect(screen.getAllByText("notes.txt")).toHaveLength(2);
+  expect(screen.queryByText(/private/)).toBeNull();
+  await waitFor(() =>
+    expect(screen.getByRole("alert").textContent).toContain("folder"),
+  );
+
+  fireEvent.click(
+    screen.getAllByRole("button", { name: "Remove attachment: notes.txt" })[1],
+  );
+  expect(onRemoveAttachment).toHaveBeenCalledWith("two");
+  expect(screen.getByRole("button", { name: "Send" })).toHaveProperty(
+    "disabled",
+    false,
+  );
 });
 
 it("disables every thread mutation while the subscription is unavailable", () => {

@@ -88,6 +88,17 @@ export interface QueuedMessage {
 export interface Attachment {
   id: string;
   name: string;
+  uri: string;
+}
+
+export interface UserInput {
+  text: string;
+  attachments: Attachment[];
+}
+
+export interface FileSelection {
+  attachments: Attachment[];
+  errors: { name: string }[];
 }
 
 export type ThreadMetadata = Pick<
@@ -115,6 +126,7 @@ export interface PermissionRequest {
 export interface Turn {
   id: string;
   message: string;
+  attachments?: Attachment[];
   response: string;
   stopReason: string | null;
 }

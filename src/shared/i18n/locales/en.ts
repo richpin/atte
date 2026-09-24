@@ -59,6 +59,7 @@ export const en = {
       cancel: "The current task could not be stopped.",
       connect: "The connection could not be started. Try again.",
       selectFolder: "The folder could not be selected. Try again.",
+      selectFiles: "The files could not be selected. Try again.",
       create: "The new thread could not be created.",
       agents: "Ready agents could not be loaded.",
       configure: "The thread setting could not be changed.",
@@ -68,6 +69,7 @@ export const en = {
     selecting: "Selecting…",
     selectFolder: "Choose folder",
     folderDialogTitle: "Choose a working folder",
+    fileDialogTitle: "Choose files to attach",
     manageAgents: "Manage agents",
     empty: {
       title: "Where do you want to work?",
@@ -94,6 +96,13 @@ export const en = {
     messagePlaceholder: "Type a message",
     stop: "Stop current task",
     send: "Send",
+    addAttachment: "Add attachment",
+    file: "File",
+    attachmentDescription:
+      "Links the original file path. The agent might not be able to read it.",
+    removeAttachment: "Remove attachment: {{ name }}",
+    fileUnavailable:
+      "{{ name }} could not be attached because it is not an available file.",
     composer: {
       running: "You can type the next message while this task runs.",
       ready: "Send a message to the connected thread.",

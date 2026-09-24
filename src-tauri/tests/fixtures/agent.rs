@@ -377,6 +377,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
             "session/prompt" => {
                 prompts += 1;
+                if let Some(path) = env::var_os("PROMPT_JSON_LOG") {
+                    writeln!(
+                        fs::OpenOptions::new()
+                            .create(true)
+                            .append(true)
+                            .open(path)?,
+                        "{}",
+                        serde_json::to_string(&request["params"])?
+                    )?;
+                }
                 if let Some(path) = env::var_os("PROMPT_LOG") {
                     writeln!(
                         fs::OpenOptions::new()
@@ -389,7 +399,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             .unwrap_or_default()
                     )?;
                 }
-                history.push(json!({"sessionUpdate":"user_message_chunk","content":request["params"]["prompt"][0]}));
+                for content in request["params"]["prompt"].as_array().into_iter().flatten() {
+                    history.push(json!({"sessionUpdate":"user_message_chunk","content":content}));
+                }
                 history.push(json!({"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"Hello world"}}));
                 if let Some(path) = env::var_os("SESSION_FILE") {
                     fs::write(path, serde_json::to_vec(&history)?)?;

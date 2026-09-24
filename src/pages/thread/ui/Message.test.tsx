@@ -95,6 +95,22 @@ it("renders user and agent message bodies through distinct Markdown variants", (
   ).toBe("agent");
 });
 
+it("renders sent resource links as non-clickable basename chips", () => {
+  const attached = turn("");
+  attached.attachments = [
+    { id: "one", name: "diagram.png", uri: "file:///secret/diagram.png" },
+  ];
+  render(() => (
+    <I18nProvider>
+      <Message turns={[attached]} />
+    </I18nProvider>
+  ));
+
+  expect(screen.getByText("diagram.png")).toBeTruthy();
+  expect(screen.queryByRole("link")).toBeNull();
+  expect(screen.queryByText(/secret/)).toBeNull();
+});
+
 it("updates only the actively streaming message body", () => {
   const [turns, setTurns] = createStore<Turn[]>([
     {

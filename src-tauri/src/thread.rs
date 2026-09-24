@@ -269,12 +269,13 @@ impl UserInput {
     }
 }
 
-/// Opaque attachment identity kept in user-selected order.
+/// Display metadata and URI for one linked file.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Attachment {
     pub id: Uuid,
     pub name: String,
+    pub uri: String,
 }
 
 /// A queued input blocks later input after a delivery failure.
@@ -1318,7 +1319,7 @@ impl Threads {
     ///
     /// Returns an error when the input is empty, the thread is unavailable or not ready, durable
     /// queue storage fails, or the connected runtime can no longer accept prompts.
-    fn send_input(&self, id: Uuid, input: UserInput) -> Result<(), ThreadError> {
+    pub fn send_input(&self, id: Uuid, input: UserInput) -> Result<(), ThreadError> {
         if input.body.trim().is_empty() && input.attachments.is_empty() {
             return Err(ThreadError::InvalidMessage("메시지를 입력해주세요.".into()));
         }
@@ -1367,11 +1368,19 @@ impl Threads {
         current.thread.failure = None;
         current.thread.interrupted = false;
         if current.thread.title == "새 스레드" {
-            current.thread.title = input.body.trim().chars().take(60).collect();
+            current.thread.title = input.body.trim().chars().take(60).collect::<String>();
+            if current.thread.title.is_empty() {
+                current.thread.title = input
+                    .attachments
+                    .first()
+                    .map(|attachment| attachment.name.chars().take(60).collect())
+                    .unwrap_or_default();
+            }
         }
         current.thread.turns.push(Turn {
             id: turn,
             message: input.body,
+            attachments: input.attachments,
             response: String::new(),
             stop_reason: None,
         });
@@ -1836,6 +1845,7 @@ fn not_found() -> ThreadError {
 pub struct Turn {
     pub id: Uuid,
     pub message: String,
+    pub attachments: Vec<Attachment>,
     pub response: String,
     pub stop_reason: Option<String>,
 }
@@ -1948,6 +1958,7 @@ impl ThreadState {
         self.thread.turns.push(Turn {
             id: turn,
             message: queued.input.body.clone(),
+            attachments: queued.input.attachments.clone(),
             response: String::new(),
             stop_reason: None,
         });

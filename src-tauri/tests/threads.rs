@@ -193,10 +193,12 @@ fn restores_queued_messages_in_order_and_keeps_the_thread_after_deletion() {
         Attachment {
             id: uuid::Uuid::new_v4(),
             name: "one.rs".into(),
+            uri: "file:///tmp/one.rs".into(),
         },
         Attachment {
             id: uuid::Uuid::new_v4(),
             name: "two.png".into(),
+            uri: "file:///tmp/two.png".into(),
         },
     ];
     let messages = vec![
@@ -369,6 +371,7 @@ fn serializes_patches_without_the_thread_transcript() {
     let turn = Turn {
         id: uuid::Uuid::new_v4(),
         message: "hello".into(),
+        attachments: Vec::new(),
         response: String::new(),
         stop_reason: None,
     };

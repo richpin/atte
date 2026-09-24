@@ -21,7 +21,9 @@ import {
   deleteQueuedMessage,
   deleteThread as deleteThreadCommand,
   listThreads,
+  releaseFiles,
   retryQueuedMessage,
+  selectFiles as selectFilesCommand,
   selectWorkingFolder,
   sendMessage,
   setThreadConfiguration,
@@ -29,6 +31,7 @@ import {
   subscribeThreadList,
 } from "../api/threads";
 import type {
+  Attachment,
   Thread,
   ThreadConfigurationValue,
   ThreadMetadata,
@@ -117,6 +120,10 @@ export function createThreadModel(queryClient?: QueryClient) {
   const [drafts, setDrafts] = createStore<Record<string, string | undefined>>(
     {},
   );
+  const [draftAttachmentState, setDraftAttachmentState] = createStore<
+    Record<string, Attachment[] | undefined>
+  >({});
+  const [attachmentErrors, setAttachmentErrors] = createSignal<string[]>([]);
   const draft = () => {
     const id = selectedThreadId();
     return id ? (drafts[id] ?? "") : "";
@@ -127,6 +134,12 @@ export function createThreadModel(queryClient?: QueryClient) {
     const id = selectedThreadId();
     if (id) setThreadDraft(id, value);
   };
+  const draftAttachments = () => {
+    const id = selectedThreadId();
+    return id ? (draftAttachmentState[id] ?? []) : [];
+  };
+  const setThreadAttachments = (id: string, value: Attachment[]) =>
+    setDraftAttachmentState(id, value.length ? value : undefined);
   const [sending, setSending] = createSignal(false);
   const [answeringPermissionId, setAnsweringPermissionId] =
     createSignal<string>();
@@ -266,6 +279,7 @@ export function createThreadModel(queryClient?: QueryClient) {
     selection++;
     view++;
     setError(undefined);
+    setAttachmentErrors([]);
     setConfigurationError(undefined);
     latestConfigurationAttempts.clear();
     setSending(false);
@@ -291,6 +305,7 @@ export function createThreadModel(queryClient?: QueryClient) {
     setSelectedThreadId(undefined);
     setState("thread", undefined);
     setError(undefined);
+    setAttachmentErrors([]);
     setConfigurationError(undefined);
     latestConfigurationAttempts.clear();
     setSending(false);
@@ -394,18 +409,64 @@ export function createThreadModel(queryClient?: QueryClient) {
     const expectedView = view;
     const current = thread();
     const message = draft();
-    if (!current || !canSend() || !message.trim()) return;
+    const attachments = draftAttachments().map((attachment) => ({
+      ...attachment,
+    }));
+    if (!current || !canSend() || (!message.trim() && !attachments.length))
+      return;
     setSending(true);
     setError(undefined);
     try {
-      await sendMessage(current.id, message);
+      await sendMessage(current.id, { text: message, attachments });
       if (drafts[current.id] === message) setThreadDraft(current.id, "");
+      if (
+        draftAttachmentState[current.id]?.length === attachments.length &&
+        draftAttachmentState[current.id]?.every(
+          (attachment, index) => attachment.id === attachments[index]?.id,
+        )
+      )
+        setThreadAttachments(current.id, []);
+      if (isCurrent(expectedView)) setAttachmentErrors([]);
     } catch (cause) {
       if (isCurrent(expectedView))
         setError(localizedMessage(cause, "thread.error.send"));
     } finally {
       if (isCurrent(expectedView)) setSending(false);
     }
+  }
+
+  async function selectFiles() {
+    const expectedView = view;
+    const current = thread();
+    if (!current || !canSend()) return;
+    setAttachmentErrors([]);
+    try {
+      const selection = await selectFilesCommand(t("thread.fileDialogTitle"));
+      if (!isCurrent(expectedView)) {
+        void releaseFiles(selection.attachments.map(({ id }) => id)).catch(
+          () => undefined,
+        );
+        return;
+      }
+      setThreadAttachments(current.id, [
+        ...draftAttachments(),
+        ...selection.attachments,
+      ]);
+      setAttachmentErrors(selection.errors.map(({ name }) => name));
+    } catch (cause) {
+      if (isCurrent(expectedView))
+        setError(localizedMessage(cause, "thread.error.selectFiles"));
+    }
+  }
+
+  function removeAttachment(id: string) {
+    const current = thread();
+    if (!current) return;
+    setThreadAttachments(
+      current.id,
+      draftAttachments().filter((attachment) => attachment.id !== id),
+    );
+    void releaseFiles([id]).catch(() => undefined);
   }
 
   async function deleteQueued(id: string) {
@@ -566,9 +627,13 @@ export function createThreadModel(queryClient?: QueryClient) {
   }
 
   async function removeThread(id: string) {
+    const attachments = (draftAttachmentState[id] ?? []).map(({ id }) => id);
     await deleteThreadCommand(id);
+    if (attachments.length)
+      void releaseFiles(attachments).catch(() => undefined);
     deleted.add(id);
     setThreadDraft(id, "");
+    setThreadAttachments(id, []);
     void client.cancelQueries({ queryKey: threadListQueryKey });
     client.setQueryData<ThreadMetadata[]>(threadListQueryKey, (previous) =>
       (previous ?? []).filter((entry) => entry.id !== id),
@@ -590,6 +655,8 @@ export function createThreadModel(queryClient?: QueryClient) {
     connectFailed,
     draft,
     setDraft,
+    draftAttachments,
+    attachmentErrors,
     answerPending,
     cancelPending,
     activeTurnId,
@@ -603,6 +670,8 @@ export function createThreadModel(queryClient?: QueryClient) {
     startNewChat,
     openThread,
     send,
+    selectFiles,
+    removeAttachment,
     deleteQueued,
     retryQueued,
     answer,

@@ -1,6 +1,8 @@
 use atte_lib::{
     agent::AgentDefinition,
-    thread::{QueuedMessageStatus, ThreadConfigurationValue, ThreadStatus, Threads},
+    thread::{
+        Attachment, QueuedMessageStatus, ThreadConfigurationValue, ThreadStatus, Threads, UserInput,
+    },
 };
 use std::{path::PathBuf, process::Command, sync::OnceLock, time::Duration};
 
@@ -854,6 +856,174 @@ async fn queues_followups_and_dispatches_them_in_fifo_order_after_completion() {
 }
 
 #[tokio::test]
+async fn sends_attachment_only_input_as_a_resource_link() {
+    let folder = tempfile::tempdir().unwrap();
+    let prompt_log = folder.path().join("prompts.jsonl");
+    let mut agent = mock_agent();
+    agent.env.insert(
+        "PROMPT_JSON_LOG".into(),
+        prompt_log.to_string_lossy().into(),
+    );
+    let threads = Threads::new(vec![agent]);
+    let draft = threads.create(folder.path()).unwrap();
+    threads.connect(draft.id).unwrap();
+    settle(&threads, draft.id).await;
+
+    let attachment = Attachment {
+        id: uuid::Uuid::new_v4(),
+        name: "image.png".into(),
+        uri: "file:///tmp/a-very-long-image-name.png".into(),
+    };
+    threads
+        .send_input(
+            draft.id,
+            UserInput {
+                body: String::new(),
+                attachments: vec![attachment],
+            },
+        )
+        .unwrap();
+    settle(&threads, draft.id).await;
+
+    let request: serde_json::Value =
+        serde_json::from_str(std::fs::read_to_string(prompt_log).unwrap().trim()).unwrap();
+    assert_eq!(
+        request["prompt"],
+        serde_json::json!([{
+            "type": "resource_link",
+            "name": "image.png",
+            "uri": "file:///tmp/a-very-long-image-name.png"
+        }])
+    );
+    threads.shutdown().await;
+}
+
+#[tokio::test]
+async fn keeps_sent_attachment_metadata_on_the_turn() {
+    let folder = tempfile::tempdir().unwrap();
+    let threads = Threads::new(vec![mock_agent()]);
+    let draft = threads.create(folder.path()).unwrap();
+    threads.connect(draft.id).unwrap();
+    settle(&threads, draft.id).await;
+    let attachment = Attachment {
+        id: uuid::Uuid::new_v4(),
+        name: "notes.txt".into(),
+        uri: "file:///tmp/notes.txt".into(),
+    };
+
+    threads
+        .send_input(
+            draft.id,
+            UserInput {
+                body: "Review".into(),
+                attachments: vec![attachment.clone()],
+            },
+        )
+        .unwrap();
+    let submitted = threads.get(draft.id).unwrap();
+
+    assert_eq!(submitted.turns[0].attachments, vec![attachment]);
+    threads.shutdown().await;
+}
+
+#[tokio::test]
+async fn uses_the_first_attachment_basename_as_an_empty_body_title() {
+    let folder = tempfile::tempdir().unwrap();
+    let threads = Threads::new(vec![mock_agent()]);
+    let draft = threads.create(folder.path()).unwrap();
+    threads.connect(draft.id).unwrap();
+    settle(&threads, draft.id).await;
+    let attachment_name = format!("{}-image.png", "a".repeat(65));
+
+    threads
+        .send_input(
+            draft.id,
+            UserInput {
+                body: String::new(),
+                attachments: vec![Attachment {
+                    id: uuid::Uuid::new_v4(),
+                    name: attachment_name.clone(),
+                    uri: "file:///tmp/image.png".into(),
+                }],
+            },
+        )
+        .unwrap();
+    let submitted = threads.get(draft.id).unwrap();
+
+    assert_eq!(
+        submitted.title,
+        attachment_name.chars().take(60).collect::<String>()
+    );
+    threads.shutdown().await;
+}
+
+#[tokio::test]
+async fn queued_resource_links_keep_selection_order_after_source_files_disappear() {
+    let folder = tempfile::tempdir().unwrap();
+    let gates = folder.path().join("gates");
+    let prompt_log = folder.path().join("prompts.jsonl");
+    let first = folder.path().join("first.txt");
+    let second = folder.path().join("second.mp3");
+    std::fs::write(&first, "first").unwrap();
+    std::fs::write(&second, "second").unwrap();
+    let mut agent = mock_agent();
+    agent
+        .env
+        .insert("PROMPT_GATE_DIR".into(), gates.to_string_lossy().into());
+    agent.env.insert(
+        "PROMPT_JSON_LOG".into(),
+        prompt_log.to_string_lossy().into(),
+    );
+    let threads = Threads::new(vec![agent]);
+    let draft = threads.create(folder.path()).unwrap();
+    threads.connect(draft.id).unwrap();
+    settle(&threads, draft.id).await;
+    threads.send_message(draft.id, "active".into()).unwrap();
+    wait_for_path(&gates.join("1.arrived")).await;
+    threads
+        .send_input(
+            draft.id,
+            UserInput {
+                body: "inspect".into(),
+                attachments: vec![
+                    Attachment {
+                        id: uuid::Uuid::new_v4(),
+                        name: "first.txt".into(),
+                        uri: "file:///tmp/first.txt".into(),
+                    },
+                    Attachment {
+                        id: uuid::Uuid::new_v4(),
+                        name: "second.mp3".into(),
+                        uri: "file:///tmp/second.mp3".into(),
+                    },
+                ],
+            },
+        )
+        .unwrap();
+    std::fs::remove_file(first).unwrap();
+    std::fs::remove_file(second).unwrap();
+    std::fs::write(gates.join("1.release"), []).unwrap();
+    wait_for_path(&gates.join("2.arrived")).await;
+    std::fs::write(gates.join("2.release"), []).unwrap();
+    settle(&threads, draft.id).await;
+
+    let requests = std::fs::read_to_string(prompt_log)
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        requests[1]["prompt"],
+        serde_json::json!([
+            { "type": "text", "text": "inspect" },
+            { "type": "resource_link", "name": "first.txt", "uri": "file:///tmp/first.txt" },
+            { "type": "resource_link", "name": "second.mp3", "uri": "file:///tmp/second.mp3" }
+        ])
+    );
+    threads.shutdown().await;
+}
+
+#[tokio::test]
 async fn queued_input_is_acknowledged_before_its_turn_completes() {
     let folder = tempfile::tempdir().unwrap();
     let gates = folder.path().join("gates");
@@ -1437,6 +1607,52 @@ async fn replay_keeps_distinct_message_ids_even_when_the_text_is_identical() {
         std::fs::read_to_string(log).unwrap(),
         "initialize\nsession/load\n"
     );
+}
+
+#[tokio::test]
+async fn replay_restores_resource_links_as_read_only_attachment_metadata() {
+    let root = tempfile::tempdir().unwrap();
+    let session_file = root.path().join("agent.json");
+    let store = std::sync::Arc::new(
+        atte_lib::storage::Store::open(&root.path().join("atte.sqlite")).unwrap(),
+    );
+    let mut agent = mock_agent();
+    agent
+        .env
+        .insert("SESSION_FILE".into(), session_file.to_string_lossy().into());
+    let first = Threads::with_store(vec![agent.clone()], store.clone()).unwrap();
+    let draft = first.create(root.path()).unwrap();
+    first.connect(draft.id).unwrap();
+    settle(&first, draft.id).await;
+    first
+        .send_input(
+            draft.id,
+            UserInput {
+                body: "Review".into(),
+                attachments: vec![Attachment {
+                    id: uuid::Uuid::new_v4(),
+                    name: "report.pdf".into(),
+                    uri: "file:///tmp/report.pdf".into(),
+                }],
+            },
+        )
+        .unwrap();
+    settle(&first, draft.id).await;
+    first.shutdown().await;
+
+    let restored = Threads::with_store(vec![agent], store).unwrap();
+    restored.connect(draft.id).unwrap();
+    let loaded = settle(&restored, draft.id).await;
+
+    assert_eq!(
+        (
+            loaded.turns[0].message.as_str(),
+            loaded.turns[0].attachments[0].name.as_str(),
+            loaded.turns[0].attachments[0].uri.as_str(),
+        ),
+        ("Review", "report.pdf", "file:///tmp/report.pdf")
+    );
+    restored.shutdown().await;
 }
 
 #[tokio::test]

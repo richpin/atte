@@ -1,5 +1,5 @@
 //! A load response commits this buffer; failed/partial replay never replaces history.
-use crate::thread::Turn;
+use crate::thread::{Attachment, Turn};
 use agent_client_protocol::schema::v1::{ContentBlock, SessionUpdate};
 use uuid::Uuid;
 
@@ -29,14 +29,21 @@ impl Replay {
                     self.turns.push(Turn {
                         id: Uuid::new_v4(),
                         message: String::new(),
+                        attachments: Vec::new(),
                         response: String::new(),
                         stop_reason: None,
                     });
                 }
-                if let (Some(turn), ContentBlock::Text(text)) =
-                    (self.turns.last_mut(), chunk.content)
-                {
-                    turn.message.push_str(&text.text);
+                if let Some(turn) = self.turns.last_mut() {
+                    match chunk.content {
+                        ContentBlock::Text(text) => turn.message.push_str(&text.text),
+                        ContentBlock::ResourceLink(link) => turn.attachments.push(Attachment {
+                            id: Uuid::new_v4(),
+                            name: link.name,
+                            uri: link.uri,
+                        }),
+                        _ => {}
+                    }
                 }
                 self.user_chunk = true;
                 self.user_message_id = message_id;
@@ -46,6 +53,7 @@ impl Replay {
                     self.turns.push(Turn {
                         id: Uuid::new_v4(),
                         message: String::new(),
+                        attachments: Vec::new(),
                         response: String::new(),
                         stop_reason: None,
                     });

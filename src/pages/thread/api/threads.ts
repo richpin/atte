@@ -1,9 +1,11 @@
 import { Channel, invoke } from "@tauri-apps/api/core";
 import type {
+  FileSelection,
   PreparedAgent,
   ThreadConfigurationValue,
   ThreadMetadata,
   ThreadUpdate,
+  UserInput,
 } from "../model/types";
 
 export function listThreads() {
@@ -29,8 +31,22 @@ export function deleteThread(id: string) {
   return invoke<void>("delete_thread", { id });
 }
 
-export function sendMessage(id: string, text: string) {
-  return invoke<void>("send_message", { id, text });
+export function selectFiles(dialogTitle: string) {
+  return invoke<FileSelection>("select_files", { dialogTitle });
+}
+
+export function sendMessage(id: string, input: UserInput) {
+  return invoke<void>("send_message", {
+    id,
+    input: {
+      text: input.text,
+      attachments: input.attachments.map(({ id }) => id),
+    },
+  });
+}
+
+export function releaseFiles(attachments: string[]) {
+  return invoke<void>("release_files", { attachments });
 }
 
 export function deleteQueuedMessage(id: string, message: string) {

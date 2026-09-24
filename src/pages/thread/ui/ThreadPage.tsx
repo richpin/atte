@@ -24,6 +24,8 @@ export function ThreadPage(props: {
     connecting,
     connectFailed,
     draft,
+    draftAttachments,
+    attachmentErrors,
     setDraft,
     answerPending,
     cancelPending,
@@ -36,6 +38,8 @@ export function ThreadPage(props: {
     actionsEnabled,
     canSend,
     send,
+    selectFiles,
+    removeAttachment,
     deleteQueued,
     answer,
     cancel,
@@ -271,6 +275,8 @@ export function ThreadPage(props: {
                     )?.name ?? currentThread().agentId
                   }
                   draft={draft()}
+                  draftAttachments={draftAttachments()}
+                  attachmentErrors={attachmentErrors()}
                   answerPending={answerPending()}
                   cancelPending={cancelPending()}
                   showStop={showStop()}
@@ -286,6 +292,8 @@ export function ThreadPage(props: {
                     void authentication.cancel(currentThread().agentId)
                   }
                   onDraftChange={setDraft}
+                  onSelectFiles={() => void selectFiles()}
+                  onRemoveAttachment={removeAttachment}
                   onSend={() => void send()}
                   onCancel={() => void cancel()}
                   onAnswer={answer}

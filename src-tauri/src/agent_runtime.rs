@@ -20,7 +20,7 @@ use agent_client_protocol::{
             ClientCapabilities, ClientSessionCapabilities, ContentBlock, DeleteSessionRequest,
             InitializeRequest, LoadSessionRequest, NewSessionRequest, PromptRequest,
             RequestPermissionOutcome, RequestPermissionRequest, RequestPermissionResponse,
-            ResumeSessionRequest, SelectedPermissionOutcome, SessionConfigKind,
+            ResourceLink, ResumeSessionRequest, SelectedPermissionOutcome, SessionConfigKind,
             SessionConfigOption, SessionConfigOptionValue, SessionConfigOptionsCapabilities,
             SessionConfigSelectOption, SessionConfigSelectOptions, SessionId, SessionNotification,
             SessionUpdate, SetSessionConfigOptionRequest, ToolCallContent, ToolCallUpdate,
@@ -545,11 +545,17 @@ async fn run_session(
         let prompt_turn = prompt.turn;
         let queued_message = prompt.queued_message;
         let queued_prompt = queued_message.is_some();
+        let mut content = Vec::with_capacity(
+            usize::from(!prompt.input.body.trim().is_empty()) + prompt.input.attachments.len(),
+        );
+        if !prompt.input.body.trim().is_empty() {
+            content.push(prompt.input.body.into());
+        }
+        content.extend(prompt.input.attachments.into_iter().map(|attachment| {
+            ContentBlock::ResourceLink(ResourceLink::new(attachment.name, attachment.uri))
+        }));
         if let Err(error) = connection
-            .send_request(PromptRequest::new(
-                remote.clone(),
-                vec![prompt.input.body.into()],
-            ))
+            .send_request(PromptRequest::new(remote.clone(), content))
             .on_receiving_result(async move |result| {
                 if let Ok(mut routes) = turn_routes.lock() {
                     if let Some(route) = routes.get_mut(&turn_session) {

@@ -442,6 +442,103 @@ it("does not clear a thread draft edited while its send is pending", async () =>
   expect(model.draft()).toBe("new draft");
 });
 
+it("selects duplicate files in order and sends attachment-only input atomically", async () => {
+  commands.set("select_files", async () => ({
+    attachments: [
+      { id: "attachment-1", name: "notes.png", uri: "file:///tmp/notes.png" },
+      { id: "attachment-2", name: "notes.png", uri: "file:///tmp/notes.png" },
+    ],
+    errors: [{ name: "folder" }],
+  }));
+  commands.set("send_message", async () => undefined);
+  const model = setup();
+  await open(model, "A");
+
+  await model.selectFiles();
+
+  expect(model.draftAttachments().map(({ name }) => name)).toEqual([
+    "notes.png",
+    "notes.png",
+  ]);
+  expect(model.attachmentErrors()).toEqual(["folder"]);
+
+  await model.send();
+
+  expect(invoke).toHaveBeenCalledWith("send_message", {
+    id: "A",
+    input: {
+      text: "",
+      attachments: ["attachment-1", "attachment-2"],
+    },
+  });
+  expect(model.draftAttachments()).toEqual([]);
+});
+
+it("keeps the complete draft when attachment input delivery fails", async () => {
+  commands.set("select_files", async () => ({
+    attachments: [
+      { id: "attachment-1", name: "notes.txt", uri: "file:///tmp/notes.txt" },
+    ],
+    errors: [],
+  }));
+  commands.set("send_message", async () => {
+    throw new Error("failed");
+  });
+  const model = setup();
+  await open(model, "A");
+  model.setDraft("Read this");
+  await model.selectFiles();
+
+  await model.send();
+
+  expect(model.draft()).toBe("Read this");
+  expect(model.draftAttachments()).toHaveLength(1);
+});
+
+it("releases a selected file when its draft chip is removed", async () => {
+  commands.set("select_files", async () => ({
+    attachments: [
+      { id: "attachment-1", name: "notes.txt", uri: "file:///tmp/notes.txt" },
+    ],
+    errors: [],
+  }));
+  commands.set("release_files", async () => undefined);
+  const model = setup();
+  await open(model, "A");
+  await model.selectFiles();
+
+  model.removeAttachment("attachment-1");
+
+  expect(invoke).toHaveBeenCalledWith("release_files", {
+    attachments: ["attachment-1"],
+  });
+});
+
+it("releases files selected after navigation made the picker result stale", async () => {
+  const selection = deferred<{
+    attachments: { id: string; name: string; uri: string }[];
+    errors: { name: string }[];
+  }>();
+  commands.set("select_files", () => selection.promise);
+  commands.set("release_files", async () => undefined);
+  const model = setup();
+  await open(model, "A");
+  const selecting = model.selectFiles();
+  model.startNewChat();
+
+  selection.resolve({
+    attachments: [
+      { id: "attachment-1", name: "notes.txt", uri: "file:///tmp/notes.txt" },
+    ],
+    errors: [],
+  });
+  await selecting;
+
+  expect(invoke).toHaveBeenCalledWith("release_files", {
+    attachments: ["attachment-1"],
+  });
+});
+
 it("removes the draft when its thread is deleted", async () => {
   commands.set("delete_thread", async () => undefined);
   const model = setup();

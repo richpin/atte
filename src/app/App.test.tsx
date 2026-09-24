@@ -484,7 +484,7 @@ it("presents agent configuration and reconciles it from the thread subscription"
   await userEvent.type(message, "continue{Enter}");
   expect(invoke).toHaveBeenCalledWith("send_message", {
     id: "configured",
-    text: "continue",
+    input: { text: "continue", attachments: [] },
   });
   completeModelChange();
 
@@ -1962,7 +1962,7 @@ it("sends with Enter, inserts a newline with Shift+Enter, and preserves IME comp
   await userEvent.keyboard("{Enter}");
   expect(requests).toHaveBeenCalledWith("send_message", {
     id: "draft-1",
-    text: "첫 줄\n둘째 줄",
+    input: { text: "첫 줄\n둘째 줄", attachments: [] },
   });
   await waitFor(() => expect(input).toHaveProperty("value", ""));
   await userEvent.keyboard("{Enter}");
@@ -2122,7 +2122,7 @@ it("queues input above the composer and preserves it after stopping until delete
   );
   expect(invoke).toHaveBeenCalledWith("send_message", {
     id: "queue",
-    text: "next instruction with details",
+    input: { text: "next instruction with details", attachments: [] },
   });
   const queue = await screen.findByRole("list", { name: "대기 메시지" });
   expect(
