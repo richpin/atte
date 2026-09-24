@@ -11,7 +11,8 @@
     "paths": {
       "features/*": ["./src/features/*"],
       "pages/*": ["./src/pages/*"],
-      "shared/*": ["./src/shared/*"]
+      "shared/*": ["./src/shared/*"],
+      "widgets/*": ["./src/widgets/*"]
     },
     "allowImportingTsExtensions": true,
     "resolveJsonModule": true,

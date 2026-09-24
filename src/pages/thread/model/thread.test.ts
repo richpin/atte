@@ -372,6 +372,20 @@ it("preserves independent drafts when switching threads", async () => {
   expect(model.draft()).toBe("B draft");
 });
 
+it("starts a new chat without discarding the selected thread draft", async () => {
+  const model = setup();
+  await open(model, "A");
+  model.setDraft("A draft");
+
+  model.startNewChat();
+
+  expect(model.selectedThreadId()).toBeUndefined();
+  expect(model.thread()).toBeUndefined();
+  expect(model.draft()).toBe("");
+  await open(model, "A");
+  expect(model.draft()).toBe("A draft");
+});
+
 it("clears only the sent thread draft after switching threads", async () => {
   const pending = deferred<void>();
   commands.set("send_message", () => pending.promise);

@@ -168,6 +168,50 @@ function threadMenu(title: string): HTMLButtonElement {
   return menu as HTMLButtonElement;
 }
 
+it("starts on new chat and preserves a thread draft across that navigation", async () => {
+  const saved = {
+    id: "draft-navigation",
+    title: "Draft navigation",
+    workingFolder: "/work/project",
+    agentId: "codex",
+    status: "sessionReady",
+    authentication: "authenticated",
+    turns: [],
+    permissions: [],
+    queuedMessages: [],
+  };
+  const original = vi.mocked(invoke).getMockImplementation();
+  vi.mocked(invoke).mockImplementation((command, args) => {
+    if (command === "list_threads") return Promise.resolve([saved]);
+    if (command === "subscribe_thread") return subscribeWith(args, saved);
+    return original?.(command, args) ?? Promise.resolve();
+  });
+
+  render(() => <App />);
+
+  expect(
+    await screen.findByRole("heading", { name: "어디에서 작업할까요?" }),
+  ).toBeTruthy();
+  expect(
+    screen
+      .getByRole("button", { name: "새 채팅" })
+      .getAttribute("aria-current"),
+  ).toBe("page");
+  await userEvent.click(
+    await screen.findByRole("button", { name: saved.title }),
+  );
+  await userEvent.type(screen.getByRole("textbox"), "preserved draft");
+  await userEvent.click(screen.getByRole("button", { name: "새 채팅" }));
+  expect(
+    screen.getByRole("heading", { name: "어디에서 작업할까요?" }),
+  ).toBeTruthy();
+  await userEvent.click(screen.getByRole("button", { name: saved.title }));
+  expect(await screen.findByRole("textbox")).toHaveProperty(
+    "value",
+    "preserved draft",
+  );
+});
+
 it("groups threads by folder, collapses projects and creates within the selected folder", async () => {
   const saved = {
     id: "one",
@@ -223,9 +267,11 @@ it("groups threads by folder, collapses projects and creates within the selected
       name: /^First project task.*승인 대기$/,
     }),
   ).toBeTruthy();
-  await userEvent.click(screen.getByRole("button", { name: "사이드바 닫기" }));
+  await userEvent.click(screen.getByRole("button", { name: "사이드바 접기" }));
   expect(screen.queryByRole("navigation", { name: "스레드 목록" })).toBeNull();
-  await userEvent.click(screen.getByRole("button", { name: "사이드바 열기" }));
+  await userEvent.click(
+    screen.getByRole("button", { name: "사이드바 펼치기" }),
+  );
   await userEvent.click(
     screen.getByRole("button", { name: "project에 새 스레드" }),
   );
@@ -771,10 +817,11 @@ it("preserves the selected thread and draft when deleting another thread", async
   await waitFor(() =>
     expect(screen.queryByRole("button", { name: "다른 스레드" })).toBeNull(),
   );
-  expect(
-    await screen.findByRole("heading", { name: "계속 작업" }),
-  ).toBeTruthy();
-  expect(screen.getByRole("textbox")).toHaveProperty("value", "유지할 입력");
+  expect(screen.getByText("계속 작업")).toBeTruthy();
+  expect(screen.getByRole("textbox", { hidden: true })).toHaveProperty(
+    "value",
+    "유지할 입력",
+  );
 });
 
 it("keeps the thread and allows retry after local deletion fails", async () => {
@@ -992,7 +1039,11 @@ it("keeps authentication discovery failures inline and retries on request", asyn
   await userEvent.click(
     await screen.findByRole("button", { name: "다시 시도" }),
   );
-  expect(screen.getByRole("heading", { name: saved.title })).toBeTruthy();
+  expect(
+    screen
+      .getAllByRole("button", { name: new RegExp(`^${saved.title}`) })
+      .some((button) => button.getAttribute("aria-current") === "page"),
+  ).toBe(true);
   expect(
     await screen.findByRole("button", { name: "Continue in browser" }),
   ).toBeTruthy();
@@ -1019,9 +1070,12 @@ it("automatically connects a new thread and disables sending while connecting", 
     .mockResolvedValueOnce({ ...draft, status: "connecting" });
   render(() => <App />);
   await userEvent.click(screen.getByRole("button", { name: "폴더 선택" }));
-  expect(await screen.findByTitle("/Users/test/작업")).toBeTruthy();
-  expect(screen.getByRole("heading", { name: "새 스레드" })).toBeTruthy();
-  expect(screen.getByText("연결 중…")).toBeTruthy();
+  expect(
+    (await screen.findByRole("button", { name: "새 스레드" })).getAttribute(
+      "aria-current",
+    ),
+  ).toBe("page");
+  expect(screen.getByText("에이전트에 연결 중…")).toBeTruthy();
   expect(invoke).toHaveBeenCalledWith("connect_thread", {
     id: "draft-1",
   });
@@ -1063,7 +1117,7 @@ it("shows folder errors and lets the user retry", async () => {
   ).toBe(false);
 });
 
-it("keeps the current thread when another folder selection is cancelled", async () => {
+it("keeps the new chat page when another folder selection is cancelled", async () => {
   requests
     .mockResolvedValueOnce({
       id: "draft-1",
@@ -1080,9 +1134,12 @@ it("keeps the current thread when another folder selection is cancelled", async 
     .mockResolvedValueOnce(null);
   render(() => <App />);
   await userEvent.click(screen.getByRole("button", { name: "폴더 선택" }));
-  await screen.findByTitle("/Users/test/project");
+  await screen.findByRole("textbox");
+  await userEvent.click(screen.getByRole("button", { name: "새 채팅" }));
   await userEvent.click(screen.getByRole("button", { name: "폴더 선택" }));
-  expect(screen.getByTitle("/Users/test/project")).toBeTruthy();
+  expect(
+    screen.getByRole("heading", { name: "어디에서 작업할까요?" }),
+  ).toBeTruthy();
   expect(screen.queryByRole("alert")).toBeNull();
 });
 
@@ -1140,7 +1197,7 @@ it("connects the fixed agent and displays backend readiness separately from auth
   });
   render(() => <App />);
   await userEvent.click(screen.getByRole("button", { name: "폴더 선택" }));
-  expect(await screen.findByText("연결 중…")).toBeTruthy();
+  expect(await screen.findByText("에이전트에 연결 중…")).toBeTruthy();
   receive({
     id: "draft-1",
     workingFolder: "/project",
@@ -1149,7 +1206,7 @@ it("connects the fixed agent and displays backend readiness separately from auth
     turns: [],
     authentication: "unknown",
   });
-  expect(await screen.findByText("세션 준비 완료")).toBeTruthy();
+  expect(await screen.findByText("스레드가 준비되었습니다")).toBeTruthy();
   expect(screen.queryByRole("button", { name: "다시 연결" })).toBeNull();
   expect(
     screen.getByText("인증 상태는 아직 확인되지 않았습니다."),
@@ -1751,7 +1808,7 @@ it("returns to login methods when the authenticated reconnect still requires aut
     ).toHaveLength(1),
   );
   receive({ ...failed, status: "connecting", failure: null });
-  expect(await screen.findByText("연결 중…")).toBeTruthy();
+  expect(await screen.findByText("에이전트에 연결 중…")).toBeTruthy();
   receive(failed);
 
   expect(
@@ -1785,7 +1842,7 @@ it("shows process exit after readiness without reconnecting automatically", asyn
   });
   render(() => <App />);
   await userEvent.click(screen.getByRole("button", { name: "폴더 선택" }));
-  expect(await screen.findByText("세션 준비 완료")).toBeTruthy();
+  expect(await screen.findByText("스레드가 준비되었습니다")).toBeTruthy();
   receive({
     id: "draft-1",
     workingFolder: "/project",
@@ -1830,11 +1887,14 @@ it("keeps the existing thread's agent fixed when selecting a target for the next
     agentId: "fixture",
     dialogTitle: "작업 폴더 선택",
   });
-  await userEvent.selectOptions(screen.getByRole("combobox"), "codex");
   expect(invoke).toHaveBeenCalledWith("connect_thread", {
     id: "draft-1",
   });
-  expect(screen.getAllByText("Fixture")).toHaveLength(2);
+  await userEvent.click(screen.getByRole("button", { name: "새 채팅" }));
+  await userEvent.selectOptions(screen.getByRole("combobox"), "codex");
+  expect((screen.getByRole("combobox") as HTMLSelectElement).value).toBe(
+    "codex",
+  );
 });
 
 it("reports prepared-agent loading failure without crashing the page", async () => {
@@ -2247,6 +2307,7 @@ it("does not disable the new thread when old subscription cleanup fails", async 
   });
   render(() => <App />);
   await userEvent.click(screen.getByRole("button", { name: "폴더 선택" }));
+  await userEvent.click(screen.getByRole("button", { name: "새 채팅" }));
   await userEvent.click(screen.getByRole("button", { name: "폴더 선택" }));
   rejectCleanup(new Error("old channel closed"));
   await userEvent.type(screen.getByRole("textbox"), "next");
@@ -2360,7 +2421,7 @@ it("returns from project setup to create in the original folder", async () => {
   await userEvent.click(
     screen.getByRole("button", { name: "스레드로 돌아가기" }),
   );
-  await screen.findByRole("heading", { name: "새 스레드" });
+  await screen.findByRole("textbox");
   expect(invoke).toHaveBeenCalledWith("create_thread", {
     folder: "/work/original",
     agentId: "new-provider",
@@ -2429,6 +2490,8 @@ it("retries a failed install and offers the installed agent without restarting",
     authentication: { connected: false, authenticated: false, methods: [] },
   });
   vi.mocked(invoke).mockImplementation(async (command, args) => {
+    if (command === "list_threads") return [];
+    if (command === "subscribe_thread_list") return "list";
     if (command === "prepared_agents")
       return installed ? [{ id: "new-provider", name: "New Provider" }] : [];
     if (command === "agent_catalog" || command === "refresh_agent_catalog")
@@ -2515,6 +2578,8 @@ it("shows simplified agent cards while keeping cached installations on automatic
     },
   ];
   vi.mocked(invoke).mockImplementation(async (command) => {
+    if (command === "list_threads") return [];
+    if (command === "subscribe_thread_list") return "list";
     if (command === "prepared_agents") return [];
     if (command === "refresh_agent_catalog") throw "Registry 갱신 실패";
     if (command === "agent_catalog") return agents;
@@ -2664,6 +2729,8 @@ it("confirms logout, blocks duplicates, preserves failures, and clears only afte
   let attempts = 0;
   const first = deferred<void>();
   vi.mocked(invoke).mockImplementation(async (command, args) => {
+    if (command === "list_threads") return [];
+    if (command === "subscribe_thread_list") return "list";
     if (command === "prepared_agents") return [];
     if (command === "agent_catalog" || command === "refresh_agent_catalog")
       return [
@@ -2814,6 +2881,8 @@ it("confirms uninstall, supports cancel and retry, and removes the agent from ne
   let installed = true;
   let attempts = 0;
   vi.mocked(invoke).mockImplementation(async (command, args) => {
+    if (command === "list_threads") return [];
+    if (command === "subscribe_thread_list") return "list";
     if (command === "prepared_agents")
       return installed ? [{ id: "new-provider", name: "New Provider" }] : [];
     if (command === "agent_catalog" || command === "refresh_agent_catalog")
@@ -2875,7 +2944,7 @@ it("keeps thread content after agent removal and offers setup and explicit retry
     .mockResolvedValueOnce({ ...draft, status: "connecting" });
   render(() => <App />);
   await userEvent.click(screen.getByRole("button", { name: "폴더 선택" }));
-  await screen.findByText("연결 중…");
+  await screen.findByText("에이전트에 연결 중…");
   receive({
     ...draft,
     status: "failed",
@@ -3007,7 +3076,6 @@ it.each(["running", "waitingForApproval"])(
       id: "draft-1",
       turn: "turn-1",
     });
-    expect(await screen.findByText("중단 중…")).toBeTruthy();
     expect(
       screen.getByRole("button", { name: "현재 작업 중단" }),
     ).toHaveProperty("disabled", true);

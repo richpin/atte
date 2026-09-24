@@ -281,6 +281,27 @@ export function createThreadModel(queryClient?: QueryClient) {
     setSelectedThreadId(id);
   }
 
+  function startNewChat() {
+    if (disposed) return;
+    selection++;
+    view++;
+    clearSubscriptionRetry();
+    subscriptionRetries = 0;
+    setSelectedThreadId(undefined);
+    setState("thread", undefined);
+    setError(undefined);
+    setConfigurationError(undefined);
+    latestConfigurationAttempts.clear();
+    setSending(false);
+    setAnsweringPermissionId(undefined);
+    setCancellingTurnId(undefined);
+    setConnectingThreadId(undefined);
+    setConnectFailed(false);
+    setSubscriptionError(false);
+    setSubscriptionLive(false);
+    setRetryExhausted(false);
+  }
+
   function applyUpdate(update: ThreadUpdate) {
     if (update.kind === "thread") {
       const firstSnapshot = !thread();
@@ -540,23 +561,7 @@ export function createThreadModel(queryClient?: QueryClient) {
       (previous ?? []).filter((entry) => entry.id !== id),
     );
     if (selectedThreadId() !== id) return;
-    selection++;
-    view++;
-    clearSubscriptionRetry();
-    subscriptionRetries = 0;
-    setSelectedThreadId(undefined);
-    setState("thread", undefined);
-    setError(undefined);
-    setConfigurationError(undefined);
-    latestConfigurationAttempts.clear();
-    setSending(false);
-    setAnsweringPermissionId(undefined);
-    setCancellingTurnId(undefined);
-    setConnectingThreadId(undefined);
-    setConnectFailed(false);
-    setSubscriptionError(false);
-    setSubscriptionLive(false);
-    setRetryExhausted(false);
+    startNewChat();
   }
 
   return {
@@ -582,6 +587,7 @@ export function createThreadModel(queryClient?: QueryClient) {
     retryExhausted,
     actionsEnabled,
     canSend,
+    startNewChat,
     openThread,
     send,
     deleteQueued,
@@ -602,3 +608,5 @@ export function createThreadModel(queryClient?: QueryClient) {
     },
   };
 }
+
+export type ThreadModel = ReturnType<typeof createThreadModel>;

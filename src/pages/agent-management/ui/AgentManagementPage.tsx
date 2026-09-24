@@ -125,7 +125,7 @@ export function AgentManagementPage(props: {
   }
 
   return (
-    <main class="min-h-dvh bg-canvas text-ink">
+    <main class="h-full min-h-0 overflow-y-auto bg-canvas text-ink">
       <header class="flex h-14 items-center gap-4 border-b border-line px-6">
         <span class="font-semibold">atte</span>
         <h1 class="text-sm font-medium">{t("agents.title")}</h1>

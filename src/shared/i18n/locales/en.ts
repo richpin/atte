@@ -117,6 +117,10 @@ export const en = {
     settingOff: "Off",
   },
   sidebar: {
+    navigation: "App navigation",
+    newChat: "New Chat",
+    collapse: "Collapse sidebar",
+    expand: "Expand sidebar",
     threads: "Thread list",
     projects: "Projects",
     close: "Close sidebar",
