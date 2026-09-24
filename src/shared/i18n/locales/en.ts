@@ -159,7 +159,6 @@ export const en = {
   },
   agents: {
     title: "Manage agents",
-    back: "Back to thread",
     search: "Search agents by name",
     loading: "Loading agents…",
     empty: "No saved agents. Check your network connection.",

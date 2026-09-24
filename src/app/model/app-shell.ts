@@ -3,13 +3,11 @@ import { useI18n } from "shared/i18n";
 import { createEffect, createResource, createSignal } from "solid-js";
 
 export type AppView = "new-chat" | "thread" | "agents";
-type ContentView = Exclude<AppView, "agents">;
 
 export function createAppShellModel() {
   const { t } = useI18n();
   const threads = createThreadModel();
   const [view, setView] = createSignal<AppView>("new-chat");
-  const [returnView, setReturnView] = createSignal<ContentView>("new-chat");
   const [agentsRevision, setAgentsRevision] = createSignal(0);
   const [agentsFailed, setAgentsFailed] = createSignal(false);
   const [selectedAgent, setSelectedAgent] = createSignal("");
@@ -43,13 +41,7 @@ export function createAppShellModel() {
   }
 
   function showAgents() {
-    const current = view();
-    if (current !== "agents") setReturnView(current);
     setView("agents");
-  }
-
-  function backFromAgents() {
-    setView(returnView());
   }
 
   async function selectFolder() {
@@ -109,7 +101,6 @@ export function createAppShellModel() {
     showNewChat,
     openThread,
     showAgents,
-    backFromAgents,
     selectFolder,
     createInProject,
     removeThread,

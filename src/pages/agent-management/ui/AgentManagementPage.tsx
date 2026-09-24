@@ -1,3 +1,4 @@
+import { Search } from "lucide-solid";
 import { useI18n } from "shared/i18n";
 import { AgentIcon } from "shared/ui";
 import { createResource, createSignal, For, Show } from "solid-js";
@@ -15,7 +16,6 @@ import { UninstallAgentDialog } from "./UninstallAgentDialog";
 
 export function AgentManagementPage(props: {
   active: boolean;
-  onBack: () => void;
   onAgentsChanged: () => void;
 }) {
   const { t, message } = useI18n();
@@ -126,25 +126,18 @@ export function AgentManagementPage(props: {
 
   return (
     <main class="h-full min-h-0 overflow-y-auto bg-canvas text-ink">
-      <header class="flex h-14 items-center gap-4 border-b border-line px-6">
-        <span class="font-semibold">atte</span>
-        <h1 class="text-sm font-medium">{t("agents.title")}</h1>
-        <button
-          type="button"
-          class="ml-auto rounded-lg border border-line px-3 py-1.5 text-xs focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-accent"
-          onClick={props.onBack}
-        >
-          {t("agents.back")}
-        </button>
-      </header>
       <section class="mx-auto max-w-3xl space-y-5 px-6 py-8">
-        <label class="block">
+        <label class="relative block">
           <span class="sr-only">{t("agents.search")}</span>
+          <Search
+            aria-hidden="true"
+            class="pointer-events-none absolute top-1/2 left-4 size-4 -translate-y-1/2 text-muted"
+          />
           <input
             type="search"
             value={search()}
             placeholder={t("agents.search")}
-            class="w-full rounded-lg border border-line bg-panel px-4 py-2.5 text-sm placeholder:text-muted focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
+            class="w-full rounded-lg border border-line bg-panel py-2.5 pr-4 pl-11 text-sm placeholder:text-muted focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
             onInput={(event) => setSearch(event.currentTarget.value)}
           />
         </label>

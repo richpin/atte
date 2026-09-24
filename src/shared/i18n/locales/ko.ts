@@ -164,7 +164,6 @@ export const ko = {
   },
   agents: {
     title: "에이전트 관리",
-    back: "스레드로 돌아가기",
     search: "에이전트 이름 검색",
     loading: "목록을 불러오는 중…",
     empty: "저장된 목록이 없습니다. 네트워크 연결을 확인해주세요.",

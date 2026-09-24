@@ -124,8 +124,8 @@ function ResizableAppShell(props: {
       open={open()}
       onOpenChange={setOpen}
     >
-      <AppLayout onSidebarResize={rememberSidebarWidth} shell={props.shell} />
       <AppTitlebar />
+      <AppLayout onSidebarResize={rememberSidebarWidth} shell={props.shell} />
     </SidebarProvider>
   );
 }
@@ -190,10 +190,41 @@ function ShellSidebar(props: { shell: AppShellModel }) {
 function ShellContent(props: { shell: AppShellModel }) {
   const shell = props.shell;
   const { threads } = shell;
+  const { t, content } = useI18n();
+  const { state } = useSidebar();
+  const title = () => {
+    if (shell.view() === "agents") return "Agent Management";
+    if (shell.view() !== "thread") return "";
+    const selected = threads.selectedThreadId();
+    const current = threads.thread();
+    const value =
+      current?.id === selected
+        ? current?.title
+        : threads.history().find((entry) => entry.id === selected)?.title;
+    return content(value ?? null) || t("common.newThread");
+  };
 
   return (
-    <div class="h-full min-w-0 flex-1 pt-12">
-      <div hidden={shell.view() !== "new-chat"} class="h-full">
+    <div class="flex h-full min-w-0 flex-1 flex-col">
+      <header
+        class="pointer-events-none relative flex h-12 shrink-0 items-center gap-4 px-6"
+        classList={{
+          "pl-32": state() === "collapsed",
+          "border-b border-line": shell.view() === "thread",
+        }}
+      >
+        <div
+          data-tauri-drag-region
+          class="pointer-events-auto absolute inset-0"
+          classList={{ "left-32": state() === "collapsed" }}
+        />
+        <Show when={title()}>
+          <h1 class="relative min-w-0 flex-1 truncate text-left text-sm font-medium">
+            {title()}
+          </h1>
+        </Show>
+      </header>
+      <div hidden={shell.view() !== "new-chat"} class="min-h-0 flex-1">
         <NewChatPage
           agents={shell.agents()}
           selectedAgent={shell.agentId()}
@@ -205,7 +236,7 @@ function ShellContent(props: { shell: AppShellModel }) {
           onSelectFolder={() => void shell.selectFolder()}
         />
       </div>
-      <div hidden={shell.view() !== "thread"} class="h-full">
+      <div hidden={shell.view() !== "thread"} class="min-h-0 flex-1">
         <ThreadPage
           active={shell.view() === "thread"}
           model={threads}
@@ -213,10 +244,9 @@ function ShellContent(props: { shell: AppShellModel }) {
           onManage={shell.showAgents}
         />
       </div>
-      <div hidden={shell.view() !== "agents"} class="h-full">
+      <div hidden={shell.view() !== "agents"} class="min-h-0 flex-1">
         <AgentManagementPage
           active={shell.view() === "agents"}
-          onBack={shell.backFromAgents}
           onAgentsChanged={shell.agentsChanged}
         />
       </div>

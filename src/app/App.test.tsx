@@ -878,7 +878,9 @@ it("preserves the selected thread and draft when deleting another thread", async
   await waitFor(() =>
     expect(screen.queryByRole("button", { name: "다른 스레드" })).toBeNull(),
   );
-  expect(screen.getByText("계속 작업")).toBeTruthy();
+  expect(
+    screen.getByRole("heading", { name: "계속 작업", hidden: true }),
+  ).toBeTruthy();
   expect(screen.getByRole("textbox", { hidden: true })).toHaveProperty(
     "value",
     "유지할 입력",
@@ -954,7 +956,9 @@ it("keeps the saved list accessible without agents and restores on selection onl
   render(() => <App />);
   await screen.findByRole("button", { name: "지난 작업" });
   expect(screen.getByRole("button", { name: "지난 작업 메뉴" })).toBeTruthy();
-  expect(screen.queryByRole("heading", { name: "에이전트 관리" })).toBeNull();
+  expect(
+    screen.queryByRole("heading", { name: "Agent Management" }),
+  ).toBeNull();
   expect(
     vi
       .mocked(invoke)
@@ -965,7 +969,7 @@ it("keeps the saved list accessible without agents and restores on selection onl
   await userEvent.click(
     screen.getByRole("button", { name: "설치·인증 관리 열기" }),
   );
-  await screen.findByRole("heading", { name: "에이전트 관리" });
+  await screen.findByRole("heading", { name: "Agent Management" });
   expect(
     vi
       .mocked(invoke)
@@ -1000,6 +1004,7 @@ it("loads selected history once and keeps newer list metadata when an older thre
     await screen.findByRole("button", { name: "저장된 제목" }),
   );
   await screen.findByText("이전 스레드를 불러오는 중…");
+  expect(screen.getByRole("heading", { name: "저장된 제목" })).toBeTruthy();
   expect(screen.getByRole("button", { name: "전송" })).toHaveProperty(
     "disabled",
     true,
@@ -1022,6 +1027,7 @@ it("loads selected history once and keeps newer list metadata when an older thre
     await screen.findByRole("button", { name: "복원한 제목" }),
   ).toBeTruthy();
   expect(screen.queryByRole("button", { name: "저장된 제목" })).toBeNull();
+  expect(screen.getByRole("heading", { name: "복원한 제목" })).toBeTruthy();
   await userEvent.type(screen.getByRole("textbox"), "작성 중인 질문");
   await userEvent.click(screen.getByRole("button", { name: "복원한 제목" }));
   expect(screen.getByRole("textbox")).toHaveProperty("value", "작성 중인 질문");
@@ -2404,12 +2410,12 @@ it("opens agent management when creating a thread without an installed agent", a
   render(() => <App />);
   await userEvent.click(screen.getByRole("button", { name: "폴더 선택" }));
   expect(
-    await screen.findByRole("heading", { name: "에이전트 관리" }),
+    await screen.findByRole("heading", { name: "Agent Management" }),
   ).toBeTruthy();
   expect(screen.getByRole("button", { name: "Codex 설치" })).toBeTruthy();
 });
 
-it("returns from project setup to create in the original folder", async () => {
+it("creates in the original folder after installing from project setup", async () => {
   let installed = false;
   const saved = {
     id: "saved",
@@ -2480,7 +2486,7 @@ it("returns from project setup to create in the original folder", async () => {
   await screen.findByText("설치됨");
   expect(invoke).not.toHaveBeenCalledWith("create_thread", expect.anything());
   await userEvent.click(
-    screen.getByRole("button", { name: "스레드로 돌아가기" }),
+    screen.getByRole("button", { name: "original에 새 스레드" }),
   );
   await screen.findByRole("textbox");
   expect(invoke).toHaveBeenCalledWith("create_thread", {
@@ -2520,7 +2526,7 @@ it("keeps streaming and the fixed thread while management is open", async () => 
     text: " there",
   });
   await userEvent.click(
-    screen.getByRole("button", { name: "스레드로 돌아가기" }),
+    screen.getByRole("button", { name: /^새 스레드.*실행 중$/ }),
   );
   expect(await screen.findByText("Hi there")).toBeTruthy();
   expect(invoke).not.toHaveBeenCalledWith(
@@ -2592,9 +2598,7 @@ it("retries a failed install and offers the installed agent without restarting",
   ).toHaveProperty("disabled", true);
   finishInstall?.();
   expect(await screen.findByText("설치됨")).toBeTruthy();
-  await userEvent.click(
-    screen.getByRole("button", { name: "스레드로 돌아가기" }),
-  );
+  await userEvent.click(screen.getByRole("button", { name: "새 채팅" }));
   expect((screen.getByRole("combobox") as HTMLSelectElement).value).toBe(
     "new-provider",
   );
@@ -2922,7 +2926,7 @@ it("keeps an existing thread after logout and follows a later authentication-req
   );
   await userEvent.click(screen.getByRole("button", { name: "로그아웃 확인" }));
   await userEvent.click(
-    await screen.findByRole("button", { name: "스레드로 돌아가기" }),
+    await screen.findByRole("button", { name: "Existing thread" }),
   );
   expect(screen.getByText("Preserved response")).toBeTruthy();
   expect(screen.getByRole("textbox")).toHaveProperty("disabled", false);
@@ -2987,9 +2991,7 @@ it("confirms uninstall, supports cancel and retry, and removes the agent from ne
   expect(
     await screen.findByRole("button", { name: "New Provider 설치" }),
   ).toBeTruthy();
-  await userEvent.click(
-    screen.getByRole("button", { name: "스레드로 돌아가기" }),
-  );
+  await userEvent.click(screen.getByRole("button", { name: "새 채팅" }));
   expect(screen.queryByRole("option", { name: "New Provider" })).toBeNull();
 });
 
