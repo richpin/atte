@@ -269,6 +269,9 @@ it("groups threads by folder, collapses projects and creates within the selected
   ).toBeTruthy();
   await userEvent.click(screen.getByRole("button", { name: "사이드바 접기" }));
   expect(screen.queryByRole("navigation", { name: "스레드 목록" })).toBeNull();
+  expect(
+    document.querySelector('[data-collapsible="offcanvas"]'),
+  ).not.toBeNull();
   await userEvent.click(
     screen.getByRole("button", { name: "사이드바 펼치기" }),
   );

@@ -3,7 +3,9 @@ import { AgentAuthenticationProvider } from "features/agent-authentication";
 import { AgentManagementPage } from "pages/agent-management";
 import { NewChatPage } from "pages/new-chat";
 import { ThreadPage } from "pages/thread";
-import { I18nProvider } from "shared/i18n";
+import { I18nProvider, useI18n } from "shared/i18n";
+import { SidebarProvider, SidebarTrigger, useSidebar } from "shared/ui";
+import { Show } from "solid-js";
 import { AppSidebar } from "widgets/app-sidebar";
 import { createAppShellModel } from "./model/app-shell";
 import "./styles.css";
@@ -26,7 +28,7 @@ function AppShell() {
   const { threads } = shell;
 
   return (
-    <div class="flex h-dvh overflow-hidden bg-canvas text-ink">
+    <SidebarProvider class="relative h-dvh min-h-0 overflow-hidden bg-canvas text-ink">
       <AppSidebar
         view={shell.view()}
         threads={threads.history()}
@@ -43,7 +45,7 @@ function AppShell() {
         onDeleteThread={shell.removeThread}
         onManageAgents={shell.showAgents}
       />
-      <div class="min-w-0 flex-1">
+      <div class="min-w-0 flex-1 pt-12">
         <div hidden={shell.view() !== "new-chat"} class="h-full">
           <NewChatPage
             agents={shell.agents()}
@@ -72,6 +74,32 @@ function AppShell() {
           />
         </div>
       </div>
+      <AppTitlebar />
+    </SidebarProvider>
+  );
+}
+
+function AppTitlebar() {
+  const { t } = useI18n();
+  const { state, isMobile, openMobile } = useSidebar();
+  const expanded = () => isMobile() || state() === "expanded";
+
+  return (
+    <div class="pointer-events-none absolute inset-x-0 top-0 h-12">
+      <div
+        data-tauri-drag-region
+        class="pointer-events-auto absolute inset-0"
+      />
+      <Show when={!isMobile() || !openMobile()}>
+        <SidebarTrigger
+          aria-label={
+            !isMobile() && expanded()
+              ? t("sidebar.collapse")
+              : t("sidebar.expand")
+          }
+          class="pointer-events-auto absolute top-1.5 left-[5.5rem]"
+        />
+      </Show>
     </div>
   );
 }
