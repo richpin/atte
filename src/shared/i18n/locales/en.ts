@@ -94,10 +94,6 @@ export const en = {
     messagePlaceholder: "Type a message",
     stop: "Stop current task",
     send: "Send",
-    composer: {
-      running: "You can type the next message while this task runs.",
-      ready: "Send a message to the connected thread.",
-    },
     timeline: "Thread timeline",
     jumpToLatest: "Jump to latest",
     messages: "Thread messages",

@@ -101,10 +101,6 @@ export const ko = {
     messagePlaceholder: "메시지를 입력하세요",
     stop: "현재 작업 중단",
     send: "전송",
-    composer: {
-      running: "작업 중에도 다음 메시지를 입력할 수 있습니다.",
-      ready: "연결된 스레드에 메시지를 보내세요.",
-    },
     timeline: "스레드 타임라인",
     jumpToLatest: "최신 내용으로 이동",
     messages: "스레드 메시지",

@@ -251,16 +251,6 @@ export function ThreadComposer(props: {
           </Switch>
         </section>
       </Show>
-      <Show when={props.thread.failure !== "authenticationRequired"}>
-        <p
-          id="connection-note"
-          class="mt-2 shrink-0 text-center text-xs text-muted"
-        >
-          {props.thread.status === "running"
-            ? t("thread.composer.running")
-            : t("thread.composer.ready")}
-        </p>
-      </Show>
     </div>
   );
 }
