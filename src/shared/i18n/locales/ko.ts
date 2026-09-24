@@ -118,10 +118,6 @@ export const ko = {
     removeAttachment: "첨부 제거: {{ name }}",
     fileUnavailable:
       "{{ name }}은(는) 사용할 수 있는 파일이 아니어서 첨부하지 못했습니다.",
-    composer: {
-      running: "작업 중에도 다음 메시지를 입력할 수 있습니다.",
-      ready: "연결된 스레드에 메시지를 보내세요.",
-    },
     timeline: "스레드 타임라인",
     jumpToLatest: "최신 내용으로 이동",
     messages: "스레드 메시지",
@@ -148,6 +144,7 @@ export const ko = {
     newChat: "새 채팅",
     collapse: "사이드바 접기",
     expand: "사이드바 펼치기",
+    resize: "사이드바 너비 조절",
     threads: "스레드 목록",
     projects: "프로젝트",
     close: "사이드바 닫기",

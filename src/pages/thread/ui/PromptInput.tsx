@@ -71,7 +71,6 @@ export function PromptInput(props: {
     <textarea
       ref={input}
       aria-label={t("thread.message")}
-      aria-describedby="connection-note"
       class="max-h-thread-composer-input w-full resize-none overflow-y-auto overscroll-contain bg-transparent text-sm leading-5 outline-none disabled:cursor-not-allowed"
       disabled={props.disabled}
       value={props.value}

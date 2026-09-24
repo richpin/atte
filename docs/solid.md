@@ -25,8 +25,11 @@ Use untrack only when intentionally excluding a reactive dependency.
 
 ## UI and Styling
 
-Prefer existing Solid UI components for common UI patterns. Use Kobalte primitives when a suitable Solid UI component is unavailable or custom behavior is required.
+Use Lucide Icons wherever an icon is needed, with a consistent 1.5px stroke width.
+Check Solid UI first, leave source-code copying to the user, and only apply or replace components the user has added.
+Use Kobalte primitives when a suitable Solid UI component is unavailable or custom behavior is required.
 Use Tailwind CSS for styling and customization.
+Control stacking through DOM order and layout structure; do not introduce z-index.
 Keep reusable UI components under shared/ui and reuse them across features.
 Use semantic design tokens and centralized variants instead of duplicating arbitrary Tailwind styles.
 Preserve the accessibility and interaction behavior provided by Solid UI and Kobalte.

@@ -113,10 +113,6 @@ export const en = {
     removeAttachment: "Remove attachment: {{ name }}",
     fileUnavailable:
       "{{ name }} could not be attached because it is not an available file.",
-    composer: {
-      running: "You can type the next message while this task runs.",
-      ready: "Send a message to the connected thread.",
-    },
     timeline: "Thread timeline",
     jumpToLatest: "Jump to latest",
     messages: "Thread messages",
@@ -143,6 +139,7 @@ export const en = {
     newChat: "New Chat",
     collapse: "Collapse sidebar",
     expand: "Expand sidebar",
+    resize: "Resize sidebar",
     threads: "Thread list",
     projects: "Projects",
     close: "Close sidebar",

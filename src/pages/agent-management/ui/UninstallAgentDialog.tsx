@@ -17,8 +17,8 @@ export function UninstallAgentDialog(props: {
         {t("agents.uninstall")}
       </AlertDialog.Trigger>
       <AlertDialog.Portal>
-        <AlertDialog.Overlay class="fixed inset-0 z-40 bg-black/40" />
-        <AlertDialog.Content class="fixed left-1/2 top-1/2 z-50 w-[min(28rem,90vw)] -translate-x-1/2 -translate-y-1/2 space-y-4 rounded-2xl border border-line bg-panel p-6 text-ink shadow-xl">
+        <AlertDialog.Overlay class="fixed inset-0 bg-black/40" />
+        <AlertDialog.Content class="fixed left-1/2 top-1/2 w-[min(28rem,90vw)] -translate-x-1/2 -translate-y-1/2 space-y-4 rounded-2xl border border-line bg-panel p-6 text-ink shadow-xl">
           <AlertDialog.Title class="font-semibold">
             {t("agents.uninstallTitle", { name: props.name })}
           </AlertDialog.Title>

@@ -173,7 +173,7 @@ export function AgentManagementPage(props: {
             return (
               <article class="flex items-start justify-between gap-5 rounded-2xl border border-line bg-panel p-5">
                 <div class="flex min-w-0 items-start gap-3">
-                  <AgentIcon src={agent.icon} />
+                  <AgentIcon id={agent.id} src={agent.icon} />
                   <div class="min-w-0 space-y-1">
                     <h2 class="font-medium">{agent.name}</h2>
                     <p class="text-sm text-muted">{agent.description}</p>
