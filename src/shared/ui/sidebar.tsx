@@ -80,6 +80,7 @@ export function useIsMobile(fallback = false) {
 
 type SidebarProviderProps = Omit<ComponentProps<"div">, "style"> & {
   defaultOpen?: boolean;
+  forceDesktop?: boolean;
   open?: boolean;
   onOpenChange?: (open: boolean) => void;
   style?: JSX.CSSProperties;
@@ -89,6 +90,7 @@ const SidebarProvider: Component<SidebarProviderProps> = (rawProps) => {
   const props = mergeProps({ defaultOpen: true }, rawProps);
   const [local, others] = splitProps(props, [
     "defaultOpen",
+    "forceDesktop",
     "open",
     "onOpenChange",
     "class",
@@ -96,7 +98,8 @@ const SidebarProvider: Component<SidebarProviderProps> = (rawProps) => {
     "children",
   ]);
 
-  const isMobile = useIsMobile();
+  const detectedMobile = useIsMobile();
+  const isMobile = () => !local.forceDesktop && detectedMobile();
   const [openMobile, setOpenMobile] = createSignal(false);
 
   // This is the internal state of the sidebar.
@@ -172,7 +175,7 @@ const SidebarProvider: Component<SidebarProviderProps> = (rawProps) => {
 type SidebarProps = ComponentProps<"div"> & {
   side?: "left" | "right";
   variant?: "sidebar" | "floating" | "inset";
-  collapsible?: "offcanvas" | "icon" | "none";
+  collapsible?: "offcanvas" | "icon" | "none" | "resizable";
 };
 
 const Sidebar: Component<SidebarProps> = (rawProps) => {
@@ -221,6 +224,23 @@ const Sidebar: Component<SidebarProps> = (rawProps) => {
             <div class="flex size-full flex-col">{local.children}</div>
           </SheetContent>
         </Sheet>
+      </Match>
+      <Match when={local.collapsible === "resizable"}>
+        <div
+          class={cn(
+            "group flex h-full min-w-0 flex-col bg-sidebar text-sidebar-foreground",
+            local.class,
+          )}
+          data-state={state()}
+          data-collapsible={state() === "collapsed" ? "resizable" : ""}
+          data-variant={local.variant}
+          data-side={local.side}
+          {...others}
+        >
+          <div data-sidebar="sidebar" class="flex size-full flex-col">
+            {local.children}
+          </div>
+        </div>
       </Match>
       <Match when={!isMobile()}>
         <div

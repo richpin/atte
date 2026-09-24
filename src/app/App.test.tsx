@@ -17,6 +17,38 @@ vi.mock("@tauri-apps/api/core", () => ({
   },
 }));
 let receiveUpdate: (update: Record<string, unknown>) => void;
+let layoutWidth: number;
+let resizeObservers: ResizeObserverFixture[];
+class ResizeObserverFixture {
+  readonly targets = new Set<Element>();
+
+  constructor(readonly callback: ResizeObserverCallback) {
+    resizeObservers.push(this);
+  }
+
+  observe(target: Element) {
+    this.targets.add(target);
+  }
+
+  unobserve(target: Element) {
+    this.targets.delete(target);
+  }
+
+  disconnect() {
+    this.targets.clear();
+  }
+}
+
+function resizeElement(target: Element, width: number) {
+  layoutWidth = width;
+  const entry = { target, contentRect: { width } } as ResizeObserverEntry;
+  for (const observer of resizeObservers) {
+    if (observer.targets.has(target)) {
+      observer.callback([entry], observer as unknown as ResizeObserver);
+    }
+  }
+}
+
 const receive = (thread: Record<string, unknown>) =>
   receiveUpdate({ kind: "thread", thread });
 let pendingSnapshots: Map<string, Record<string, unknown>>;
@@ -43,6 +75,7 @@ function subscribeWith(
 afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
+  vi.restoreAllMocks();
   vi.useRealTimers();
 });
 
@@ -102,15 +135,13 @@ it("shows registry icons and falls back for missing or failed images", async () 
 const requests = vi.fn();
 beforeEach(() => {
   pendingSnapshots = new Map();
-  vi.stubGlobal(
-    "ResizeObserver",
-    class {
-      observe() {}
-      unobserve() {}
-      disconnect() {}
-    },
-  );
+  layoutWidth = 800;
+  resizeObservers = [];
+  vi.stubGlobal("ResizeObserver", ResizeObserverFixture);
   vi.resetAllMocks();
+  vi.spyOn(HTMLElement.prototype, "offsetWidth", "get").mockImplementation(
+    () => layoutWidth,
+  );
   vi.mocked(invoke).mockImplementation(async (command, args) => {
     if (command === "subscribe_thread_list")
       return Promise.resolve("list-subscription");
@@ -213,6 +244,14 @@ it("starts on new chat and preserves a thread draft across that navigation", asy
 });
 
 it("groups threads by folder, collapses projects and creates within the selected folder", async () => {
+  vi.stubGlobal(
+    "matchMedia",
+    vi.fn(() => ({
+      matches: true,
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+    })),
+  );
   const saved = {
     id: "one",
     title: "First project task",
@@ -267,10 +306,29 @@ it("groups threads by folder, collapses projects and creates within the selected
       name: /^First project task.*승인 대기$/,
     }),
   ).toBeTruthy();
+  const resizeHandle = screen.getByRole("separator", {
+    name: "사이드바 너비 조절",
+  });
+  expect(resizeHandle.getAttribute("aria-valuemin")).toBe("0.28");
+  expect(resizeHandle.getAttribute("aria-valuemax")).toBe("0.6");
+  const sidebarPanel = resizeHandle.previousElementSibling as HTMLElement;
+  expect(sidebarPanel.classList.contains("min-w-56")).toBe(true);
+  await waitFor(() => expect(sidebarPanel.style.flexBasis).toBe("32%"));
+  const resizableRoot = document.querySelector("[data-corvu-resizable-root]");
+  expect(resizableRoot).not.toBeNull();
+  resizeElement(resizableRoot as Element, 1000);
+  await waitFor(() => expect(sidebarPanel.style.flexBasis).toBe("25.6%"));
+  fireEvent.keyDown(resizeHandle, { key: "Home" });
+  expect(screen.queryByRole("navigation", { name: "스레드 목록" })).toBeNull();
+  fireEvent.keyDown(resizeHandle, { key: "Enter" });
+  expect(
+    await screen.findByRole("navigation", { name: "스레드 목록" }),
+  ).toBeTruthy();
+  await waitFor(() => expect(sidebarPanel.style.flexBasis).toBe("25.6%"));
   await userEvent.click(screen.getByRole("button", { name: "사이드바 접기" }));
   expect(screen.queryByRole("navigation", { name: "스레드 목록" })).toBeNull();
   expect(
-    document.querySelector('[data-collapsible="offcanvas"]'),
+    document.querySelector('[data-collapsible="resizable"]'),
   ).not.toBeNull();
   await userEvent.click(
     screen.getByRole("button", { name: "사이드바 펼치기" }),

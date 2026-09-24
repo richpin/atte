@@ -69,6 +69,20 @@ button:enabled {
   cursor: pointer;
 }
 
+.app-resizable > [data-corvu-resizable-panel] {
+  transition: flex-basis 160ms ease-out;
+}
+
+.app-resizable:has(> [data-corvu-resizable-handle][data-dragging])
+  > [data-corvu-resizable-panel] {
+  transition: none;
+}
+
+.app-resizable:has(> [data-corvu-resizable-panel][data-collapsed])
+  > [data-corvu-resizable-panel] {
+  transition: flex-basis 160ms ease-out;
+}
+
 @layer components {
   .markdown-body {
     @apply min-w-0 max-w-full break-words leading-7;
@@ -190,5 +204,11 @@ button:enabled {
 
   .markdown-body input[type="checkbox"] {
     @apply pointer-events-none me-1.5;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .app-resizable > [data-corvu-resizable-panel] {
+    transition: none;
   }
 }

@@ -116,7 +116,7 @@ export function AppSidebar(props: {
     <>
       <Sidebar
         aria-label={t("sidebar.navigation")}
-        collapsible="offcanvas"
+        collapsible="resizable"
         class="border-line"
       >
         <Show when={isMobile()}>

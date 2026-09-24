@@ -127,6 +127,7 @@ export const ko = {
     newChat: "새 채팅",
     collapse: "사이드바 접기",
     expand: "사이드바 펼치기",
+    resize: "사이드바 너비 조절",
     threads: "스레드 목록",
     projects: "프로젝트",
     close: "사이드바 닫기",

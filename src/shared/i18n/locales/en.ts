@@ -120,6 +120,7 @@ export const en = {
     newChat: "New Chat",
     collapse: "Collapse sidebar",
     expand: "Expand sidebar",
+    resize: "Resize sidebar",
     threads: "Thread list",
     projects: "Projects",
     close: "Close sidebar",

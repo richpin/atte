@@ -21,6 +21,7 @@
   },
   "license": "MIT",
   "dependencies": {
+    "@corvu/resizable": "^0.2.5",
     "@kobalte/core": "^0.13.14",
     "@shikijs/core": "4.4.3",
     "@shikijs/engine-javascript": "4.4.3",
