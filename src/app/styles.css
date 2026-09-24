@@ -69,6 +69,10 @@ button:enabled {
   cursor: pointer;
 }
 
+.lucide {
+  stroke-width: 2px;
+}
+
 .app-resizable > [data-corvu-resizable-panel] {
   transition: flex-basis 160ms ease-out;
 }

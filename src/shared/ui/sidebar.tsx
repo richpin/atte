@@ -314,7 +314,7 @@ const SidebarTrigger = <T extends ValidComponent = "button">(
       }}
       {...others}
     >
-      <PanelLeft aria-hidden="true" class="size-4" strokeWidth={1.5} />
+      <PanelLeft aria-hidden="true" class="size-4" />
       <span class="sr-only">Toggle Sidebar</span>
     </Button>
   );

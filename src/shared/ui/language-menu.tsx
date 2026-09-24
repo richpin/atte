@@ -1,4 +1,5 @@
 import { DropdownMenu } from "@kobalte/core/dropdown-menu";
+import { Globe } from "lucide-solid";
 import { createSignal, For } from "solid-js";
 import { type LocalePreference, type TranslationKey, useI18n } from "../i18n";
 
@@ -17,20 +18,7 @@ export function LanguageMenu() {
         aria-label={t("language.label")}
         class="flex shrink-0 items-center gap-1.5 rounded-lg border border-line px-3 py-1.5 text-xs text-muted hover:bg-panel focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-accent"
       >
-        <svg
-          aria-hidden="true"
-          width="14"
-          height="14"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          stroke-width="1.75"
-          stroke-linecap="round"
-          stroke-linejoin="round"
-        >
-          <circle cx="12" cy="12" r="9" />
-          <path d="M3 12h18M12 3a15 15 0 0 1 0 18M12 3a15 15 0 0 0 0 18" />
-        </svg>
+        <Globe aria-hidden="true" class="size-3.5" />
         {t("language.label")}
       </DropdownMenu.Trigger>
       <DropdownMenu.Portal>

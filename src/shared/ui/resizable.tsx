@@ -51,7 +51,7 @@ const ResizableHandle = <T extends ValidComponent = "button">(
     >
       <Show when={props.withHandle}>
         <div class="flex h-4 w-3 items-center justify-center rounded-sm border bg-border">
-          <GripVertical aria-hidden="true" class="size-2.5" strokeWidth={1.5} />
+          <GripVertical aria-hidden="true" class="size-2.5" />
         </div>
       </Show>
     </ResizablePrimitive.Handle>

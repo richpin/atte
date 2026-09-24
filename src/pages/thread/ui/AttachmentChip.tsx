@@ -1,3 +1,4 @@
+import { X } from "lucide-solid";
 import { useI18n } from "shared/i18n";
 import { Show } from "solid-js";
 import type { AttachmentKind } from "../model/types";
@@ -34,18 +35,7 @@ export function AttachmentChip(props: {
             class="grid size-4 shrink-0 place-items-center rounded-full focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-current"
             onClick={remove()}
           >
-            <svg
-              aria-hidden="true"
-              width="12"
-              height="12"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              stroke-width="2"
-              stroke-linecap="round"
-            >
-              <path d="m6 6 12 12M18 6 6 18" />
-            </svg>
+            <X aria-hidden="true" class="size-3" />
           </button>
         )}
       </Show>

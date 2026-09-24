@@ -1,4 +1,5 @@
 import { Image } from "@kobalte/core/image";
+import { SquareTerminal } from "lucide-solid";
 import { agentIconSource } from "./agent-icon-source";
 
 export function AgentIcon(props: { id: string; src: string | null }) {
@@ -14,18 +15,7 @@ export function AgentIcon(props: { id: string; src: string | null }) {
         class="size-6 object-contain"
       />
       <Image.Fallback>
-        <svg
-          width="24"
-          height="24"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          stroke-width="1.5"
-          aria-hidden="true"
-        >
-          <rect x="3" y="4" width="18" height="16" rx="3" />
-          <path d="m7 9 3 3-3 3m6 0h4" />
-        </svg>
+        <SquareTerminal aria-hidden="true" class="size-6" />
       </Image.Fallback>
     </Image>
   );

@@ -1,3 +1,4 @@
+import { ChevronDown } from "lucide-solid";
 import { type TranslationKey, useI18n } from "shared/i18n";
 import { Markdown } from "shared/ui";
 import { createSignal, For, Index, onCleanup, onMount, Show } from "solid-js";
@@ -73,20 +74,11 @@ function UserMessage(props: { message: string; attachments: Attachment[] }) {
           onClick={() => setExpanded((value) => !value)}
         >
           {expanded() ? t("thread.showLess") : t("thread.showMore")}
-          <svg
+          <ChevronDown
             aria-hidden="true"
-            class={expanded() ? "rotate-180" : ""}
-            width="14"
-            height="14"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            stroke-width="2"
-            stroke-linecap="round"
-            stroke-linejoin="round"
-          >
-            <path d="m6 9 6 6 6-6" />
-          </svg>
+            class="size-3.5"
+            classList={{ "rotate-180": expanded() }}
+          />
         </button>
       </Show>
     </div>

@@ -4,9 +4,9 @@ import {
   ChevronRight,
   Ellipsis,
   Folder,
-  MessageSquarePlus,
   Plus,
   Settings,
+  SquarePen,
 } from "lucide-solid";
 import { useI18n } from "shared/i18n";
 import {
@@ -128,16 +128,17 @@ export function AppSidebar(props: {
 
         <Show when={expanded()}>
           <SidebarContent class="pt-12">
-            <div class="px-2">
-              <Button
-                aria-current={props.view === "new-chat" ? "page" : undefined}
-                class="w-full justify-start"
-                onClick={props.onNewChat}
-              >
-                <MessageSquarePlus aria-hidden="true" strokeWidth={1.5} />
-                <span class="truncate">{t("sidebar.newChat")}</span>
-              </Button>
-            </div>
+            <SidebarMenu class="px-2">
+              <SidebarMenuItem>
+                <SidebarMenuButton
+                  aria-current={props.view === "new-chat" ? "page" : undefined}
+                  onClick={props.onNewChat}
+                >
+                  <SquarePen aria-hidden="true" />
+                  <span class="truncate">{t("sidebar.newChat")}</span>
+                </SidebarMenuButton>
+              </SidebarMenuItem>
+            </SidebarMenu>
             <nav
               aria-label={t("sidebar.threads")}
               class="flex min-h-0 flex-1 flex-col"
@@ -189,9 +190,8 @@ export function AppSidebar(props: {
                                   group.folder,
                                 ),
                               }}
-                              strokeWidth={1.5}
                             />
-                            <Folder aria-hidden="true" strokeWidth={1.5} />
+                            <Folder aria-hidden="true" />
                             <span>{group.name}</span>
                           </SidebarMenuButton>
                           <SidebarGroupAction
@@ -203,7 +203,7 @@ export function AppSidebar(props: {
                               props.onCreateInProject(group.folder)
                             }
                           >
-                            <Plus aria-hidden="true" strokeWidth={1.5} />
+                            <Plus aria-hidden="true" />
                           </SidebarGroupAction>
                           <Show when={!collapsedProjects().has(group.folder)}>
                             <SidebarMenuSub>
@@ -290,10 +290,7 @@ export function AppSidebar(props: {
                                               );
                                             }}
                                           >
-                                            <Ellipsis
-                                              aria-hidden="true"
-                                              strokeWidth={1.5}
-                                            />
+                                            <Ellipsis aria-hidden="true" />
                                           </SidebarMenuAction>
                                         </SidebarMenuSubItem>
                                       </ContextMenu.Trigger>
@@ -331,7 +328,7 @@ export function AppSidebar(props: {
               variant="outline"
               onClick={props.onManageAgents}
             >
-              <Settings aria-hidden="true" strokeWidth={1.5} />
+              <Settings aria-hidden="true" />
               {t("thread.manageAgents")}
             </Button>
             <LanguageMenu />

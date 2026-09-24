@@ -1,4 +1,5 @@
 import { makeResizeObserver } from "@solid-primitives/resize-observer";
+import { ArrowDown } from "lucide-solid";
 import { useI18n } from "shared/i18n";
 import {
   createEffect,
@@ -110,19 +111,7 @@ export function ThreadTimeline(props: {
           style={{ bottom: bottomInset() }}
           onClick={followLatest}
         >
-          <svg
-            aria-hidden="true"
-            width="18"
-            height="18"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            stroke-width="2"
-            stroke-linecap="round"
-            stroke-linejoin="round"
-          >
-            <path d="M12 5v14m-6-6 6 6 6-6" />
-          </svg>
+          <ArrowDown aria-hidden="true" class="size-[18px]" />
         </button>
       </Show>
     </div>
