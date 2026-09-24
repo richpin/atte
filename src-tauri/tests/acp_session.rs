@@ -1083,6 +1083,188 @@ async fn restores_an_in_flight_direct_media_snapshot_before_the_response_finishe
 }
 
 #[tokio::test]
+async fn reconnect_removes_unsupported_queued_media_and_advances_past_an_empty_failed_input() {
+    let root = tempfile::tempdir().unwrap();
+    let database_path = root.path().join("atte.sqlite");
+    let gates = root.path().join("gates");
+    let prompt_log = root.path().join("prompts.jsonl");
+    let store = std::sync::Arc::new(atte_lib::storage::Store::open(&database_path).unwrap());
+    let original = Threads::with_store(vec![mock_agent()], store).unwrap();
+    let draft = original.create(root.path()).unwrap();
+    drop(original);
+
+    let removed_only = Attachment::media(
+        uuid::Uuid::new_v4(),
+        "drop.png",
+        MediaKind::Image,
+        "image/png",
+    );
+    let removed_partial = Attachment::media(
+        uuid::Uuid::new_v4(),
+        "also-drop.png",
+        MediaKind::Image,
+        "image/png",
+    );
+    let retained = Attachment::media(
+        uuid::Uuid::new_v4(),
+        "keep.wav",
+        MediaKind::Audio,
+        "audio/wav",
+    );
+    let linked = Attachment::file(uuid::Uuid::new_v4(), "notes.txt", "file:///tmp/notes.txt");
+    let snapshots = root
+        .path()
+        .join("prompt-attachments")
+        .join(draft.id.to_string());
+    std::fs::create_dir_all(&snapshots).unwrap();
+    for attachment in [&removed_only, &removed_partial, &retained] {
+        std::fs::write(snapshots.join(attachment.id.to_string()), [1, 2, 3]).unwrap();
+    }
+    let queued = [
+        atte_lib::thread::QueuedMessage {
+            id: uuid::Uuid::new_v4(),
+            input: UserInput {
+                body: String::new(),
+                attachments: vec![removed_only.clone()],
+            },
+            status: QueuedMessageStatus::Failed,
+        },
+        atte_lib::thread::QueuedMessage {
+            id: uuid::Uuid::new_v4(),
+            input: UserInput {
+                body: "send remaining".into(),
+                attachments: vec![removed_partial.clone(), retained.clone(), linked.clone()],
+            },
+            status: QueuedMessageStatus::Failed,
+        },
+    ];
+    rusqlite::Connection::open(&database_path)
+        .unwrap()
+        .execute(
+            "UPDATE threads SET queued_messages=?2 WHERE id=?1",
+            rusqlite::params![
+                draft.id.to_string(),
+                serde_json::to_string(&queued).unwrap()
+            ],
+        )
+        .unwrap();
+
+    let mut replacement = mock_agent();
+    replacement
+        .env
+        .insert("MEDIA_CAPABILITIES".into(), "audio".into());
+    replacement
+        .env
+        .insert("PROMPT_GATE_DIR".into(), gates.to_string_lossy().into());
+    replacement.env.insert(
+        "PROMPT_JSON_LOG".into(),
+        prompt_log.to_string_lossy().into(),
+    );
+    let restored = Threads::with_store(
+        vec![replacement],
+        std::sync::Arc::new(atte_lib::storage::Store::open(&database_path).unwrap()),
+    )
+    .unwrap();
+    restored.connect(draft.id).unwrap();
+    wait_for_path(&gates.join("1.arrived")).await;
+
+    assert!(!snapshots.join(removed_only.id.to_string()).exists());
+    assert!(!snapshots.join(removed_partial.id.to_string()).exists());
+    assert!(snapshots.join(retained.id.to_string()).exists());
+    let active = restored.get(draft.id).unwrap();
+    assert!(active.queued_messages.is_empty());
+    assert_eq!(
+        active.turns.last().unwrap().attachments,
+        [retained.clone(), linked]
+    );
+    assert!(active.notice.is_none());
+    let request: serde_json::Value = serde_json::from_str(
+        std::fs::read_to_string(&prompt_log)
+            .unwrap()
+            .lines()
+            .next()
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        request["prompt"][0],
+        serde_json::json!({"type": "text", "text": "send remaining"})
+    );
+    assert_eq!(request["prompt"][1]["type"], "audio");
+    assert_eq!(request["prompt"][2]["type"], "resource_link");
+
+    std::fs::write(gates.join("1.release"), []).unwrap();
+    settle(&restored, draft.id).await;
+    assert!(!snapshots.join(retained.id.to_string()).exists());
+    restored.shutdown().await;
+}
+
+#[tokio::test]
+async fn reconnect_advances_past_an_empty_pending_media_input() {
+    let root = tempfile::tempdir().unwrap();
+    let database_path = root.path().join("atte.sqlite");
+    let original = Threads::with_store(
+        vec![mock_agent()],
+        std::sync::Arc::new(atte_lib::storage::Store::open(&database_path).unwrap()),
+    )
+    .unwrap();
+    let draft = original.create(root.path()).unwrap();
+    drop(original);
+    let image = Attachment::media(
+        uuid::Uuid::new_v4(),
+        "drop.png",
+        MediaKind::Image,
+        "image/png",
+    );
+    let snapshot = root
+        .path()
+        .join("prompt-attachments")
+        .join(draft.id.to_string())
+        .join(image.id.to_string());
+    std::fs::create_dir_all(snapshot.parent().unwrap()).unwrap();
+    std::fs::write(&snapshot, [1, 2, 3]).unwrap();
+    let queue = [
+        atte_lib::thread::QueuedMessage {
+            id: uuid::Uuid::new_v4(),
+            input: UserInput {
+                body: String::new(),
+                attachments: vec![image],
+            },
+            status: QueuedMessageStatus::Pending,
+        },
+        atte_lib::thread::QueuedMessage::text(uuid::Uuid::new_v4(), "next"),
+    ];
+    rusqlite::Connection::open(&database_path)
+        .unwrap()
+        .execute(
+            "UPDATE threads SET queued_messages=?2 WHERE id=?1",
+            rusqlite::params![draft.id.to_string(), serde_json::to_string(&queue).unwrap()],
+        )
+        .unwrap();
+    let restored = Threads::with_store(
+        vec![mock_agent()],
+        std::sync::Arc::new(atte_lib::storage::Store::open(&database_path).unwrap()),
+    )
+    .unwrap();
+    restored.connect(draft.id).unwrap();
+    let finished = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let thread = restored.get(draft.id).unwrap();
+            if thread.turns.len() == 1 && thread.status == ThreadStatus::SessionReady {
+                break thread;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(finished.turns[0].message, "next");
+    assert!(finished.queued_messages.is_empty());
+    assert!(!snapshot.exists());
+    restored.shutdown().await;
+}
+
+#[tokio::test]
 async fn removes_a_queued_media_snapshot_after_its_prompt_succeeds() {
     let root = tempfile::tempdir().unwrap();
     let database_path = root.path().join("atte.sqlite");

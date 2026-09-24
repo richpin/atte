@@ -597,6 +597,75 @@ it("releases a selected file when its draft chip is removed", async () => {
   });
 });
 
+it("removes unsupported draft media after a capability update without losing text or linked files", async () => {
+  commands.set("release_files", async () => undefined);
+  commands.set("select_media", async ({ kind }) => ({
+    attachments: [{ id: kind, name: `${kind}.png`, kind }],
+    errors: [],
+  }));
+  commands.set("select_files", async () => ({
+    attachments: [
+      { id: "file", name: "notes.txt", uri: "file:///tmp/notes.txt" },
+    ],
+    errors: [],
+  }));
+  const model = setup();
+  const initial = thread("A", {
+    promptCapabilities: { image: true, audio: true },
+  });
+  await open(model, "A", initial);
+  model.setDraft("keep text");
+  await model.selectMedia("image");
+  await model.selectMedia("audio");
+  await model.selectFiles();
+
+  const { turns: _turns, ...patch } = initial;
+  stream("A")({
+    kind: "patch",
+    thread: { ...patch, promptCapabilities: { image: false, audio: true } },
+    turnUpdates: [],
+  });
+
+  expect(model.draft()).toBe("keep text");
+  expect(model.draftAttachments().map(({ id }) => id)).toEqual([
+    "audio",
+    "file",
+  ]);
+  expect(invoke).toHaveBeenCalledWith("release_files", {
+    attachments: ["image"],
+  });
+  expect(model.error()).toBeUndefined();
+});
+
+it("discards a media picker result when its capability disappeared during selection", async () => {
+  const selection = deferred<{
+    attachments: { id: string; name: string; kind: "image" }[];
+    errors: { name: string }[];
+  }>();
+  commands.set("select_media", () => selection.promise);
+  commands.set("release_files", async () => undefined);
+  const model = setup();
+  const initial = thread("A", {
+    promptCapabilities: { image: true, audio: false },
+  });
+  await open(model, "A", initial);
+  const picking = model.selectMedia("image");
+  stream("A")({
+    kind: "thread",
+    thread: { ...initial, promptCapabilities: { image: false, audio: false } },
+  });
+  selection.resolve({
+    attachments: [{ id: "late", name: "late.png", kind: "image" }],
+    errors: [],
+  });
+  await picking;
+
+  expect(model.draftAttachments()).toEqual([]);
+  expect(invoke).toHaveBeenCalledWith("release_files", {
+    attachments: ["late"],
+  });
+});
+
 it("releases files selected after navigation made the picker result stale", async () => {
   const selection = deferred<{
     attachments: { id: string; name: string; uri: string }[];

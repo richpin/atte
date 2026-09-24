@@ -2078,6 +2078,42 @@ impl ThreadState {
         }
     }
 
+    fn reconcile_queued_media(&mut self) -> Result<bool, ThreadError> {
+        let capabilities = &self.thread.prompt_capabilities;
+        let supported = |attachment: &Attachment| match attachment.kind {
+            AttachmentKind::File => true,
+            AttachmentKind::Image => capabilities.image,
+            AttachmentKind::Audio => capabilities.audio,
+        };
+        let mut queue = self.thread.queued_messages.clone();
+        let mut removed = Vec::new();
+        for queued in &mut queue {
+            let original_count = queued.input.attachments.len();
+            queued.input.attachments.retain(|attachment| {
+                if !supported(attachment) {
+                    removed.push(attachment.clone());
+                    return false;
+                }
+                true
+            });
+            if queued.input.attachments.len() != original_count
+                && queued.status == QueuedMessageStatus::Failed
+            {
+                queued.status = QueuedMessageStatus::Pending;
+            }
+        }
+        queue.retain(|queued| {
+            !queued.input.body.trim().is_empty() || !queued.input.attachments.is_empty()
+        });
+        if queue == self.thread.queued_messages {
+            return Ok(false);
+        }
+        let resume_queue = queue.first() != self.thread.queued_messages.first();
+        self.save_queue(queue)?;
+        self.remove_unreferenced_media(&removed);
+        Ok(resume_queue)
+    }
+
     fn save_queue(&mut self, queue: Vec<QueuedMessage>) -> Result<(), ThreadError> {
         if let Some(store) = &self.store {
             let mut durable = queue.clone();
@@ -2403,11 +2439,19 @@ impl RuntimeUpdates {
         state.thread.prompt_capabilities = prompt_capabilities;
         state.desired_configuration.clear();
         state.reconcile_configuration();
-        let next = state
-            .dispatch_queue_on_ready
-            .then(|| state.prepare_next_queued_prompt())
-            .flatten();
-        state.dispatch_queue_on_ready = false;
+        let next = match state.reconcile_queued_media() {
+            Ok(resume_queue) => {
+                let next = (state.dispatch_queue_on_ready || resume_queue)
+                    .then(|| state.prepare_next_queued_prompt())
+                    .flatten();
+                state.dispatch_queue_on_ready = false;
+                next
+            }
+            Err(error) => {
+                state.thread.notice = Some(error.to_string());
+                None
+            }
+        };
         state.publish();
         next
     }

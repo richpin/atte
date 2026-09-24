@@ -224,6 +224,30 @@ export function createThreadModel(queryClient?: QueryClient) {
 
   function reconcileThread(updatedThread: Thread) {
     setState("thread", reconcile(structuredClone(updatedThread)));
+    reconcileDraftMedia(updatedThread);
+  }
+
+  function reconcileDraftMedia(
+    updatedThread: Pick<Thread, "id" | "status" | "promptCapabilities">,
+  ) {
+    if (
+      !["sessionReady", "running", "waitingForApproval", "cancelling"].includes(
+        updatedThread.status,
+      )
+    )
+      return;
+    const attachments = draftAttachmentState[updatedThread.id] ?? [];
+    const kept = attachments.filter((attachment) => {
+      if (attachment.kind !== "image" && attachment.kind !== "audio")
+        return true;
+      return Boolean(updatedThread.promptCapabilities?.[attachment.kind]);
+    });
+    if (kept.length === attachments.length) return;
+    const keptIds = new Set(kept.map(({ id }) => id));
+    setThreadAttachments(updatedThread.id, kept);
+    void releaseFiles(
+      attachments.filter(({ id }) => !keptIds.has(id)).map(({ id }) => id),
+    ).catch(() => undefined);
   }
 
   function applyThread(updatedThread: Thread) {
@@ -343,6 +367,7 @@ export function createThreadModel(queryClient?: QueryClient) {
         "thread",
         reconcile({ ...structuredClone(update.thread), turns: current.turns }),
       );
+      reconcileDraftMedia(update.thread);
       for (const turnUpdate of update.turnUpdates) {
         if (turnUpdate.kind === "replaced") {
           setState(
@@ -484,6 +509,12 @@ export function createThreadModel(queryClient?: QueryClient) {
         );
         return;
       }
+      if (!thread()?.promptCapabilities?.[kind]) {
+        void releaseFiles(selection.attachments.map(({ id }) => id)).catch(
+          () => undefined,
+        );
+        return;
+      }
       setThreadAttachments(current.id, [
         ...draftAttachments(),
         ...selection.attachments,
@@ -515,6 +546,12 @@ export function createThreadModel(queryClient?: QueryClient) {
         bytes,
       );
       if (!isCurrent(expectedView)) {
+        void releaseFiles(selection.attachments.map(({ id }) => id)).catch(
+          () => undefined,
+        );
+        return;
+      }
+      if (!thread()?.promptCapabilities?.image) {
         void releaseFiles(selection.attachments.map(({ id }) => id)).catch(
           () => undefined,
         );

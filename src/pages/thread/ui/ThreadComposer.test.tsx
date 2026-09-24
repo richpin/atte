@@ -284,11 +284,12 @@ it("shows media choices only for advertised prompt capabilities", async () => {
   const onSelectMedia = vi.fn();
   const current = readyThread();
   current.promptCapabilities = { image: true, audio: false };
+  const [thread, setThread] = createSignal(current);
   render(() => (
     <I18nProvider>
       <ThreadComposer
         active={false}
-        thread={current}
+        thread={thread()}
         agentName="Agent"
         draft=""
         answerPending={false}
@@ -314,6 +315,14 @@ it("shows media choices only for advertised prompt capabilities", async () => {
   expect(screen.queryByRole("menuitem", { name: "Audio" })).toBeNull();
   await userEvent.click(screen.getByRole("menuitem", { name: "Image" }));
   expect(onSelectMedia).toHaveBeenCalledWith("image");
+  setThread({ ...current, promptCapabilities: { image: false, audio: false } });
+  await waitFor(() =>
+    expect(screen.getByRole("button", { name: "Add attachment" })).toBeTruthy(),
+  );
+  await userEvent.click(screen.getByRole("button", { name: "Add attachment" }));
+  expect(screen.queryByRole("menuitem", { name: "Image" })).toBeNull();
+  expect(screen.queryByRole("menuitem", { name: "Audio" })).toBeNull();
+  expect(screen.getByRole("menuitem", { name: "File" })).toBeTruthy();
 });
 
 it("disables every thread mutation while the subscription is unavailable", () => {
