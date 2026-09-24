@@ -5,6 +5,7 @@ import { useI18n } from "shared/i18n";
 import { For, Match, Show, Switch } from "solid-js";
 import type {
   Attachment,
+  MediaKind,
   Thread,
   ThreadConfiguration,
   ThreadConfigurationChoice,
@@ -31,6 +32,9 @@ export function ThreadComposer(props: {
   authentication?: AgentAuthenticationState;
   onDraftChange: (message: string) => void;
   onSelectFiles?: () => void;
+  onSelectMedia?: (kind: MediaKind) => void;
+  onPasteImage?: (image: File) => void;
+  onUnsupportedImagePaste?: () => void;
   onRemoveAttachment?: (id: string) => void;
   onSend: () => void;
   onCancel: () => void;
@@ -92,6 +96,7 @@ export function ThreadComposer(props: {
                         {(attachment) => (
                           <AttachmentChip
                             name={attachment.name}
+                            kind={attachment.kind}
                             onRemove={() =>
                               props.onRemoveAttachment?.(attachment.id)
                             }
@@ -119,6 +124,12 @@ export function ThreadComposer(props: {
                     }
                     onInput={props.onDraftChange}
                     onSubmit={props.onSend}
+                    onPasteImage={
+                      props.thread.promptCapabilities?.image
+                        ? props.onPasteImage
+                        : undefined
+                    }
+                    onUnsupportedImagePaste={props.onUnsupportedImagePaste}
                   />
                 </>
               }
@@ -154,6 +165,22 @@ export function ThreadComposer(props: {
                       >
                         {t("thread.file")}
                       </DropdownMenu.Item>
+                      <Show when={props.thread.promptCapabilities?.image}>
+                        <DropdownMenu.Item
+                          class="rounded px-3 py-2 outline-none data-[highlighted]:bg-canvas"
+                          onSelect={() => props.onSelectMedia?.("image")}
+                        >
+                          {t("thread.image")}
+                        </DropdownMenu.Item>
+                      </Show>
+                      <Show when={props.thread.promptCapabilities?.audio}>
+                        <DropdownMenu.Item
+                          class="rounded px-3 py-2 outline-none data-[highlighted]:bg-canvas"
+                          onSelect={() => props.onSelectMedia?.("audio")}
+                        >
+                          {t("thread.audio")}
+                        </DropdownMenu.Item>
+                      </Show>
                     </DropdownMenu.Content>
                   </DropdownMenu.Portal>
                 </DropdownMenu>

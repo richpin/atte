@@ -190,16 +190,8 @@ fn restores_queued_messages_in_order_and_keeps_the_thread_after_deletion() {
     let database = rusqlite::Connection::open(&path).unwrap();
     let mut first = atte_lib::thread::QueuedMessage::text(uuid::Uuid::new_v4(), "first");
     first.input.attachments = vec![
-        Attachment {
-            id: uuid::Uuid::new_v4(),
-            name: "one.rs".into(),
-            uri: "file:///tmp/one.rs".into(),
-        },
-        Attachment {
-            id: uuid::Uuid::new_v4(),
-            name: "two.png".into(),
-            uri: "file:///tmp/two.png".into(),
-        },
+        Attachment::file(uuid::Uuid::new_v4(), "one.rs", "file:///tmp/one.rs"),
+        Attachment::file(uuid::Uuid::new_v4(), "two.png", "file:///tmp/two.png"),
     ];
     let messages = vec![
         first,
@@ -251,6 +243,71 @@ fn restores_queued_messages_in_order_and_keeps_the_thread_after_deletion() {
     )
     .unwrap();
     assert!(reopened.get(draft.id).unwrap().queued_messages.is_empty());
+}
+
+#[test]
+fn thread_entry_keeps_queued_media_and_removes_only_that_threads_orphans() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("atte.sqlite");
+    let store = std::sync::Arc::new(atte_lib::storage::Store::open(&path).unwrap());
+    let original = Threads::with_store(vec![atte_lib::agent::prepared_codex()], store).unwrap();
+    let draft = original.create(root.path()).unwrap();
+    let other = original.create(root.path()).unwrap();
+    drop(original);
+    let media = Attachment::media(
+        uuid::Uuid::new_v4(),
+        "photo.png",
+        atte_lib::thread::MediaKind::Image,
+        "image/png",
+    );
+    let queued = QueuedMessage {
+        id: uuid::Uuid::new_v4(),
+        input: atte_lib::thread::UserInput {
+            body: "inspect".into(),
+            attachments: vec![media.clone()],
+        },
+        status: atte_lib::thread::QueuedMessageStatus::Pending,
+    };
+    rusqlite::Connection::open(&path)
+        .unwrap()
+        .execute(
+            "UPDATE threads SET queued_messages=?2 WHERE id=?1",
+            rusqlite::params![
+                draft.id.to_string(),
+                serde_json::to_string(&[&queued]).unwrap()
+            ],
+        )
+        .unwrap();
+    let draft_directory = root
+        .path()
+        .join("prompt-attachments")
+        .join(draft.id.to_string());
+    let other_directory = root
+        .path()
+        .join("prompt-attachments")
+        .join(other.id.to_string());
+    std::fs::create_dir_all(&draft_directory).unwrap();
+    std::fs::create_dir_all(&other_directory).unwrap();
+    let kept = draft_directory.join(media.id.to_string());
+    let orphan = draft_directory.join(uuid::Uuid::new_v4().to_string());
+    let untouched = other_directory.join(uuid::Uuid::new_v4().to_string());
+    std::fs::write(&kept, [1]).unwrap();
+    std::fs::write(&orphan, [2]).unwrap();
+    std::fs::write(&untouched, [3]).unwrap();
+    let restored = Threads::with_store(
+        vec![],
+        std::sync::Arc::new(atte_lib::storage::Store::open(&path).unwrap()),
+    )
+    .unwrap();
+    assert!(orphan.exists());
+
+    drop(restored.subscribe(draft.id).unwrap());
+
+    assert!(kept.exists());
+    assert!(!orphan.exists());
+    assert!(untouched.exists());
+    restored.delete_queued_message(draft.id, queued.id).unwrap();
+    assert!(!kept.exists());
 }
 
 #[test]

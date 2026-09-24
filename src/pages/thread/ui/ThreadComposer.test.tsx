@@ -280,6 +280,42 @@ it("selects files and renders removable duplicate basename chips without paths",
   );
 });
 
+it("shows media choices only for advertised prompt capabilities", async () => {
+  const onSelectMedia = vi.fn();
+  const current = readyThread();
+  current.promptCapabilities = { image: true, audio: false };
+  render(() => (
+    <I18nProvider>
+      <ThreadComposer
+        active={false}
+        thread={current}
+        agentName="Agent"
+        draft=""
+        answerPending={false}
+        cancelPending={false}
+        showStop={false}
+        stopping={false}
+        actionsEnabled={true}
+        canSend={true}
+        onDraftChange={() => {}}
+        onSelectMedia={onSelectMedia}
+        onSend={() => {}}
+        onCancel={() => {}}
+        onAnswer={() => {}}
+        onConfigure={() => {}}
+        onDeleteQueued={async () => {}}
+        onRetryQueued={async () => {}}
+      />
+    </I18nProvider>
+  ));
+
+  await userEvent.click(screen.getByRole("button", { name: "Add attachment" }));
+  expect(screen.getByRole("menuitem", { name: "Image" })).toBeTruthy();
+  expect(screen.queryByRole("menuitem", { name: "Audio" })).toBeNull();
+  await userEvent.click(screen.getByRole("menuitem", { name: "Image" }));
+  expect(onSelectMedia).toHaveBeenCalledWith("image");
+});
+
 it("disables every thread mutation while the subscription is unavailable", () => {
   const current = {
     ...readyThread(),

@@ -39,6 +39,9 @@ export function ThreadPage(props: {
     canSend,
     send,
     selectFiles,
+    selectMedia,
+    pasteImage,
+    rejectClipboardImage,
     removeAttachment,
     deleteQueued,
     answer,
@@ -293,6 +296,9 @@ export function ThreadPage(props: {
                   }
                   onDraftChange={setDraft}
                   onSelectFiles={() => void selectFiles()}
+                  onSelectMedia={(kind) => void selectMedia(kind)}
+                  onPasteImage={(image) => void pasteImage(image)}
+                  onUnsupportedImagePaste={rejectClipboardImage}
                   onRemoveAttachment={removeAttachment}
                   onSend={() => void send()}
                   onCancel={() => void cancel()}

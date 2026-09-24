@@ -38,7 +38,10 @@ export function QueuedMessage(props: {
                     <span class="flex min-w-0 flex-1 gap-1 overflow-hidden">
                       <For each={message()?.attachments}>
                         {(attachment) => (
-                          <AttachmentChip name={attachment.name} />
+                          <AttachmentChip
+                            name={attachment.name}
+                            kind={attachment.kind}
+                          />
                         )}
                       </For>
                     </span>

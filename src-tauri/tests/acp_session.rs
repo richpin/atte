@@ -1,7 +1,8 @@
 use atte_lib::{
     agent::AgentDefinition,
     thread::{
-        Attachment, QueuedMessageStatus, ThreadConfigurationValue, ThreadStatus, Threads, UserInput,
+        Attachment, AttachmentKind, MediaKind, QueuedMessageStatus, ThreadConfigurationValue,
+        ThreadStatus, Threads, UserInput,
     },
 };
 use std::{path::PathBuf, process::Command, sync::OnceLock, time::Duration};
@@ -869,11 +870,11 @@ async fn sends_attachment_only_input_as_a_resource_link() {
     threads.connect(draft.id).unwrap();
     settle(&threads, draft.id).await;
 
-    let attachment = Attachment {
-        id: uuid::Uuid::new_v4(),
-        name: "image.png".into(),
-        uri: "file:///tmp/a-very-long-image-name.png".into(),
-    };
+    let attachment = Attachment::file(
+        uuid::Uuid::new_v4(),
+        "image.png",
+        "file:///tmp/a-very-long-image-name.png",
+    );
     threads
         .send_input(
             draft.id,
@@ -905,11 +906,7 @@ async fn keeps_sent_attachment_metadata_on_the_turn() {
     let draft = threads.create(folder.path()).unwrap();
     threads.connect(draft.id).unwrap();
     settle(&threads, draft.id).await;
-    let attachment = Attachment {
-        id: uuid::Uuid::new_v4(),
-        name: "notes.txt".into(),
-        uri: "file:///tmp/notes.txt".into(),
-    };
+    let attachment = Attachment::file(uuid::Uuid::new_v4(), "notes.txt", "file:///tmp/notes.txt");
 
     threads
         .send_input(
@@ -927,6 +924,282 @@ async fn keeps_sent_attachment_metadata_on_the_turn() {
 }
 
 #[tokio::test]
+async fn sends_media_content_after_text_in_selection_order_and_removes_successful_snapshots() {
+    let root = tempfile::tempdir().unwrap();
+    let prompt_log = root.path().join("prompts.jsonl");
+    let session_file = root.path().join("session.json");
+    let store = std::sync::Arc::new(
+        atte_lib::storage::Store::open(&root.path().join("atte.sqlite")).unwrap(),
+    );
+    let mut agent = mock_agent();
+    agent.env.insert("MEDIA_CAPABILITIES".into(), "1".into());
+    agent.env.insert(
+        "PROMPT_JSON_LOG".into(),
+        prompt_log.to_string_lossy().into(),
+    );
+    agent
+        .env
+        .insert("SESSION_FILE".into(), session_file.to_string_lossy().into());
+    let threads = Threads::with_store(vec![agent.clone()], store.clone()).unwrap();
+    let draft = threads.create(root.path()).unwrap();
+    let image = Attachment::media(
+        uuid::Uuid::new_v4(),
+        "photo.png",
+        MediaKind::Image,
+        "image/png",
+    );
+    let audio = Attachment::media(
+        uuid::Uuid::new_v4(),
+        "voice.wav",
+        MediaKind::Audio,
+        "audio/wav",
+    );
+    let snapshot_directory = root
+        .path()
+        .join("prompt-attachments")
+        .join(draft.id.to_string());
+    std::fs::create_dir_all(&snapshot_directory).unwrap();
+    std::fs::write(snapshot_directory.join(image.id.to_string()), [1, 2, 3]).unwrap();
+    std::fs::write(snapshot_directory.join(audio.id.to_string()), [4, 5]).unwrap();
+    threads.connect(draft.id).unwrap();
+    let ready = settle(&threads, draft.id).await;
+    assert_eq!(
+        (
+            ready.prompt_capabilities.image,
+            ready.prompt_capabilities.audio
+        ),
+        (true, true)
+    );
+
+    threads
+        .send_input(
+            draft.id,
+            UserInput {
+                body: "inspect".into(),
+                attachments: vec![
+                    image.clone(),
+                    audio.clone(),
+                    Attachment::file(uuid::Uuid::new_v4(), "notes.txt", "file:///tmp/notes.txt"),
+                ],
+            },
+        )
+        .unwrap();
+    settle(&threads, draft.id).await;
+
+    let request: serde_json::Value =
+        serde_json::from_str(std::fs::read_to_string(prompt_log).unwrap().trim()).unwrap();
+    assert_eq!(
+        request["prompt"],
+        serde_json::json!([
+            {"type":"text","text":"inspect"},
+            {"type":"image","data":"AQID","mimeType":"image/png","_meta":{"atte/name":"photo.png"}},
+            {"type":"audio","data":"BAU=","mimeType":"audio/wav","_meta":{"atte/name":"voice.wav"}},
+            {"type":"resource_link","name":"notes.txt","uri":"file:///tmp/notes.txt"}
+        ])
+    );
+    assert!(!snapshot_directory.join(image.id.to_string()).exists());
+    assert!(!snapshot_directory.join(audio.id.to_string()).exists());
+    threads.shutdown().await;
+    drop(threads);
+    let restored = Threads::with_store(vec![agent], store).unwrap();
+    restored.connect(draft.id).unwrap();
+    let loaded = settle(&restored, draft.id).await;
+    assert_eq!(
+        loaded.turns[0]
+            .attachments
+            .iter()
+            .map(|attachment| (attachment.kind, attachment.name.as_str()))
+            .collect::<Vec<_>>(),
+        vec![
+            (AttachmentKind::Image, "photo.png"),
+            (AttachmentKind::Audio, "voice.wav"),
+            (AttachmentKind::File, "notes.txt"),
+        ]
+    );
+    let serialized = serde_json::to_value(&loaded.turns[0].attachments).unwrap();
+    assert!(serialized
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|attachment| attachment.get("data").is_none()));
+    restored.shutdown().await;
+}
+
+#[tokio::test]
+async fn restores_an_in_flight_direct_media_snapshot_before_the_response_finishes() {
+    let root = tempfile::tempdir().unwrap();
+    let database_path = root.path().join("atte.sqlite");
+    let gates = root.path().join("gates");
+    let store = std::sync::Arc::new(atte_lib::storage::Store::open(&database_path).unwrap());
+    let mut agent = mock_agent();
+    agent.env.insert("MEDIA_CAPABILITIES".into(), "1".into());
+    agent
+        .env
+        .insert("PROMPT_GATE_DIR".into(), gates.to_string_lossy().into());
+    let threads = Threads::with_store(vec![agent.clone()], store).unwrap();
+    let draft = threads.create(root.path()).unwrap();
+    let image = Attachment::media(
+        uuid::Uuid::new_v4(),
+        "photo.png",
+        MediaKind::Image,
+        "image/png",
+    );
+    let snapshot = root
+        .path()
+        .join("prompt-attachments")
+        .join(draft.id.to_string())
+        .join(image.id.to_string());
+    std::fs::create_dir_all(snapshot.parent().unwrap()).unwrap();
+    std::fs::write(&snapshot, [1, 2, 3]).unwrap();
+    threads.connect(draft.id).unwrap();
+    settle(&threads, draft.id).await;
+
+    threads
+        .send_input(
+            draft.id,
+            UserInput {
+                body: "inspect".into(),
+                attachments: vec![image.clone()],
+            },
+        )
+        .unwrap();
+    wait_for_path(&gates.join("1.arrived")).await;
+
+    let restored = Threads::with_store(
+        vec![agent],
+        std::sync::Arc::new(atte_lib::storage::Store::open(&database_path).unwrap()),
+    )
+    .unwrap();
+    let loaded = restored.get(draft.id).unwrap();
+    assert_eq!(loaded.queued_messages[0].input.attachments, [image]);
+    drop(restored.subscribe(draft.id).unwrap());
+    assert!(snapshot.exists());
+    drop(restored);
+
+    std::fs::write(gates.join("1.release"), []).unwrap();
+    settle(&threads, draft.id).await;
+    assert!(!snapshot.exists());
+    threads.shutdown().await;
+}
+
+#[tokio::test]
+async fn removes_a_queued_media_snapshot_after_its_prompt_succeeds() {
+    let root = tempfile::tempdir().unwrap();
+    let database_path = root.path().join("atte.sqlite");
+    let gates = root.path().join("gates");
+    let store = std::sync::Arc::new(atte_lib::storage::Store::open(&database_path).unwrap());
+    let mut agent = mock_agent();
+    agent.env.insert("MEDIA_CAPABILITIES".into(), "1".into());
+    agent
+        .env
+        .insert("PROMPT_GATE_DIR".into(), gates.to_string_lossy().into());
+    let threads = Threads::with_store(vec![agent], store).unwrap();
+    let draft = threads.create(root.path()).unwrap();
+    let audio = Attachment::media(
+        uuid::Uuid::new_v4(),
+        "voice.wav",
+        MediaKind::Audio,
+        "audio/wav",
+    );
+    let snapshot = root
+        .path()
+        .join("prompt-attachments")
+        .join(draft.id.to_string())
+        .join(audio.id.to_string());
+    std::fs::create_dir_all(snapshot.parent().unwrap()).unwrap();
+    std::fs::write(&snapshot, [1, 2, 3]).unwrap();
+    threads.connect(draft.id).unwrap();
+    settle(&threads, draft.id).await;
+
+    threads.send_message(draft.id, "active".into()).unwrap();
+    threads
+        .send_input(
+            draft.id,
+            UserInput {
+                body: "listen".into(),
+                attachments: vec![audio.clone()],
+            },
+        )
+        .unwrap();
+    wait_for_path(&gates.join("1.arrived")).await;
+    std::fs::write(gates.join("1.release"), []).unwrap();
+    wait_for_path(&gates.join("2.arrived")).await;
+    assert!(threads.get(draft.id).unwrap().queued_messages.is_empty());
+    assert!(snapshot.exists());
+
+    std::fs::write(gates.join("2.release"), []).unwrap();
+    settle(&threads, draft.id).await;
+    assert!(!snapshot.exists());
+    let saved: String = rusqlite::Connection::open(&database_path)
+        .unwrap()
+        .query_row(
+            "SELECT queued_messages FROM threads WHERE id=?1",
+            [draft.id.to_string()],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(saved, "[]");
+    threads.shutdown().await;
+}
+
+#[tokio::test]
+async fn rejected_media_prompt_becomes_failed_input_without_resource_link_fallback() {
+    let root = tempfile::tempdir().unwrap();
+    let prompt_log = root.path().join("prompts.jsonl");
+    let store = std::sync::Arc::new(
+        atte_lib::storage::Store::open(&root.path().join("atte.sqlite")).unwrap(),
+    );
+    let mut agent = mock_agent();
+    agent.env.insert("MEDIA_CAPABILITIES".into(), "1".into());
+    agent
+        .env
+        .insert("FIXTURE_MODE".into(), "prompt-error".into());
+    agent.env.insert(
+        "PROMPT_JSON_LOG".into(),
+        prompt_log.to_string_lossy().into(),
+    );
+    let threads = Threads::with_store(vec![agent], store).unwrap();
+    let draft = threads.create(root.path()).unwrap();
+    let image = Attachment::media(
+        uuid::Uuid::new_v4(),
+        "photo.png",
+        MediaKind::Image,
+        "image/png",
+    );
+    let snapshot = root
+        .path()
+        .join("prompt-attachments")
+        .join(draft.id.to_string())
+        .join(image.id.to_string());
+    std::fs::create_dir_all(snapshot.parent().unwrap()).unwrap();
+    std::fs::write(&snapshot, [1, 2, 3]).unwrap();
+    threads.connect(draft.id).unwrap();
+    settle(&threads, draft.id).await;
+
+    threads
+        .send_input(
+            draft.id,
+            UserInput {
+                body: String::new(),
+                attachments: vec![image.clone()],
+            },
+        )
+        .unwrap();
+    let failed = settle(&threads, draft.id).await;
+
+    assert_eq!(
+        failed.queued_messages[0].status,
+        QueuedMessageStatus::Failed
+    );
+    assert_eq!(failed.queued_messages[0].input.attachments, [image]);
+    assert!(snapshot.exists());
+    assert!(!std::fs::read_to_string(prompt_log)
+        .unwrap()
+        .contains("resource_link"));
+    threads.shutdown().await;
+}
+
+#[tokio::test]
 async fn uses_the_first_attachment_basename_as_an_empty_body_title() {
     let folder = tempfile::tempdir().unwrap();
     let threads = Threads::new(vec![mock_agent()]);
@@ -940,11 +1213,11 @@ async fn uses_the_first_attachment_basename_as_an_empty_body_title() {
             draft.id,
             UserInput {
                 body: String::new(),
-                attachments: vec![Attachment {
-                    id: uuid::Uuid::new_v4(),
-                    name: attachment_name.clone(),
-                    uri: "file:///tmp/image.png".into(),
-                }],
+                attachments: vec![Attachment::file(
+                    uuid::Uuid::new_v4(),
+                    attachment_name.clone(),
+                    "file:///tmp/image.png",
+                )],
             },
         )
         .unwrap();
@@ -986,16 +1259,8 @@ async fn queued_resource_links_keep_selection_order_after_source_files_disappear
             UserInput {
                 body: "inspect".into(),
                 attachments: vec![
-                    Attachment {
-                        id: uuid::Uuid::new_v4(),
-                        name: "first.txt".into(),
-                        uri: "file:///tmp/first.txt".into(),
-                    },
-                    Attachment {
-                        id: uuid::Uuid::new_v4(),
-                        name: "second.mp3".into(),
-                        uri: "file:///tmp/second.mp3".into(),
-                    },
+                    Attachment::file(uuid::Uuid::new_v4(), "first.txt", "file:///tmp/first.txt"),
+                    Attachment::file(uuid::Uuid::new_v4(), "second.mp3", "file:///tmp/second.mp3"),
                 ],
             },
         )
@@ -1629,11 +1894,11 @@ async fn replay_restores_resource_links_as_read_only_attachment_metadata() {
             draft.id,
             UserInput {
                 body: "Review".into(),
-                attachments: vec![Attachment {
-                    id: uuid::Uuid::new_v4(),
-                    name: "report.pdf".into(),
-                    uri: "file:///tmp/report.pdf".into(),
-                }],
+                attachments: vec![Attachment::file(
+                    uuid::Uuid::new_v4(),
+                    "report.pdf",
+                    "file:///tmp/report.pdf",
+                )],
             },
         )
         .unwrap();
@@ -1648,9 +1913,9 @@ async fn replay_restores_resource_links_as_read_only_attachment_metadata() {
         (
             loaded.turns[0].message.as_str(),
             loaded.turns[0].attachments[0].name.as_str(),
-            loaded.turns[0].attachments[0].uri.as_str(),
+            loaded.turns[0].attachments[0].uri.as_deref(),
         ),
-        ("Review", "report.pdf", "file:///tmp/report.pdf")
+        ("Review", "report.pdf", Some("file:///tmp/report.pdf"))
     );
     restored.shutdown().await;
 }

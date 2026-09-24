@@ -59,7 +59,9 @@ function UserMessage(props: { message: string; attachments: Attachment[] }) {
           }
         >
           <For each={props.attachments}>
-            {(attachment) => <AttachmentChip name={attachment.name} />}
+            {(attachment) => (
+              <AttachmentChip name={attachment.name} kind={attachment.kind} />
+            )}
           </For>
         </div>
       </Show>

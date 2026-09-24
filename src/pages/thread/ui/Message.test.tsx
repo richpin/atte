@@ -111,6 +111,37 @@ it("renders sent resource links as non-clickable basename chips", () => {
   expect(screen.queryByText(/secret/)).toBeNull();
 });
 
+it("renders sent media as basename-only read-only typed chips", () => {
+  const attached = turn("");
+  attached.attachments = [
+    {
+      id: "image",
+      name: "diagram.png",
+      kind: "image",
+      mimeType: "image/png",
+    },
+    {
+      id: "audio",
+      name: "voice.wav",
+      kind: "audio",
+      mimeType: "audio/wav",
+    },
+  ];
+  render(() => (
+    <I18nProvider>
+      <Message turns={[attached]} />
+    </I18nProvider>
+  ));
+
+  expect(screen.getByText("Image")).toBeTruthy();
+  expect(screen.getByText("diagram.png")).toBeTruthy();
+  expect(screen.getByText("Audio")).toBeTruthy();
+  expect(screen.getByText("voice.wav")).toBeTruthy();
+  expect(screen.queryByRole("button")).toBeNull();
+  expect(screen.queryByRole("img")).toBeNull();
+  expect(screen.queryByRole("audio")).toBeNull();
+});
+
 it("updates only the actively streaming message body", () => {
   const [turns, setTurns] = createStore<Turn[]>([
     {

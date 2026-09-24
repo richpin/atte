@@ -2,6 +2,7 @@
 mod list;
 use crate::agent::{prepared_codex, AgentDefinition, PreparedAgent};
 use crate::agent_management::authentication::AuthenticationObservation;
+use crate::file_selection::MediaStore;
 use crate::storage::{StorageError, Store};
 use serde::{Deserialize, Serialize};
 use std::{
@@ -46,6 +47,7 @@ pub struct Thread {
     pub permissions: Vec<PermissionRequest>,
     pub queued_messages: Vec<QueuedMessage>,
     pub configuration: Vec<ThreadConfiguration>,
+    pub prompt_capabilities: PromptCapabilities,
 }
 
 /// Current thread fields excluding the potentially large transcript.
@@ -60,6 +62,7 @@ pub struct ThreadPatch {
     pub permissions: Vec<PermissionRequest>,
     pub queued_messages: Vec<QueuedMessage>,
     pub configuration: Vec<ThreadConfiguration>,
+    pub prompt_capabilities: PromptCapabilities,
 }
 
 impl From<&Thread> for ThreadPatch {
@@ -72,6 +75,7 @@ impl From<&Thread> for ThreadPatch {
             permissions: thread.permissions.clone(),
             queued_messages: thread.queued_messages.clone(),
             configuration: thread.configuration.clone(),
+            prompt_capabilities: thread.prompt_capabilities.clone(),
         }
     }
 }
@@ -111,6 +115,7 @@ impl ThreadPatch {
         thread.permissions = self.permissions;
         thread.queued_messages = self.queued_messages;
         thread.configuration = self.configuration;
+        thread.prompt_capabilities = self.prompt_capabilities;
         true
     }
 }
@@ -269,13 +274,82 @@ impl UserInput {
     }
 }
 
-/// Display metadata and URI for one linked file.
+/// Metadata for one ordered prompt attachment.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Attachment {
     pub id: Uuid,
     pub name: String,
-    pub uri: String,
+    #[serde(default)]
+    pub kind: AttachmentKind,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub uri: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mime_type: Option<String>,
+}
+
+impl Attachment {
+    /// Creates a linked-file attachment from its display name and URI.
+    pub fn file(id: Uuid, name: impl Into<String>, uri: impl Into<String>) -> Self {
+        Self {
+            id,
+            name: name.into(),
+            kind: AttachmentKind::File,
+            uri: Some(uri.into()),
+            mime_type: None,
+        }
+    }
+
+    /// Creates an image or audio attachment backed by an app-managed snapshot.
+    pub fn media(
+        id: Uuid,
+        name: impl Into<String>,
+        kind: MediaKind,
+        mime_type: impl Into<String>,
+    ) -> Self {
+        Self {
+            id,
+            name: name.into(),
+            kind: kind.into(),
+            uri: None,
+            mime_type: Some(mime_type.into()),
+        }
+    }
+}
+
+/// The ACP content representation used for an attachment.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum AttachmentKind {
+    #[default]
+    File,
+    Image,
+    Audio,
+}
+
+/// An attachment kind that ACP carries as inline content.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum MediaKind {
+    Image,
+    Audio,
+}
+
+impl From<MediaKind> for AttachmentKind {
+    fn from(kind: MediaKind) -> Self {
+        match kind {
+            MediaKind::Image => Self::Image,
+            MediaKind::Audio => Self::Audio,
+        }
+    }
+}
+
+/// Media input types advertised by the active ACP session.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PromptCapabilities {
+    pub image: bool,
+    pub audio: bool,
 }
 
 /// A queued input blocks later input after a delivery failure.
@@ -403,6 +477,7 @@ pub enum ThreadError {
 pub struct Threads {
     list: Arc<Mutex<list::ThreadList>>,
     store: Option<Arc<Store>>,
+    media_store: Option<Arc<MediaStore>>,
     agents: Mutex<Vec<AgentDefinition>>,
     lifecycle: tokio::sync::Mutex<()>,
     shutdown: CancellationToken,
@@ -511,11 +586,31 @@ impl Default for Threads {
 }
 
 impl Threads {
+    pub(crate) fn media_store(&self) -> Option<Arc<MediaStore>> {
+        self.media_store.clone()
+    }
+
+    pub(crate) fn supports_attachment(
+        &self,
+        id: Uuid,
+        kind: AttachmentKind,
+    ) -> Result<bool, ThreadError> {
+        let state = self.lock()?;
+        let entry = state.entries.get(&id).ok_or_else(not_found)?;
+        let current = entry.state.lock().map_err(|_| unavailable())?;
+        Ok(match kind {
+            AttachmentKind::File => true,
+            AttachmentKind::Image => current.thread.prompt_capabilities.image,
+            AttachmentKind::Audio => current.thread.prompt_capabilities.audio,
+        })
+    }
+
     /// Uses trusted launch definitions supplied by the outer application adapter.
     pub fn new(agents: Vec<AgentDefinition>) -> Self {
         Self {
             list: Arc::default(),
             store: None,
+            media_store: None,
             agents: Mutex::new(agents),
             lifecycle: tokio::sync::Mutex::new(()),
             shutdown: CancellationToken::new(),
@@ -531,6 +626,7 @@ impl Threads {
         agents: Vec<AgentDefinition>,
         store: Arc<Store>,
     ) -> Result<Self, StorageError> {
+        let media_store = Arc::new(MediaStore::new(store.root().join("prompt-attachments")));
         let mut entries = HashMap::new();
         let list = Arc::new(Mutex::new(list::ThreadList::default()));
         for saved in store.threads()? {
@@ -566,6 +662,7 @@ impl Threads {
                 permissions: Vec::new(),
                 queued_messages: store.queued_messages(saved.id)?,
                 configuration: Vec::new(),
+                prompt_capabilities: PromptCapabilities::default(),
             };
             entries.insert(
                 thread.id,
@@ -579,6 +676,7 @@ impl Threads {
                         subscribers: Vec::new(),
                         permissions: HashMap::new(),
                         store: Some(store.clone()),
+                        media_store: Some(media_store.clone()),
                         draining: false,
                         dispatch_queue_on_ready: false,
                         dispatching_queued: None,
@@ -604,6 +702,7 @@ impl Threads {
         Ok(Self {
             list,
             store: Some(store),
+            media_store: Some(media_store),
             state: Mutex::new(State {
                 entries,
                 closed: false,
@@ -1041,6 +1140,7 @@ impl Threads {
             permissions: Vec::new(),
             queued_messages: Vec::new(),
             configuration: Vec::new(),
+            prompt_capabilities: PromptCapabilities::default(),
         };
         let mut state = self.lock()?;
         if state.closed {
@@ -1063,6 +1163,7 @@ impl Threads {
                     subscribers: Vec::new(),
                     permissions: HashMap::new(),
                     store: self.store.clone(),
+                    media_store: self.media_store.clone(),
                     draining: false,
                     dispatch_queue_on_ready: false,
                     dispatching_queued: None,
@@ -1125,6 +1226,9 @@ impl Threads {
         drop(current);
         let mut removed = state.entries.remove(&id).ok_or_else(not_found)?;
         list.remove(id);
+        if let Some(store) = &self.media_store {
+            store.cleanup_orphans(id, []);
+        }
         if let Some(session_id) = session_id {
             let (runtime, inputs_to_close) =
                 if let Some(SessionCommands { inputs, runtime }) = removed.runtime.take() {
@@ -1292,6 +1396,7 @@ impl Threads {
         let state = self.lock()?;
         let entry = state.entries.get(&id).ok_or_else(not_found)?;
         let mut current = entry.state.lock().map_err(|_| unavailable())?;
+        current.cleanup_orphan_media();
         let (sender, receiver) = mpsc::unbounded_channel();
         let _ = sender.send(ThreadUpdate::Thread {
             thread: Box::new(current.thread.clone()),
@@ -1329,6 +1434,19 @@ impl Threads {
         }
         let entry = state.entries.get(&id).ok_or_else(not_found)?;
         let mut current = entry.state.lock().map_err(|_| unavailable())?;
+        if input
+            .attachments
+            .iter()
+            .any(|attachment| match attachment.kind {
+                AttachmentKind::File => false,
+                AttachmentKind::Image => !current.thread.prompt_capabilities.image,
+                AttachmentKind::Audio => !current.thread.prompt_capabilities.audio,
+            })
+        {
+            return Err(ThreadError::InvalidMessage(
+                "에이전트가 이 미디어 첨부를 지원하지 않습니다.".into(),
+            ));
+        }
         if state
             .agent_transitions
             .get(&current.thread.agent_id)
@@ -1354,15 +1472,38 @@ impl Threads {
         }
         let runtime = entry.runtime.as_ref().ok_or_else(unavailable)?;
         let turn = Uuid::new_v4();
-        runtime
+        let durable_media = input
+            .attachments
+            .iter()
+            .any(|attachment| attachment.kind != AttachmentKind::File)
+            .then(|| QueuedMessage {
+                id: Uuid::new_v4(),
+                input: input.clone(),
+                status: QueuedMessageStatus::Pending,
+            });
+        if let Some(pending) = &durable_media {
+            current.dispatching_queued = Some(pending.clone());
+            let queue = current.thread.queued_messages.clone();
+            if let Err(error) = current.save_queue(queue) {
+                current.dispatching_queued = None;
+                return Err(error);
+            }
+        }
+        if runtime
             .inputs
             .prompts
             .send(Prompt {
                 turn,
                 input: input.clone(),
-                queued_message: None,
+                queued_message: durable_media.as_ref().map(|pending| pending.id),
             })
-            .map_err(|_| unavailable())?;
+            .is_err()
+        {
+            current.dispatching_queued = None;
+            let queue = current.thread.queued_messages.clone();
+            current.save_queue(queue)?;
+            return Err(unavailable());
+        }
         current.thread.status = ThreadStatus::Running;
         current.thread.last_prompt_at = next_prompt_at();
         current.thread.failure = None;
@@ -1516,8 +1657,9 @@ impl Threads {
                 ThreadError::NotReady("이미 전송되었거나 삭제된 메시지입니다.".into())
             })?;
         let resumes_queue = index == 0 && queue[index].status == QueuedMessageStatus::Failed;
-        queue.remove(index);
+        let removed = queue.remove(index);
         current.save_queue(queue)?;
+        current.remove_unreferenced_media(&removed.input.attachments);
         let next = if resumes_queue {
             match current.thread.status {
                 ThreadStatus::SessionReady => current.prepare_next_queued_prompt(),
@@ -1839,6 +1981,13 @@ fn not_found() -> ThreadError {
     ThreadError::NotFound("스레드를 찾을 수 없습니다.".into())
 }
 
+fn media_attachment_ids(attachments: &[Attachment]) -> impl Iterator<Item = Uuid> + '_ {
+    attachments
+        .iter()
+        .filter(|attachment| attachment.kind != AttachmentKind::File)
+        .map(|attachment| attachment.id)
+}
+
 /// One accepted user message and its streamed response.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -1866,6 +2015,7 @@ pub(crate) struct ConfigurationChange {
 struct ThreadState {
     list: Arc<Mutex<list::ThreadList>>,
     store: Option<Arc<Store>>,
+    media_store: Option<Arc<MediaStore>>,
     thread: Thread,
     confirmed_configuration: Vec<ThreadConfiguration>,
     desired_configuration: HashMap<String, DesiredConfiguration>,
@@ -1903,6 +2053,7 @@ impl ThreadState {
         self.thread.configuration.clear();
         self.confirmed_configuration.clear();
         self.desired_configuration.clear();
+        self.thread.prompt_capabilities = PromptCapabilities::default();
     }
 
     fn reconcile_configuration(&mut self) {
@@ -1929,12 +2080,52 @@ impl ThreadState {
 
     fn save_queue(&mut self, queue: Vec<QueuedMessage>) -> Result<(), ThreadError> {
         if let Some(store) = &self.store {
+            let mut durable = queue.clone();
+            if let Some(dispatching) = &self.dispatching_queued {
+                if !durable.iter().any(|queued| queued.id == dispatching.id) {
+                    durable.insert(0, dispatching.clone());
+                }
+            }
             store
-                .save_queue(self.thread.id, &queue)
+                .save_queue(self.thread.id, &durable)
                 .map_err(|error| ThreadError::Unavailable(error.to_string()))?;
         }
         self.thread.queued_messages = queue;
         Ok(())
+    }
+
+    fn cleanup_orphan_media(&self) {
+        let Some(store) = &self.media_store else {
+            return;
+        };
+        store.cleanup_orphans(
+            self.thread.id,
+            self.thread
+                .queued_messages
+                .iter()
+                .flat_map(|queued| media_attachment_ids(&queued.input.attachments))
+                .chain(
+                    self.dispatching_queued
+                        .iter()
+                        .flat_map(|queued| media_attachment_ids(&queued.input.attachments)),
+                ),
+        );
+    }
+
+    fn remove_unreferenced_media(&self, attachments: &[Attachment]) {
+        let Some(store) = &self.media_store else {
+            return;
+        };
+        let referenced = self
+            .thread
+            .queued_messages
+            .iter()
+            .flat_map(|queued| media_attachment_ids(&queued.input.attachments))
+            .collect::<HashSet<_>>();
+        store.remove(
+            self.thread.id,
+            media_attachment_ids(attachments).filter(|id| !referenced.contains(id)),
+        );
     }
 
     fn clear_permissions(&mut self) {
@@ -2152,10 +2343,55 @@ pub(crate) struct RuntimeUpdates {
 }
 
 impl RuntimeUpdates {
+    pub fn media_bytes(&self, attachment: Uuid) -> Result<Vec<u8>, ThreadError> {
+        let state = self.state.lock().map_err(|_| unavailable())?;
+        if state.generation != self.generation {
+            return Err(unavailable());
+        }
+        state
+            .media_store
+            .as_ref()
+            .ok_or_else(unavailable)?
+            .read(state.thread.id, attachment)
+    }
+
+    pub fn direct_prompt_failed(&self, turn: Uuid, input: UserInput) {
+        if !input
+            .attachments
+            .iter()
+            .any(|attachment| attachment.kind != AttachmentKind::File)
+        {
+            return;
+        }
+        let Ok(mut state) = self.state.lock() else {
+            return;
+        };
+        if state.generation != self.generation
+            || state.thread.turns.last().map(|active| active.id) != Some(turn)
+        {
+            return;
+        }
+        let mut queue = state.thread.queued_messages.clone();
+        queue.insert(
+            0,
+            QueuedMessage {
+                id: Uuid::new_v4(),
+                input,
+                status: QueuedMessageStatus::Failed,
+            },
+        );
+        if let Err(error) = state.save_queue(queue) {
+            state.thread.notice = Some(error.to_string());
+        }
+        state.thread.turns.pop();
+        state.publish();
+    }
+
     pub fn session_ready(
         &self,
         session_id: String,
         configuration: Vec<ThreadConfiguration>,
+        prompt_capabilities: PromptCapabilities,
     ) -> Option<Prompt> {
         let mut state = self.state.lock().ok()?;
         if state.generation != self.generation {
@@ -2164,6 +2400,7 @@ impl RuntimeUpdates {
         state.thread.session_id = Some(session_id);
         state.thread.status = ThreadStatus::SessionReady;
         state.confirmed_configuration = configuration;
+        state.thread.prompt_capabilities = prompt_capabilities;
         state.desired_configuration.clear();
         state.reconcile_configuration();
         let next = state
@@ -2333,19 +2570,23 @@ impl RuntimeUpdates {
                 .and_then(|value| value.as_str().map(str::to_owned));
         }
         if let Some(queued_message) = state.dispatching_queued.take() {
+            let completed_attachments = queued_message.input.attachments.clone();
             let mut queue = state.thread.queued_messages.clone();
             if let Some(index) = queue
                 .iter()
                 .position(|queued| queued.id == queued_message.id)
             {
                 queue.remove(index);
-                if let Err(error) = state.save_queue(queue) {
-                    state.thread.notice = Some(error.to_string());
-                    state.thread.status = ThreadStatus::SessionReady;
-                    state.publish();
-                    return None;
-                }
             }
+            if let Err(error) = state.save_queue(queue) {
+                state.thread.notice = Some(error.to_string());
+                state.thread.status = ThreadStatus::SessionReady;
+                state.publish();
+                return None;
+            }
+            state.remove_unreferenced_media(&completed_attachments);
+        } else if let Some(completed) = state.thread.turns.last() {
+            state.remove_unreferenced_media(&completed.attachments);
         }
         state.thread.status = ThreadStatus::SessionReady;
         state.thread.authentication = AuthenticationStatus::Authenticated;
@@ -2376,10 +2617,9 @@ impl RuntimeUpdates {
             return;
         }
         let mut queue = state.thread.queued_messages.clone();
-        let Some(index) = queue.iter().position(|queued| queued.id == queued_message) else {
-            return;
-        };
-        queue.remove(index);
+        if let Some(index) = queue.iter().position(|queued| queued.id == queued_message) {
+            queue.remove(index);
+        }
         if let Err(error) = state.save_queue(queue) {
             state.thread.notice = Some(error.to_string());
         }

@@ -1,6 +1,7 @@
 import { Channel, invoke } from "@tauri-apps/api/core";
 import type {
   FileSelection,
+  MediaKind,
   PreparedAgent,
   ThreadConfigurationValue,
   ThreadMetadata,
@@ -31,8 +32,26 @@ export function deleteThread(id: string) {
   return invoke<void>("delete_thread", { id });
 }
 
-export function selectFiles(dialogTitle: string) {
-  return invoke<FileSelection>("select_files", { dialogTitle });
+export function selectFiles(id: string, dialogTitle: string) {
+  return invoke<FileSelection>("select_files", { id, dialogTitle });
+}
+
+export function selectMedia(id: string, kind: MediaKind, dialogTitle: string) {
+  return invoke<FileSelection>("select_media", { id, kind, dialogTitle });
+}
+
+export function snapshotClipboardImage(
+  id: string,
+  name: string,
+  mimeType: string,
+  bytes: number[],
+) {
+  return invoke<FileSelection>("snapshot_clipboard_image", {
+    id,
+    name,
+    mimeType,
+    bytes,
+  });
 }
 
 export function sendMessage(id: string, input: UserInput) {

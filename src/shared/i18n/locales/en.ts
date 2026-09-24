@@ -60,6 +60,7 @@ export const en = {
       connect: "The connection could not be started. Try again.",
       selectFolder: "The folder could not be selected. Try again.",
       selectFiles: "The files could not be selected. Try again.",
+      selectMedia: "The media could not be attached. Try again.",
       create: "The new thread could not be created.",
       agents: "Ready agents could not be loaded.",
       configure: "The thread setting could not be changed.",
@@ -70,6 +71,8 @@ export const en = {
     selectFolder: "Choose folder",
     folderDialogTitle: "Choose a working folder",
     fileDialogTitle: "Choose files to attach",
+    imageDialogTitle: "Choose images to attach",
+    audioDialogTitle: "Choose audio to attach",
     manageAgents: "Manage agents",
     empty: {
       title: "Where do you want to work?",
@@ -98,8 +101,15 @@ export const en = {
     send: "Send",
     addAttachment: "Add attachment",
     file: "File",
+    image: "Image",
+    audio: "Audio",
     attachmentDescription:
       "Links the original file path. The agent might not be able to read it.",
+    imageAttachmentDescription:
+      "Image content attached from the selection-time snapshot.",
+    audioAttachmentDescription:
+      "Audio content attached from the selection-time snapshot.",
+    imagePasteUnsupported: "This agent does not accept image attachments.",
     removeAttachment: "Remove attachment: {{ name }}",
     fileUnavailable:
       "{{ name }} could not be attached because it is not an available file.",

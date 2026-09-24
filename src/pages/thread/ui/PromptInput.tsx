@@ -12,6 +12,8 @@ export function PromptInput(props: {
   focusKey?: string;
   onInput: (value: string) => void;
   onSubmit: () => void;
+  onPasteImage?: (image: File) => void;
+  onUnsupportedImagePaste?: () => void;
 }) {
   const { t } = useI18n();
   let input: HTMLTextAreaElement | undefined;
@@ -76,6 +78,17 @@ export function PromptInput(props: {
       onInput={(event) => {
         props.onInput(event.currentTarget.value);
         resizeInput();
+      }}
+      onPaste={(event) => {
+        const clipboard = event.clipboardData;
+        if (!clipboard || clipboard.getData("text/plain").length > 0) return;
+        const image = [...clipboard.files].find((file) =>
+          file.type.startsWith("image/"),
+        );
+        if (!image) return;
+        event.preventDefault();
+        if (props.onPasteImage) props.onPasteImage(image);
+        else props.onUnsupportedImagePaste?.();
       }}
       onKeyDown={(event) => {
         if (

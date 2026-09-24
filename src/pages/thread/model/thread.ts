@@ -24,14 +24,17 @@ import {
   releaseFiles,
   retryQueuedMessage,
   selectFiles as selectFilesCommand,
+  selectMedia as selectMediaCommand,
   selectWorkingFolder,
   sendMessage,
   setThreadConfiguration,
+  snapshotClipboardImage,
   subscribeThread,
   subscribeThreadList,
 } from "../api/threads";
 import type {
   Attachment,
+  MediaKind,
   Thread,
   ThreadConfigurationValue,
   ThreadMetadata,
@@ -441,7 +444,10 @@ export function createThreadModel(queryClient?: QueryClient) {
     if (!current || !canSend()) return;
     setAttachmentErrors([]);
     try {
-      const selection = await selectFilesCommand(t("thread.fileDialogTitle"));
+      const selection = await selectFilesCommand(
+        current.id,
+        t("thread.fileDialogTitle"),
+      );
       if (!isCurrent(expectedView)) {
         void releaseFiles(selection.attachments.map(({ id }) => id)).catch(
           () => undefined,
@@ -457,6 +463,75 @@ export function createThreadModel(queryClient?: QueryClient) {
       if (isCurrent(expectedView))
         setError(localizedMessage(cause, "thread.error.selectFiles"));
     }
+  }
+
+  async function selectMedia(kind: MediaKind) {
+    const expectedView = view;
+    const current = thread();
+    if (!current || !canSend() || !current.promptCapabilities?.[kind]) return;
+    setAttachmentErrors([]);
+    try {
+      const selection = await selectMediaCommand(
+        current.id,
+        kind,
+        kind === "image"
+          ? t("thread.imageDialogTitle")
+          : t("thread.audioDialogTitle"),
+      );
+      if (!isCurrent(expectedView)) {
+        void releaseFiles(selection.attachments.map(({ id }) => id)).catch(
+          () => undefined,
+        );
+        return;
+      }
+      setThreadAttachments(current.id, [
+        ...draftAttachments(),
+        ...selection.attachments,
+      ]);
+      setAttachmentErrors(selection.errors.map(({ name }) => name));
+    } catch (cause) {
+      if (isCurrent(expectedView))
+        setError(localizedMessage(cause, "thread.error.selectMedia"));
+    }
+  }
+
+  async function pasteImage(image: File) {
+    const expectedView = view;
+    const current = thread();
+    if (!current || !canSend()) return;
+    if (!current.promptCapabilities?.image) {
+      setError(t("thread.imagePasteUnsupported"));
+      return;
+    }
+    setAttachmentErrors([]);
+    try {
+      const bytes = Array.from(new Uint8Array(await image.arrayBuffer()));
+      const extension =
+        image.type.split("/")[1]?.replace("jpeg", "jpg") || "png";
+      const selection = await snapshotClipboardImage(
+        current.id,
+        image.name || `pasted-image.${extension}`,
+        image.type,
+        bytes,
+      );
+      if (!isCurrent(expectedView)) {
+        void releaseFiles(selection.attachments.map(({ id }) => id)).catch(
+          () => undefined,
+        );
+        return;
+      }
+      setThreadAttachments(current.id, [
+        ...draftAttachments(),
+        ...selection.attachments,
+      ]);
+    } catch (cause) {
+      if (isCurrent(expectedView))
+        setError(localizedMessage(cause, "thread.error.selectMedia"));
+    }
+  }
+
+  function rejectClipboardImage() {
+    setError(t("thread.imagePasteUnsupported"));
   }
 
   function removeAttachment(id: string) {
@@ -671,6 +746,9 @@ export function createThreadModel(queryClient?: QueryClient) {
     openThread,
     send,
     selectFiles,
+    selectMedia,
+    pasteImage,
+    rejectClipboardImage,
     removeAttachment,
     deleteQueued,
     retryQueued,

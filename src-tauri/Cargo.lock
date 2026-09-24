@@ -271,9 +271,11 @@ name = "atte"
 version = "0.1.0"
 dependencies = [
  "agent-client-protocol",
+ "base64 0.22.1",
  "bzip2",
  "flate2",
  "futures-util",
+ "infer",
  "nix",
  "objc2",
  "objc2-app-kit",

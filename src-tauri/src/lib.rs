@@ -10,7 +10,8 @@ pub mod storage;
 pub mod thread;
 
 use file_selection::{
-    prepare_file_selection, FileSelection, FileSelectionError, SelectedFiles, SubmittedInput,
+    prepare_file_selection, prepare_media_selection, FileSelection, FileSelectionError,
+    SelectedFiles, SubmittedInput,
 };
 use std::{
     collections::HashMap,
@@ -18,7 +19,9 @@ use std::{
 };
 use tauri::{Manager, State};
 use tauri_plugin_dialog::DialogExt;
-use thread::{ThreadError, ThreadMetadata, ThreadUpdate, Threads};
+use thread::{
+    Attachment, AttachmentKind, MediaKind, ThreadError, ThreadMetadata, ThreadUpdate, Threads,
+};
 use tokio::sync::oneshot;
 use uuid::Uuid;
 
@@ -61,6 +64,7 @@ async fn select_working_folder(
 #[tauri::command]
 async fn select_files(
     app: tauri::AppHandle,
+    id: Uuid,
     dialog_title: String,
     window: tauri::WebviewWindow,
 ) -> Result<FileSelection, ThreadError> {
@@ -84,13 +88,104 @@ async fn select_files(
         let mut result = prepare_file_selection(paths);
         result.errors.extend(invalid);
         app.state::<SelectedFiles>()
-            .remember(window.label(), &result)?;
+            .remember(window.label(), id, &result)?;
         Ok(result)
     })
     .await
     .map_err(|_| {
         ThreadError::Unavailable("파일 선택을 완료할 수 없습니다. 다시 시도해주세요.".into())
     })?
+}
+
+#[tauri::command]
+async fn select_media(
+    app: tauri::AppHandle,
+    id: Uuid,
+    kind: MediaKind,
+    dialog_title: String,
+    window: tauri::WebviewWindow,
+) -> Result<FileSelection, ThreadError> {
+    if !app
+        .state::<Threads>()
+        .supports_attachment(id, kind.into())?
+    {
+        return Err(ThreadError::InvalidMessage(
+            "에이전트가 이 미디어 첨부를 지원하지 않습니다.".into(),
+        ));
+    }
+    tauri::async_runtime::spawn_blocking(move || {
+        let extensions: &[&str] = match kind {
+            MediaKind::Image => &[
+                "png", "jpg", "jpeg", "gif", "webp", "bmp", "tif", "tiff", "svg", "heic", "heif",
+                "avif",
+            ],
+            MediaKind::Audio => &[
+                "mp3", "wav", "flac", "ogg", "oga", "m4a", "aac", "opus", "aiff", "aif",
+            ],
+        };
+        let selections = app
+            .dialog()
+            .file()
+            .set_title(dialog_title)
+            .add_filter(
+                if kind == MediaKind::Image {
+                    "Images"
+                } else {
+                    "Audio"
+                },
+                extensions,
+            )
+            .blocking_pick_files()
+            .unwrap_or_default();
+        let mut paths = Vec::with_capacity(selections.len());
+        let mut invalid = Vec::new();
+        for selection in selections {
+            match selection.into_path() {
+                Ok(path) => paths.push(path),
+                Err(_) => invalid.push(FileSelectionError {
+                    name: "선택한 파일".into(),
+                }),
+            }
+        }
+        let store = app
+            .state::<Threads>()
+            .media_store()
+            .ok_or_else(|| ThreadError::Unavailable("첨부 저장소를 사용할 수 없습니다.".into()))?;
+        let mut result = prepare_media_selection(paths, id, kind, &store);
+        result.errors.extend(invalid);
+        app.state::<SelectedFiles>()
+            .remember(window.label(), id, &result)?;
+        Ok(result)
+    })
+    .await
+    .map_err(|_| ThreadError::Unavailable("미디어 선택을 완료할 수 없습니다.".into()))?
+}
+
+#[tauri::command]
+async fn snapshot_clipboard_image(
+    id: Uuid,
+    name: String,
+    mime_type: String,
+    bytes: Vec<u8>,
+    window: tauri::WebviewWindow,
+    threads: State<'_, Threads>,
+    selected_files: State<'_, SelectedFiles>,
+) -> Result<FileSelection, ThreadError> {
+    if !threads.supports_attachment(id, AttachmentKind::Image)? {
+        return Err(ThreadError::InvalidMessage(
+            "에이전트가 이미지 첨부를 지원하지 않습니다.".into(),
+        ));
+    }
+    let store = threads
+        .media_store()
+        .ok_or_else(|| ThreadError::Unavailable("첨부 저장소를 사용할 수 없습니다.".into()))?;
+    let attachment = store.snapshot(id, name, MediaKind::Image, &bytes, Some(&mime_type))?;
+    let result = FileSelection {
+        attachments: vec![attachment],
+        errors: Vec::new(),
+    };
+    selected_files.remember(window.label(), id, &result)?;
+    Ok(result)
 }
 
 #[tauri::command]
@@ -132,9 +227,9 @@ async fn send_message(
     threads: State<'_, Threads>,
     selected_files: State<'_, SelectedFiles>,
 ) -> Result<(), ThreadError> {
-    let resolved = selected_files.resolve(window.label(), &input)?;
+    let resolved = selected_files.resolve(window.label(), id, &input)?;
     threads.send_input(id, resolved)?;
-    selected_files.forget(window.label(), &input.attachments);
+    let _ = selected_files.forget(window.label(), &input.attachments);
     Ok(())
 }
 
@@ -144,7 +239,19 @@ fn release_files(
     window: tauri::WebviewWindow,
     selected_files: State<'_, SelectedFiles>,
 ) {
-    selected_files.forget(window.label(), &attachments);
+    let forgotten = selected_files.forget(window.label(), &attachments);
+    remove_forgotten_media(&window.state::<Threads>(), forgotten);
+}
+
+fn remove_forgotten_media(threads: &Threads, forgotten: Vec<(Uuid, Attachment)>) {
+    let Some(store) = threads.media_store() else {
+        return;
+    };
+    for (thread, attachment) in forgotten {
+        if attachment.kind != AttachmentKind::File {
+            store.remove(thread, [attachment.id]);
+        }
+    }
 }
 
 #[tauri::command]
@@ -310,7 +417,8 @@ pub fn run() {
         .manage(lifecycle::Lifecycle::default())
         .on_window_event(|window, event| {
             if matches!(event, tauri::WindowEvent::Destroyed) {
-                window.state::<SelectedFiles>().forget_owner(window.label());
+                let forgotten = window.state::<SelectedFiles>().forget_owner(window.label());
+                remove_forgotten_media(&window.state::<Threads>(), forgotten);
                 if let Ok(mut entries) = window.state::<Subscriptions>().0.lock() {
                     entries.retain(|_, entry| entry.window != window.label());
                 }
@@ -326,6 +434,8 @@ pub fn run() {
             logout_agent,
             select_working_folder,
             select_files,
+            select_media,
+            snapshot_clipboard_image,
             delete_thread,
             list_threads,
             create_thread,

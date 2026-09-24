@@ -38,6 +38,7 @@ export interface Thread {
   permissions: PermissionRequest[];
   queuedMessages: QueuedMessage[];
   configuration: ThreadConfiguration[];
+  promptCapabilities?: { image: boolean; audio: boolean };
 }
 
 export type ThreadConfigurationValue =
@@ -88,7 +89,9 @@ export interface QueuedMessage {
 export interface Attachment {
   id: string;
   name: string;
-  uri: string;
+  kind?: AttachmentKind;
+  uri?: string;
+  mimeType?: string;
 }
 
 export interface UserInput {
@@ -100,6 +103,9 @@ export interface FileSelection {
   attachments: Attachment[];
   errors: { name: string }[];
 }
+
+export type AttachmentKind = "file" | "image" | "audio";
+export type MediaKind = Exclude<AttachmentKind, "file">;
 
 export type ThreadMetadata = Pick<
   Thread,

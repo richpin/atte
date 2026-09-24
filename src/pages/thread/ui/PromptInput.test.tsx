@@ -74,3 +74,71 @@ it("includes textarea padding and borders outside the ten text lines", () => {
 
   expect(input.style.height).toBe("210px");
 });
+
+it("keeps text paste native and ignores an accompanying image", () => {
+  const onPasteImage = vi.fn();
+  render(() => (
+    <PromptInput
+      value=""
+      disabled={false}
+      onInput={() => {}}
+      onSubmit={() => {}}
+      onPasteImage={onPasteImage}
+    />
+  ));
+  const image = new File(["image"], "clipboard.png", { type: "image/png" });
+
+  const accepted = fireEvent.paste(screen.getByRole("textbox"), {
+    clipboardData: {
+      getData: (type: string) => (type === "text/plain" ? "  text  " : ""),
+      files: [image],
+    },
+  });
+
+  expect(accepted).toBe(true);
+  expect(onPasteImage).not.toHaveBeenCalled();
+});
+
+it("captures an image-only paste and ignores html", () => {
+  const onPasteImage = vi.fn();
+  render(() => (
+    <PromptInput
+      value=""
+      disabled={false}
+      onInput={() => {}}
+      onSubmit={() => {}}
+      onPasteImage={onPasteImage}
+    />
+  ));
+  const image = new File(["image"], "clipboard.png", { type: "image/png" });
+
+  const accepted = fireEvent.paste(screen.getByRole("textbox"), {
+    clipboardData: {
+      getData: (type: string) => (type === "text/html" ? "<b>image</b>" : ""),
+      files: [image],
+    },
+  });
+
+  expect(accepted).toBe(false);
+  expect(onPasteImage).toHaveBeenCalledWith(image);
+});
+
+it("reports image-only paste when image attachments are unavailable", () => {
+  const onUnsupportedImagePaste = vi.fn();
+  render(() => (
+    <PromptInput
+      value=""
+      disabled={false}
+      onInput={() => {}}
+      onSubmit={() => {}}
+      onUnsupportedImagePaste={onUnsupportedImagePaste}
+    />
+  ));
+  const image = new File(["image"], "clipboard.png", { type: "image/png" });
+
+  fireEvent.paste(screen.getByRole("textbox"), {
+    clipboardData: { getData: () => "", files: [image] },
+  });
+
+  expect(onUnsupportedImagePaste).toHaveBeenCalledOnce();
+});

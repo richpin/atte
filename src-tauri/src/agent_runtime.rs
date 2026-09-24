@@ -7,29 +7,30 @@ use crate::{
         supports_auth_status, AuthStatus, AuthStatusUpdate, AuthenticationObservation,
     },
     thread::{
-        ConfigurationChange, ConnectionFailure, PermissionOption, PermissionRequest, Prompt,
-        RuntimeUpdates, ThreadConfiguration, ThreadConfigurationChoice, ThreadConfigurationControl,
-        ThreadConfigurationGroup, ThreadConfigurationSelectOptions, ThreadConfigurationValue,
-        ThreadError,
+        Attachment, AttachmentKind, ConfigurationChange, ConnectionFailure, PermissionOption,
+        PermissionRequest, Prompt, RuntimeUpdates, ThreadConfiguration, ThreadConfigurationChoice,
+        ThreadConfigurationControl, ThreadConfigurationGroup, ThreadConfigurationSelectOptions,
+        ThreadConfigurationValue, ThreadError,
     },
 };
 use agent_client_protocol::{
     schema::{
         v1::{
-            AgentCapabilities, BooleanConfigOptionCapabilities, CancelNotification,
+            AgentCapabilities, AudioContent, BooleanConfigOptionCapabilities, CancelNotification,
             ClientCapabilities, ClientSessionCapabilities, ContentBlock, DeleteSessionRequest,
-            InitializeRequest, LoadSessionRequest, NewSessionRequest, PromptRequest,
-            RequestPermissionOutcome, RequestPermissionRequest, RequestPermissionResponse,
-            ResourceLink, ResumeSessionRequest, SelectedPermissionOutcome, SessionConfigKind,
-            SessionConfigOption, SessionConfigOptionValue, SessionConfigOptionsCapabilities,
-            SessionConfigSelectOption, SessionConfigSelectOptions, SessionId, SessionNotification,
-            SessionUpdate, SetSessionConfigOptionRequest, ToolCallContent, ToolCallUpdate,
-            ToolCallUpdateFields,
+            ImageContent, InitializeRequest, LoadSessionRequest, Meta, NewSessionRequest,
+            PromptRequest, RequestPermissionOutcome, RequestPermissionRequest,
+            RequestPermissionResponse, ResourceLink, ResumeSessionRequest,
+            SelectedPermissionOutcome, SessionConfigKind, SessionConfigOption,
+            SessionConfigOptionValue, SessionConfigOptionsCapabilities, SessionConfigSelectOption,
+            SessionConfigSelectOptions, SessionId, SessionNotification, SessionUpdate,
+            SetSessionConfigOptionRequest, ToolCallContent, ToolCallUpdate, ToolCallUpdateFields,
         },
         ProtocolVersion,
     },
     Agent, ByteStreams, Client, ConnectionTo, ErrorCode,
 };
+use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 pub(crate) use process::ProcessGroup;
 use std::{
     collections::{HashMap, VecDeque},
@@ -517,8 +518,14 @@ async fn run_session(
         updates.clone(),
         session.configuration,
     ));
-    let mut next_prompt =
-        updates.session_ready(remote.to_string(), thread_configuration(configuration));
+    let mut next_prompt = updates.session_ready(
+        remote.to_string(),
+        thread_configuration(configuration),
+        crate::thread::PromptCapabilities {
+            image: capabilities.prompt_capabilities.image,
+            audio: capabilities.prompt_capabilities.audio,
+        },
+    );
     loop {
         let prompt = match next_prompt.take() {
             Some(prompt) => prompt,
@@ -545,15 +552,19 @@ async fn run_session(
         let prompt_turn = prompt.turn;
         let queued_message = prompt.queued_message;
         let queued_prompt = queued_message.is_some();
-        let mut content = Vec::with_capacity(
-            usize::from(!prompt.input.body.trim().is_empty()) + prompt.input.attachments.len(),
-        );
-        if !prompt.input.body.trim().is_empty() {
-            content.push(prompt.input.body.into());
-        }
-        content.extend(prompt.input.attachments.into_iter().map(|attachment| {
-            ContentBlock::ResourceLink(ResourceLink::new(attachment.name, attachment.uri))
-        }));
+        let prompt_input = prompt.input;
+        let content = match prompt_content(updates, &prompt_input) {
+            Ok(content) => content,
+            Err(failure) => {
+                if let Some(queued_message) = queued_message {
+                    updates.queued_prompt_failed(prompt_turn, queued_message, failure.clone());
+                } else {
+                    updates.direct_prompt_failed(prompt_turn, prompt_input);
+                }
+                return failure;
+            }
+        };
+        let completed_input = prompt_input.clone();
         if let Err(error) = connection
             .send_request(PromptRequest::new(remote.clone(), content))
             .on_receiving_result(async move |result| {
@@ -574,6 +585,8 @@ async fn run_session(
                                 queued_message,
                                 failure.clone(),
                             );
+                        } else {
+                            turn_updates.direct_prompt_failed(prompt_turn, completed_input);
                         }
                         Err(failure)
                     }
@@ -582,6 +595,15 @@ async fn run_session(
                 Ok(())
             })
         {
+            if let Some(queued_message) = queued_message {
+                updates.queued_prompt_failed(
+                    prompt_turn,
+                    queued_message,
+                    ConnectionFailure::PromptFailed,
+                );
+            } else {
+                updates.direct_prompt_failed(prompt_turn, prompt_input);
+            }
             return classify(error, ConnectionFailure::PromptFailed);
         }
         if let Some(queued_message) = queued_message {
@@ -610,6 +632,63 @@ async fn run_session(
             }
         }
     }
+}
+
+fn prompt_content(
+    updates: &RuntimeUpdates,
+    input: &crate::thread::UserInput,
+) -> Result<Vec<ContentBlock>, ConnectionFailure> {
+    let mut content =
+        Vec::with_capacity(usize::from(!input.body.trim().is_empty()) + input.attachments.len());
+    if !input.body.trim().is_empty() {
+        content.push(input.body.clone().into());
+    }
+    for attachment in &input.attachments {
+        content.push(match attachment.kind {
+            AttachmentKind::File => ContentBlock::ResourceLink(ResourceLink::new(
+                attachment.name.clone(),
+                attachment
+                    .uri
+                    .clone()
+                    .ok_or(ConnectionFailure::PromptFailed)?,
+            )),
+            AttachmentKind::Image => ContentBlock::Image(
+                ImageContent::new(
+                    BASE64.encode(
+                        updates
+                            .media_bytes(attachment.id)
+                            .map_err(|_| ConnectionFailure::PromptFailed)?,
+                    ),
+                    attachment
+                        .mime_type
+                        .clone()
+                        .ok_or(ConnectionFailure::PromptFailed)?,
+                )
+                .meta(attachment_meta(attachment)),
+            ),
+            AttachmentKind::Audio => ContentBlock::Audio(
+                AudioContent::new(
+                    BASE64.encode(
+                        updates
+                            .media_bytes(attachment.id)
+                            .map_err(|_| ConnectionFailure::PromptFailed)?,
+                    ),
+                    attachment
+                        .mime_type
+                        .clone()
+                        .ok_or(ConnectionFailure::PromptFailed)?,
+                )
+                .meta(attachment_meta(attachment)),
+            ),
+        });
+    }
+    Ok(content)
+}
+
+fn attachment_meta(attachment: &Attachment) -> Meta {
+    let mut meta = Meta::new();
+    meta.insert("atte/name".into(), attachment.name.clone().into());
+    meta
 }
 
 async fn run_configuration_changes(

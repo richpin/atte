@@ -73,6 +73,10 @@ impl Store {
         })
     }
 
+    pub(crate) fn root(&self) -> &Path {
+        &self.root
+    }
+
     pub(crate) fn threads(&self) -> Result<Vec<ThreadMetadata>, StorageError> {
         let connection = self
             .connection

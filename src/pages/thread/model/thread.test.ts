@@ -495,6 +495,89 @@ it("keeps the complete draft when attachment input delivery fails", async () => 
   expect(model.draftAttachments()).toHaveLength(1);
 });
 
+it("selects advertised image media and keeps valid results beside picker errors", async () => {
+  commands.set("select_media", async () => ({
+    attachments: [
+      {
+        id: "image-1",
+        name: "photo.png",
+        kind: "image",
+        mimeType: "image/png",
+      },
+    ],
+    errors: [{ name: "not-an-image.txt" }],
+  }));
+  const model = setup();
+  await open(
+    model,
+    "A",
+    thread("A", { promptCapabilities: { image: true, audio: false } }),
+  );
+
+  await model.selectMedia("image");
+
+  expect(invoke).toHaveBeenCalledWith("select_media", {
+    id: "A",
+    kind: "image",
+    dialogTitle: "첨부할 이미지 선택",
+  });
+  expect(model.draftAttachments()[0]).toMatchObject({
+    name: "photo.png",
+    kind: "image",
+  });
+  expect(model.attachmentErrors()).toEqual(["not-an-image.txt"]);
+});
+
+it("snapshots exact clipboard image bytes only when image capability is advertised", async () => {
+  commands.set("snapshot_clipboard_image", async () => ({
+    attachments: [
+      {
+        id: "image-1",
+        name: "clipboard.png",
+        kind: "image",
+        mimeType: "image/png",
+      },
+    ],
+    errors: [],
+  }));
+  const model = setup();
+  await open(
+    model,
+    "A",
+    thread("A", { promptCapabilities: { image: true, audio: false } }),
+  );
+  const image = new File([new Uint8Array([1, 2, 3])], "clipboard.png", {
+    type: "image/png",
+  });
+  Object.defineProperty(image, "arrayBuffer", {
+    value: async () => new Uint8Array([1, 2, 3]).buffer,
+  });
+
+  await model.pasteImage(image);
+
+  expect(invoke).toHaveBeenCalledWith("snapshot_clipboard_image", {
+    id: "A",
+    name: "clipboard.png",
+    mimeType: "image/png",
+    bytes: [1, 2, 3],
+  });
+  expect(model.draftAttachments()).toHaveLength(1);
+});
+
+it("rejects clipboard images locally when the agent lacks image capability", async () => {
+  const model = setup();
+  await open(model, "A");
+  const image = new File(["image"], "clipboard.png", { type: "image/png" });
+
+  await model.pasteImage(image);
+
+  expect(model.error()).toBe("이 에이전트는 이미지 첨부를 지원하지 않습니다.");
+  expect(invoke).not.toHaveBeenCalledWith(
+    "snapshot_clipboard_image",
+    expect.anything(),
+  );
+});
+
 it("releases a selected file when its draft chip is removed", async () => {
   commands.set("select_files", async () => ({
     attachments: [

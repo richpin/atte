@@ -67,6 +67,7 @@ export const ko = {
       connect: "연결을 시작할 수 없습니다. 다시 시도해주세요.",
       selectFolder: "폴더 선택을 완료할 수 없습니다. 다시 시도해주세요.",
       selectFiles: "파일 선택을 완료할 수 없습니다. 다시 시도해주세요.",
+      selectMedia: "미디어를 첨부할 수 없습니다. 다시 시도해주세요.",
       create: "새 스레드를 만들 수 없습니다.",
       agents: "준비된 에이전트를 불러올 수 없습니다.",
       configure: "스레드 설정을 변경할 수 없습니다.",
@@ -77,6 +78,8 @@ export const ko = {
     selectFolder: "폴더 선택",
     folderDialogTitle: "작업 폴더 선택",
     fileDialogTitle: "첨부할 파일 선택",
+    imageDialogTitle: "첨부할 이미지 선택",
+    audioDialogTitle: "첨부할 오디오 선택",
     manageAgents: "에이전트 관리",
     empty: {
       title: "어디에서 작업할까요?",
@@ -105,8 +108,13 @@ export const ko = {
     send: "전송",
     addAttachment: "첨부 추가",
     file: "파일",
+    image: "이미지",
+    audio: "오디오",
     attachmentDescription:
       "원본 파일 경로를 전달합니다. 에이전트가 읽지 못할 수 있습니다.",
+    imageAttachmentDescription: "선택 시점의 이미지 내용을 첨부합니다.",
+    audioAttachmentDescription: "선택 시점의 오디오 내용을 첨부합니다.",
+    imagePasteUnsupported: "이 에이전트는 이미지 첨부를 지원하지 않습니다.",
     removeAttachment: "첨부 제거: {{ name }}",
     fileUnavailable:
       "{{ name }}은(는) 사용할 수 있는 파일이 아니어서 첨부하지 못했습니다.",

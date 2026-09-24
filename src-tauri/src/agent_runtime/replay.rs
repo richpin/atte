@@ -1,5 +1,5 @@
 //! A load response commits this buffer; failed/partial replay never replaces history.
-use crate::thread::{Attachment, Turn};
+use crate::thread::{Attachment, MediaKind, Turn};
 use agent_client_protocol::schema::v1::{ContentBlock, SessionUpdate};
 use uuid::Uuid;
 
@@ -37,11 +37,21 @@ impl Replay {
                 if let Some(turn) = self.turns.last_mut() {
                     match chunk.content {
                         ContentBlock::Text(text) => turn.message.push_str(&text.text),
-                        ContentBlock::ResourceLink(link) => turn.attachments.push(Attachment {
-                            id: Uuid::new_v4(),
-                            name: link.name,
-                            uri: link.uri,
-                        }),
+                        ContentBlock::ResourceLink(link) => turn
+                            .attachments
+                            .push(Attachment::file(Uuid::new_v4(), link.name, link.uri)),
+                        ContentBlock::Image(image) => turn.attachments.push(Attachment::media(
+                            Uuid::new_v4(),
+                            attachment_name(image.meta.as_ref(), "Image"),
+                            MediaKind::Image,
+                            image.mime_type,
+                        )),
+                        ContentBlock::Audio(audio) => turn.attachments.push(Attachment::media(
+                            Uuid::new_v4(),
+                            attachment_name(audio.meta.as_ref(), "Audio"),
+                            MediaKind::Audio,
+                            audio.mime_type,
+                        )),
                         _ => {}
                     }
                 }
@@ -68,4 +78,14 @@ impl Replay {
             _ => {}
         }
     }
+}
+
+fn attachment_name(
+    meta: Option<&agent_client_protocol::schema::v1::Meta>,
+    fallback: &str,
+) -> String {
+    meta.and_then(|meta| meta.get("atte/name"))
+        .and_then(|name| name.as_str())
+        .unwrap_or(fallback)
+        .to_owned()
 }
