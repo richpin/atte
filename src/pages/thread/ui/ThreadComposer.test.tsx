@@ -95,7 +95,6 @@ it("renders agent-provided thread configuration and sends typed selections", () 
       <ThreadComposer
         active={false}
         thread={current}
-        agentName="Agent"
         draft=""
         answerPending={false}
         cancelPending={false}
@@ -141,7 +140,6 @@ it("switches from PromptInput to PermissionInput when approval is requested", ()
       <ThreadComposer
         active={false}
         thread={thread()}
-        agentName="Agent"
         draft=""
         answerPending={false}
         cancelPending={false}
@@ -194,7 +192,6 @@ it("submits PromptInput with Enter", () => {
       <ThreadComposer
         active={false}
         thread={readyThread()}
-        agentName="Agent"
         draft="Run tests"
         answerPending={false}
         cancelPending={false}
@@ -227,7 +224,6 @@ it("selects files and renders removable duplicate basename chips without paths",
       <ThreadComposer
         active={false}
         thread={readyThread()}
-        agentName="Agent"
         draft=""
         draftAttachments={[
           {
@@ -290,7 +286,6 @@ it("shows media choices only for advertised prompt capabilities", async () => {
       <ThreadComposer
         active={false}
         thread={thread()}
-        agentName="Agent"
         draft=""
         answerPending={false}
         cancelPending={false}
@@ -353,7 +348,6 @@ it("disables every thread mutation while the subscription is unavailable", () =>
       <ThreadComposer
         active={false}
         thread={current}
-        agentName="Agent"
         draft="draft"
         answerPending={false}
         cancelPending={false}

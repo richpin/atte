@@ -223,7 +223,7 @@ it("opens settings pages from the sidebar menu and keeps language selection ther
   await waitFor(() =>
     expect(screen.queryByRole("menuitem", { name: "일반" })).toBeNull(),
   );
-  expect(screen.getByRole("heading", { name: "일반" })).toBeTruthy();
+  expect(await screen.findByRole("heading", { name: "일반" })).toBeTruthy();
   expect(
     screen.getByText("Atte 전체에서 사용할 언어를 선택합니다."),
   ).toBeTruthy();
@@ -307,6 +307,56 @@ it("starts on new chat and preserves a thread draft across that navigation", asy
     "value",
     "preserved draft",
   );
+});
+
+it("shows the thread agent icon beside both titles and keeps the composer free of agent identity", async () => {
+  const images: HTMLImageElement[] = [];
+  vi.spyOn(window, "Image").mockImplementation(function ImageFixture() {
+    const image = document.createElement("img");
+    images.push(image);
+    return image;
+  });
+  const saved = {
+    id: "agent-icon-thread",
+    title: "Agent icon thread",
+    workingFolder: "/work/project",
+    agentId: "codex-acp",
+    status: "sessionReady",
+    authentication: "authenticated",
+    turns: [],
+    permissions: [],
+    queuedMessages: [],
+  };
+  const original = vi.mocked(invoke).getMockImplementation();
+  vi.mocked(invoke).mockImplementation((command, args) => {
+    if (command === "list_threads") return Promise.resolve([saved]);
+    if (command === "subscribe_thread") return subscribeWith(args, saved);
+    return original?.(command, args) ?? Promise.resolve();
+  });
+
+  render(() => <App />);
+  const sidebarTitle = await screen.findByRole("button", {
+    name: saved.title,
+  });
+  await userEvent.click(sidebarTitle);
+  await screen.findByRole("heading", {
+    name: saved.title,
+  });
+  await waitFor(() => expect(images.length).toBeGreaterThanOrEqual(2));
+  for (const image of images) fireEvent.load(image);
+  await waitFor(() => {
+    expect(
+      screen.getByRole("button", { name: saved.title }).querySelector("img")
+        ?.src,
+    ).toContain("data:image/svg+xml");
+    expect(
+      screen.getByRole("heading", { name: saved.title }).querySelector("img")
+        ?.src,
+    ).toContain("data:image/svg+xml");
+  });
+  expect(
+    screen.getByRole("textbox").closest("form")?.textContent,
+  ).not.toContain("Codex");
 });
 
 it("groups threads by folder, collapses projects and creates within the selected folder", async () => {
@@ -2850,7 +2900,7 @@ it("shows only confirmed account fields and capability-gated logout actions", as
   expect(screen.queryByText("Hidden organization")).toBeNull();
   for (const name of ["Complete", "Email only", "Logout only"]) {
     expect(
-      screen.getByRole("button", { name: `${name} 로그아웃` }),
+      await screen.findByRole("button", { name: `${name} 로그아웃` }),
     ).toBeTruthy();
   }
   for (const name of ["Plan only", "Unverified"]) {

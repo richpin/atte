@@ -276,11 +276,6 @@ export function ThreadPage(props: {
                 <ThreadComposer
                   active={props.active}
                   thread={currentThread()}
-                  agentName={
-                    props.agents.find(
-                      (agent) => agent.id === currentThread().agentId,
-                    )?.name ?? currentThread().agentId
-                  }
                   draft={draft()}
                   draftAttachments={draftAttachments()}
                   attachmentErrors={attachmentErrors()}

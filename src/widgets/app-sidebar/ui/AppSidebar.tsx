@@ -11,6 +11,7 @@ import {
 } from "lucide-solid";
 import { useI18n } from "shared/i18n";
 import {
+  AgentIcon,
   Button,
   DropdownMenu,
   DropdownMenuContent,
@@ -41,6 +42,7 @@ type SidebarThread = {
   id: string;
   title: string;
   workingFolder: string;
+  agentId: string;
   status: string;
 };
 
@@ -246,6 +248,11 @@ export function AppSidebar(props: {
                                               props.onSelectThread(entry.id)
                                             }
                                           >
+                                            <AgentIcon
+                                              id={entry.agentId}
+                                              src={null}
+                                              compact
+                                            />
                                             <span class="min-w-0 flex-1 truncate">
                                               {title()}
                                             </span>

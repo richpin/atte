@@ -8,6 +8,7 @@ import { ThreadPage } from "pages/thread";
 import { I18nProvider, useI18n } from "shared/i18n";
 import { ThemeProvider } from "shared/theme";
 import {
+  AgentIcon,
   Resizable,
   ResizableHandle,
   ResizablePanel,
@@ -210,6 +211,14 @@ function ShellContent(props: { shell: AppShellModel }) {
         : threads.history().find((entry) => entry.id === selected)?.title;
     return content(value ?? null) || t("common.newThread");
   };
+  const threadAgentId = () => {
+    if (shell.view() !== "thread") return;
+    const selected = threads.selectedThreadId();
+    const current = threads.thread();
+    return current && current.id === selected
+      ? current.agentId
+      : threads.history().find((entry) => entry.id === selected)?.agentId;
+  };
 
   return (
     <div class="flex h-full min-w-0 flex-1 flex-col">
@@ -232,8 +241,11 @@ function ShellContent(props: { shell: AppShellModel }) {
           />
         </Show>
         <Show when={title()}>
-          <h1 class="relative min-w-0 flex-1 truncate text-left text-sm font-medium">
-            {title()}
+          <h1 class="relative flex min-w-0 flex-1 items-center gap-2 text-left text-sm font-medium">
+            <Show when={threadAgentId()}>
+              {(agentId) => <AgentIcon id={agentId()} src={null} compact />}
+            </Show>
+            <span class="truncate">{title()}</span>
           </h1>
         </Show>
       </header>

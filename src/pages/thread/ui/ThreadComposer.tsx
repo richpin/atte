@@ -20,7 +20,6 @@ import { QueuedMessage } from "./QueuedMessage";
 export function ThreadComposer(props: {
   active: boolean;
   thread: Thread;
-  agentName: string;
   draft: string;
   draftAttachments?: Attachment[];
   attachmentErrors?: string[];
@@ -185,7 +184,6 @@ export function ThreadComposer(props: {
                     </DropdownMenu.Content>
                   </DropdownMenu.Portal>
                 </DropdownMenu>
-                <span class="shrink-0">{props.agentName}</span>
                 <For each={promotedConfiguration()}>
                   {(configuration) => (
                     <ThreadConfigurationControl
