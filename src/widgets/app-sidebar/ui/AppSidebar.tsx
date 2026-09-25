@@ -2,9 +2,9 @@ import { AlertDialog } from "@kobalte/core/alert-dialog";
 import { ContextMenu } from "@kobalte/core/context-menu";
 import {
   Bot,
-  ChevronRight,
   Ellipsis,
-  Folder,
+  FolderClosed,
+  FolderOpen,
   Plus,
   Settings,
   SquarePen,
@@ -20,7 +20,6 @@ import {
   SidebarContent,
   SidebarFooter,
   SidebarGroup,
-  SidebarGroupAction,
   SidebarGroupContent,
   SidebarGroupLabel,
   SidebarHeader,
@@ -156,7 +155,9 @@ export function AppSidebar(props: {
               class="flex min-h-0 flex-1 flex-col"
             >
               <SidebarGroup class="min-h-0 flex-1">
-                <SidebarGroupLabel>{t("sidebar.projects")}</SidebarGroupLabel>
+                <SidebarGroupLabel class="text-sm">
+                  {t("sidebar.projects")}
+                </SidebarGroupLabel>
                 <SidebarGroupContent class="min-h-0 flex-1 overflow-y-auto">
                   <Show when={props.failed}>
                     <div class="space-y-2 px-2 py-1">
@@ -194,19 +195,15 @@ export function AppSidebar(props: {
                             }
                             onClick={() => toggleProject(group.folder)}
                           >
-                            <ChevronRight
-                              aria-hidden="true"
-                              class="transition-transform"
-                              classList={{
-                                "rotate-90": !collapsedProjects().has(
-                                  group.folder,
-                                ),
-                              }}
-                            />
-                            <Folder aria-hidden="true" />
+                            <Show
+                              when={!collapsedProjects().has(group.folder)}
+                              fallback={<FolderClosed aria-hidden="true" />}
+                            >
+                              <FolderOpen aria-hidden="true" />
+                            </Show>
                             <span>{group.name}</span>
                           </SidebarMenuButton>
-                          <SidebarGroupAction
+                          <SidebarMenuAction
                             aria-label={t("sidebar.newThreadIn", {
                               name: group.name,
                             })}
@@ -216,9 +213,9 @@ export function AppSidebar(props: {
                             }
                           >
                             <Plus aria-hidden="true" />
-                          </SidebarGroupAction>
+                          </SidebarMenuAction>
                           <Show when={!collapsedProjects().has(group.folder)}>
-                            <SidebarMenuSub>
+                            <SidebarMenuSub class="mr-0 translate-x-0 pr-0">
                               <For each={group.entries}>
                                 {(entry) => {
                                   let row: HTMLDivElement | undefined;

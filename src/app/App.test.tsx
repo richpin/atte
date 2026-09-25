@@ -380,8 +380,15 @@ it("groups threads by folder, collapses projects and creates within the selected
   const sidebarPanel = resizeHandle.previousElementSibling as HTMLElement;
   const contentPanel = resizeHandle.nextElementSibling as HTMLElement;
   const sidebarHeader = sidebarPanel.querySelector('[data-sidebar="header"]');
+  const sidebarContent = sidebarPanel.querySelector('[data-sidebar="content"]');
+  const projectThreads = sidebarPanel.querySelector(
+    '[data-sidebar="menu-sub"]',
+  );
   expect(sidebarPanel.classList.contains("min-w-56")).toBe(true);
   expect(sidebarHeader).not.toBeNull();
+  expect(sidebarContent?.classList).toContain("max-w-full");
+  expect(sidebarContent?.classList).toContain("overflow-x-hidden");
+  expect(projectThreads?.classList).toContain("translate-x-0");
   expect(
     sidebarHeader?.contains(
       screen.getByRole("button", { name: "사이드바 접기" }),
