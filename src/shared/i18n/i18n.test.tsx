@@ -23,7 +23,7 @@ test("renders English and reacts when the system language changes", async () => 
   ));
 
   expect(screen.getByText("Where do you want to work?")).toBeTruthy();
-  expect(screen.getByText("New thread")).toBeTruthy();
+  expect(screen.getByText("New Thread")).toBeTruthy();
   expect(
     screen.getByText(
       "The working folder could not be found. Choose the folder again.",

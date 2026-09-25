@@ -12,7 +12,7 @@ export const en = {
     cancel: "Cancel",
     delete: "Delete",
     deleting: "Deleting…",
-    newThread: "New thread",
+    newThread: "New Thread",
     retry: "Retry",
   },
   language: {
@@ -148,7 +148,7 @@ export const en = {
   },
   sidebar: {
     navigation: "App navigation",
-    newChat: "New Chat",
+    newChat: "New Thread",
     collapse: "Collapse sidebar",
     expand: "Expand sidebar",
     resize: "Resize sidebar",
@@ -248,6 +248,6 @@ export const en = {
       "This existing installation is not provided by the registry.",
     resumptionNotice:
       "The previous context was resumed. This agent cannot display earlier messages.",
-    defaultThreadTitle: "New thread",
+    defaultThreadTitle: "New Thread",
   },
 } as const;

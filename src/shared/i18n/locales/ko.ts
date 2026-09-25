@@ -153,7 +153,7 @@ export const ko = {
   },
   sidebar: {
     navigation: "앱 탐색",
-    newChat: "새 채팅",
+    newChat: "새 스레드",
     collapse: "사이드바 접기",
     expand: "사이드바 펼치기",
     resize: "사이드바 너비 조절",

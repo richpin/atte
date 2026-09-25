@@ -49,6 +49,22 @@ function resizeElement(target: Element, width: number) {
   }
 }
 
+function getNewThreadButton() {
+  const button = screen
+    .getAllByRole("button", { name: "새 스레드" })
+    .find((element) => element.dataset.sidebar === "menu-button");
+  if (!button) throw new Error("New thread button not found");
+  return button;
+}
+
+function getSidebarThreadButton(name: string) {
+  const button = screen
+    .getAllByRole("button", { name })
+    .find((element) => element.dataset.sidebar === "menu-sub-button");
+  if (!button) throw new Error(`Thread button not found: ${name}`);
+  return button;
+}
+
 const receive = (thread: Record<string, unknown>) =>
   receiveUpdate({ kind: "thread", thread });
 let pendingSnapshots: Map<string, Record<string, unknown>>;
@@ -289,16 +305,12 @@ it("starts on new chat and preserves a thread draft across that navigation", asy
   expect(
     await screen.findByRole("heading", { name: "어디에서 작업할까요?" }),
   ).toBeTruthy();
-  expect(
-    screen
-      .getByRole("button", { name: "새 채팅" })
-      .getAttribute("aria-current"),
-  ).toBe("page");
+  expect(getNewThreadButton().getAttribute("aria-current")).toBe("page");
   await userEvent.click(
     await screen.findByRole("button", { name: saved.title }),
   );
   await userEvent.type(screen.getByRole("textbox"), "preserved draft");
-  await userEvent.click(screen.getByRole("button", { name: "새 채팅" }));
+  await userEvent.click(getNewThreadButton());
   expect(
     screen.getByRole("heading", { name: "어디에서 작업할까요?" }),
   ).toBeTruthy();
@@ -1268,11 +1280,11 @@ it("automatically connects a new thread and disables sending while connecting", 
     .mockResolvedValueOnce({ ...draft, status: "connecting" });
   render(() => <App />);
   await userEvent.click(screen.getByRole("button", { name: "폴더 선택" }));
-  expect(
-    (await screen.findByRole("button", { name: "새 스레드" })).getAttribute(
-      "aria-current",
-    ),
-  ).toBe("page");
+  await waitFor(() => {
+    expect(
+      getSidebarThreadButton("새 스레드").getAttribute("aria-current"),
+    ).toBe("page");
+  });
   expect(screen.getByText("에이전트에 연결 중…")).toBeTruthy();
   expect(invoke).toHaveBeenCalledWith("connect_thread", {
     id: "draft-1",
@@ -1333,7 +1345,7 @@ it("keeps the new chat page when another folder selection is cancelled", async (
   render(() => <App />);
   await userEvent.click(screen.getByRole("button", { name: "폴더 선택" }));
   await screen.findByRole("textbox");
-  await userEvent.click(screen.getByRole("button", { name: "새 채팅" }));
+  await userEvent.click(getNewThreadButton());
   await userEvent.click(screen.getByRole("button", { name: "폴더 선택" }));
   expect(
     screen.getByRole("heading", { name: "어디에서 작업할까요?" }),
@@ -2088,7 +2100,7 @@ it("keeps the existing thread's agent fixed when selecting a target for the next
   expect(invoke).toHaveBeenCalledWith("connect_thread", {
     id: "draft-1",
   });
-  await userEvent.click(screen.getByRole("button", { name: "새 채팅" }));
+  await userEvent.click(getNewThreadButton());
   await userEvent.selectOptions(screen.getByRole("combobox"), "codex");
   expect((screen.getByRole("combobox") as HTMLSelectElement).value).toBe(
     "codex",
@@ -2506,7 +2518,7 @@ it("does not disable the new thread when old subscription cleanup fails", async 
   });
   render(() => <App />);
   await userEvent.click(screen.getByRole("button", { name: "폴더 선택" }));
-  await userEvent.click(screen.getByRole("button", { name: "새 채팅" }));
+  await userEvent.click(getNewThreadButton());
   await userEvent.click(screen.getByRole("button", { name: "폴더 선택" }));
   rejectCleanup(new Error("old channel closed"));
   await userEvent.type(screen.getByRole("textbox"), "next");
@@ -2728,7 +2740,7 @@ it("retries a failed install and offers the installed agent without restarting",
   ).toHaveProperty("disabled", true);
   finishInstall?.();
   expect(await screen.findByText("설치됨")).toBeTruthy();
-  await userEvent.click(screen.getByRole("button", { name: "새 채팅" }));
+  await userEvent.click(getNewThreadButton());
   expect((screen.getByRole("combobox") as HTMLSelectElement).value).toBe(
     "new-provider",
   );
@@ -3121,7 +3133,7 @@ it("confirms uninstall, supports cancel and retry, and removes the agent from ne
   expect(
     await screen.findByRole("button", { name: "New Provider 설치" }),
   ).toBeTruthy();
-  await userEvent.click(screen.getByRole("button", { name: "새 채팅" }));
+  await userEvent.click(getNewThreadButton());
   expect(screen.queryByRole("option", { name: "New Provider" })).toBeNull();
 });
 
