@@ -19,6 +19,7 @@ import {
   SidebarGroupAction,
   SidebarGroupContent,
   SidebarGroupLabel,
+  SidebarHeader,
   SidebarMenu,
   SidebarMenuAction,
   SidebarMenuButton,
@@ -119,15 +120,21 @@ export function AppSidebar(props: {
         collapsible="resizable"
         class="border-line"
       >
-        <Show when={isMobile()}>
-          <SidebarTrigger
-            aria-label={t("sidebar.collapse")}
-            class="absolute top-1.5 left-[5.5rem]"
+        <SidebarHeader class="pointer-events-none relative h-12 shrink-0 p-0">
+          <div
+            data-tauri-drag-region
+            class="pointer-events-auto absolute inset-0"
           />
-        </Show>
+          <Show when={expanded()}>
+            <SidebarTrigger
+              aria-label={t("sidebar.collapse")}
+              class="pointer-events-auto absolute top-1.5 left-[5.5rem]"
+            />
+          </Show>
+        </SidebarHeader>
 
         <Show when={expanded()}>
-          <SidebarContent class="pt-12">
+          <SidebarContent>
             <SidebarMenu class="px-2">
               <SidebarMenuItem>
                 <SidebarMenuButton

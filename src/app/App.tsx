@@ -124,7 +124,6 @@ function ResizableAppShell(props: {
       open={open()}
       onOpenChange={setOpen}
     >
-      <AppTitlebar />
       <AppLayout onSidebarResize={rememberSidebarWidth} shell={props.shell} />
     </SidebarProvider>
   );
@@ -151,7 +150,7 @@ function AppLayout(props: {
       </ResizablePanel>
       <ResizableHandle
         aria-label={t("sidebar.resize")}
-        class="hover:bg-sidebar-border data-[dragging]:bg-sidebar-ring"
+        class="before:pointer-events-none before:absolute before:inset-y-0 before:left-1/2 before:w-px before:-translate-x-1/2 hover:before:bg-sidebar-border data-[dragging]:before:bg-sidebar-border"
       />
       <ResizablePanel
         minSize={CONTENT_MIN_SIZE}
@@ -191,7 +190,9 @@ function ShellContent(props: { shell: AppShellModel }) {
   const shell = props.shell;
   const { threads } = shell;
   const { t, content } = useI18n();
-  const { state } = useSidebar();
+  const { state, isMobile, openMobile } = useSidebar();
+  const showSidebarTrigger = () =>
+    isMobile() ? !openMobile() : state() === "collapsed";
   const title = () => {
     if (shell.view() === "agents") return "Agent Management";
     if (shell.view() !== "thread") return "";
@@ -209,15 +210,21 @@ function ShellContent(props: { shell: AppShellModel }) {
       <header
         class="pointer-events-none relative flex h-12 shrink-0 items-center gap-4 px-6"
         classList={{
-          "pl-32": state() === "collapsed",
+          "pl-32": showSidebarTrigger(),
           "border-b border-line": shell.view() === "thread",
         }}
       >
         <div
           data-tauri-drag-region
           class="pointer-events-auto absolute inset-0"
-          classList={{ "left-32": state() === "collapsed" }}
+          classList={{ "left-32": showSidebarTrigger() }}
         />
+        <Show when={showSidebarTrigger()}>
+          <SidebarTrigger
+            aria-label={t("sidebar.expand")}
+            class="pointer-events-auto absolute top-1.5 left-[5.5rem]"
+          />
+        </Show>
         <Show when={title()}>
           <h1 class="relative min-w-0 flex-1 truncate text-left text-sm font-medium">
             {title()}
@@ -250,31 +257,6 @@ function ShellContent(props: { shell: AppShellModel }) {
           onAgentsChanged={shell.agentsChanged}
         />
       </div>
-    </div>
-  );
-}
-
-function AppTitlebar() {
-  const { t } = useI18n();
-  const { state, isMobile, openMobile } = useSidebar();
-  const expanded = () => isMobile() || state() === "expanded";
-
-  return (
-    <div class="pointer-events-none absolute inset-x-0 top-0 h-12">
-      <div
-        data-tauri-drag-region
-        class="pointer-events-auto absolute inset-0"
-      />
-      <Show when={!isMobile() || !openMobile()}>
-        <SidebarTrigger
-          aria-label={
-            !isMobile() && expanded()
-              ? t("sidebar.collapse")
-              : t("sidebar.expand")
-          }
-          class="pointer-events-auto absolute top-1.5 left-[5.5rem]"
-        />
-      </Show>
     </div>
   );
 }

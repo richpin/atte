@@ -312,7 +312,15 @@ it("groups threads by folder, collapses projects and creates within the selected
   expect(resizeHandle.getAttribute("aria-valuemin")).toBe("0.28");
   expect(resizeHandle.getAttribute("aria-valuemax")).toBe("0.6");
   const sidebarPanel = resizeHandle.previousElementSibling as HTMLElement;
+  const contentPanel = resizeHandle.nextElementSibling as HTMLElement;
+  const sidebarHeader = sidebarPanel.querySelector('[data-sidebar="header"]');
   expect(sidebarPanel.classList.contains("min-w-56")).toBe(true);
+  expect(sidebarHeader).not.toBeNull();
+  expect(
+    sidebarHeader?.contains(
+      screen.getByRole("button", { name: "사이드바 접기" }),
+    ),
+  ).toBe(true);
   await waitFor(() => expect(sidebarPanel.style.flexBasis).toBe("32%"));
   const resizableRoot = document.querySelector("[data-corvu-resizable-root]");
   expect(resizableRoot).not.toBeNull();
@@ -330,9 +338,11 @@ it("groups threads by folder, collapses projects and creates within the selected
   expect(
     document.querySelector('[data-collapsible="resizable"]'),
   ).not.toBeNull();
-  await userEvent.click(
-    screen.getByRole("button", { name: "사이드바 펼치기" }),
-  );
+  const expandSidebar = screen.getByRole("button", {
+    name: "사이드바 펼치기",
+  });
+  expect(contentPanel.contains(expandSidebar)).toBe(true);
+  await userEvent.click(expandSidebar);
   await userEvent.click(
     screen.getByRole("button", { name: "project에 새 스레드" }),
   );
