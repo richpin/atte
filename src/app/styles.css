@@ -79,7 +79,7 @@ button:enabled {
 }
 
 .lucide {
-  stroke-width: 2px;
+  stroke-width: 1.5px;
 }
 
 .app-resizable > [data-corvu-resizable-panel] {

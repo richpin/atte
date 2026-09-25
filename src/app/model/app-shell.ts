@@ -2,7 +2,7 @@ import { createThreadModel, preparedAgents } from "pages/thread";
 import { useI18n } from "shared/i18n";
 import { createEffect, createResource, createSignal } from "solid-js";
 
-export type AppView = "new-chat" | "thread" | "agents";
+export type AppView = "new-chat" | "thread" | "general" | "agents";
 
 export function createAppShellModel() {
   const { t } = useI18n();
@@ -42,6 +42,10 @@ export function createAppShellModel() {
 
   function showAgents() {
     setView("agents");
+  }
+
+  function showGeneral() {
+    setView("general");
   }
 
   async function selectFolder() {
@@ -100,6 +104,7 @@ export function createAppShellModel() {
     setSelectedAgent,
     showNewChat,
     openThread,
+    showGeneral,
     showAgents,
     selectFolder,
     createInProject,

@@ -28,6 +28,12 @@ export const ko = {
     english: "English",
     korean: "한국어",
   },
+  settings: {
+    openMenu: "설정 메뉴 열기",
+    general: "일반",
+    agents: "에이전트",
+    languageDescription: "Atte 전체에서 사용할 언어를 선택합니다.",
+  },
   thread: {
     status: {
       disconnected: "연결 전",

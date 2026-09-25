@@ -2,6 +2,7 @@ import { makeResizeObserver } from "@solid-primitives/resize-observer";
 import { QueryClient, QueryClientProvider } from "@tanstack/solid-query";
 import { AgentAuthenticationProvider } from "features/agent-authentication";
 import { AgentManagementPage } from "pages/agent-management";
+import { GeneralPage } from "pages/general";
 import { NewChatPage } from "pages/new-chat";
 import { ThreadPage } from "pages/thread";
 import { I18nProvider, useI18n } from "shared/i18n";
@@ -181,6 +182,7 @@ function ShellSidebar(props: { shell: AppShellModel }) {
       onSelectThread={(id) => void shell.openThread(id)}
       onCreateInProject={(folder) => void shell.createInProject(folder)}
       onDeleteThread={shell.removeThread}
+      onShowGeneral={shell.showGeneral}
       onManageAgents={shell.showAgents}
     />
   );
@@ -194,7 +196,8 @@ function ShellContent(props: { shell: AppShellModel }) {
   const showSidebarTrigger = () =>
     isMobile() ? !openMobile() : state() === "collapsed";
   const title = () => {
-    if (shell.view() === "agents") return "Agent Management";
+    if (shell.view() === "general") return t("settings.general");
+    if (shell.view() === "agents") return t("settings.agents");
     if (shell.view() !== "thread") return "";
     const selected = threads.selectedThreadId();
     const current = threads.thread();
@@ -250,6 +253,9 @@ function ShellContent(props: { shell: AppShellModel }) {
           agents={shell.agents()}
           onManage={shell.showAgents}
         />
+      </div>
+      <div hidden={shell.view() !== "general"} class="min-h-0 flex-1">
+        <GeneralPage />
       </div>
       <div hidden={shell.view() !== "agents"} class="min-h-0 flex-1">
         <AgentManagementPage

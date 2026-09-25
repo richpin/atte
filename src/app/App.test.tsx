@@ -107,9 +107,7 @@ it("shows registry icons and falls back for missing or failed images", async () 
   });
   try {
     render(() => <App />);
-    await userEvent.click(
-      screen.getByRole("button", { name: "에이전트 관리" }),
-    );
+    await openAgentManagement();
     await screen.findByRole("heading", { name: "Available" });
     await waitFor(() => expect(images).toHaveLength(2));
     fireEvent.load(images[0]);
@@ -134,6 +132,7 @@ it("shows registry icons and falls back for missing or failed images", async () 
 });
 const requests = vi.fn();
 beforeEach(() => {
+  localStorage.clear();
   pendingSnapshots = new Map();
   layoutWidth = 800;
   resizeObservers = [];
@@ -198,6 +197,55 @@ function threadMenu(title: string): HTMLButtonElement {
   expect(menu).not.toBeNull();
   return menu as HTMLButtonElement;
 }
+
+async function openAgentManagement() {
+  await userEvent.click(screen.getByRole("button", { name: "설정 메뉴 열기" }));
+  await userEvent.click(screen.getByRole("menuitem", { name: "에이전트" }));
+  await waitFor(() =>
+    expect(screen.queryByRole("menuitem", { name: "에이전트" })).toBeNull(),
+  );
+}
+
+it("opens settings pages from the sidebar menu and keeps language selection there", async () => {
+  render(() => <App />);
+
+  const settings = screen.getByRole("button", { name: "설정 메뉴 열기" });
+  settings.focus();
+  expect(document.activeElement).toBe(settings);
+  await userEvent.keyboard("{Enter}");
+  expect(screen.getByRole("menuitem", { name: "일반" })).toBeTruthy();
+  expect(screen.getByRole("menuitem", { name: "에이전트" })).toBeTruthy();
+  await userEvent.keyboard("{Escape}");
+  expect(document.activeElement).toBe(settings);
+
+  await userEvent.click(settings);
+  await userEvent.click(screen.getByRole("menuitem", { name: "일반" }));
+  await waitFor(() =>
+    expect(screen.queryByRole("menuitem", { name: "일반" })).toBeNull(),
+  );
+  expect(screen.getByRole("heading", { name: "일반" })).toBeTruthy();
+  expect(
+    screen.getByText("Atte 전체에서 사용할 언어를 선택합니다."),
+  ).toBeTruthy();
+
+  await userEvent.click(screen.getByRole("button", { name: "언어" }));
+  await userEvent.click(screen.getByRole("menuitemradio", { name: "English" }));
+  expect(await screen.findByRole("heading", { name: "General" })).toBeTruthy();
+  expect(localStorage.getItem("atte.locale")).toBe("en");
+
+  await userEvent.click(
+    screen.getByRole("button", { name: "Open settings menu" }),
+  );
+  expect(
+    screen
+      .getByRole("menuitem", { name: "General" })
+      .getAttribute("aria-current"),
+  ).toBe("page");
+  await userEvent.click(screen.getByRole("menuitem", { name: "Agents" }));
+  expect(await screen.findByRole("heading", { name: "Agents" })).toBeTruthy();
+
+  localStorage.removeItem("atte.locale");
+});
 
 it("starts on new chat and preserves a thread draft across that navigation", async () => {
   const saved = {
@@ -966,9 +1014,7 @@ it("keeps the saved list accessible without agents and restores on selection onl
   render(() => <App />);
   await screen.findByRole("button", { name: "지난 작업" });
   expect(screen.getByRole("button", { name: "지난 작업 메뉴" })).toBeTruthy();
-  expect(
-    screen.queryByRole("heading", { name: "Agent Management" }),
-  ).toBeNull();
+  expect(screen.queryByRole("heading", { name: "에이전트" })).toBeNull();
   expect(
     vi
       .mocked(invoke)
@@ -979,7 +1025,7 @@ it("keeps the saved list accessible without agents and restores on selection onl
   await userEvent.click(
     screen.getByRole("button", { name: "설치·인증 관리 열기" }),
   );
-  await screen.findByRole("heading", { name: "Agent Management" });
+  await screen.findByRole("heading", { name: "에이전트" });
   expect(
     vi
       .mocked(invoke)
@@ -2419,9 +2465,7 @@ it("opens agent management when creating a thread without an installed agent", a
   });
   render(() => <App />);
   await userEvent.click(screen.getByRole("button", { name: "폴더 선택" }));
-  expect(
-    await screen.findByRole("heading", { name: "Agent Management" }),
-  ).toBeTruthy();
+  expect(await screen.findByRole("heading", { name: "에이전트" })).toBeTruthy();
   expect(screen.getByRole("button", { name: "Codex 설치" })).toBeTruthy();
 });
 
@@ -2528,7 +2572,7 @@ it("keeps streaming and the fixed thread while management is open", async () => 
   requests.mockResolvedValue(ready);
   render(() => <App />);
   await userEvent.click(screen.getByRole("button", { name: "폴더 선택" }));
-  await userEvent.click(screen.getByRole("button", { name: "에이전트 관리" }));
+  await openAgentManagement();
   receiveUpdate({
     kind: "textDelta",
     threadId: "draft-1",
@@ -2592,7 +2636,7 @@ it("retries a failed install and offers the installed agent without restarting",
     }
   });
   render(() => <App />);
-  await userEvent.click(screen.getByRole("button", { name: "에이전트 관리" }));
+  await openAgentManagement();
   await userEvent.click(
     await screen.findByRole("button", { name: "New Provider 설치" }),
   );
@@ -2660,7 +2704,7 @@ it("shows simplified agent cards while keeping cached installations on automatic
     if (command === "agent_catalog") return agents;
   });
   render(() => <App />);
-  await userEvent.click(screen.getByRole("button", { name: "에이전트 관리" }));
+  await openAgentManagement();
   expect(
     await screen.findByRole("button", { name: "New Provider 설치" }),
   ).toHaveProperty("disabled", false);
@@ -2768,7 +2812,7 @@ it("shows only confirmed account fields and capability-gated logout actions", as
   });
 
   render(() => <App />);
-  await userEvent.click(screen.getByRole("button", { name: "에이전트 관리" }));
+  await openAgentManagement();
 
   expect(await screen.findByText("complete@example.com")).toBeTruthy();
   expect(screen.getByText("email@example.com")).toBeTruthy();
@@ -2829,7 +2873,7 @@ it("confirms logout, blocks duplicates, preserves failures, and clears only afte
   });
 
   render(() => <App />);
-  await userEvent.click(screen.getByRole("button", { name: "에이전트 관리" }));
+  await openAgentManagement();
   await userEvent.click(
     await screen.findByRole("button", { name: "Codex 로그아웃" }),
   );
@@ -2930,7 +2974,7 @@ it("keeps an existing thread after logout and follows a later authentication-req
   render(() => <App />);
   await userEvent.click(screen.getByRole("button", { name: "폴더 선택" }));
   expect(await screen.findByText("Preserved response")).toBeTruthy();
-  await userEvent.click(screen.getByRole("button", { name: "에이전트 관리" }));
+  await openAgentManagement();
   await userEvent.click(
     await screen.findByRole("button", { name: "Codex 로그아웃" }),
   );
@@ -2979,7 +3023,7 @@ it("confirms uninstall, supports cancel and retry, and removes the agent from ne
     }
   });
   render(() => <App />);
-  await userEvent.click(screen.getByRole("button", { name: "에이전트 관리" }));
+  await openAgentManagement();
   await userEvent.click(
     await screen.findByRole("button", { name: "New Provider 삭제" }),
   );

@@ -1,6 +1,7 @@
 import { AlertDialog } from "@kobalte/core/alert-dialog";
 import { ContextMenu } from "@kobalte/core/context-menu";
 import {
+  Bot,
   ChevronRight,
   Ellipsis,
   Folder,
@@ -11,7 +12,10 @@ import {
 import { useI18n } from "shared/i18n";
 import {
   Button,
-  LanguageMenu,
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
   Sidebar,
   SidebarContent,
   SidebarFooter,
@@ -32,7 +36,7 @@ import {
 } from "shared/ui";
 import { createMemo, createSignal, For, Show } from "solid-js";
 
-type AppView = "new-chat" | "thread" | "agents";
+type AppView = "new-chat" | "thread" | "general" | "agents";
 
 type SidebarThread = {
   id: string;
@@ -58,6 +62,7 @@ export function AppSidebar(props: {
   onSelectThread: (id: string) => void;
   onCreateInProject: (folder: string) => void;
   onDeleteThread: (id: string) => Promise<void>;
+  onShowGeneral: () => void;
   onManageAgents: () => void;
 }) {
   const { t, message, content } = useI18n();
@@ -328,17 +333,33 @@ export function AppSidebar(props: {
             </nav>
           </SidebarContent>
 
-          <SidebarFooter class="border-line border-t">
-            <Button
-              aria-current={props.view === "agents" ? "page" : undefined}
-              class="w-full justify-start"
-              variant="outline"
-              onClick={props.onManageAgents}
-            >
-              <Settings aria-hidden="true" />
-              {t("thread.manageAgents")}
-            </Button>
-            <LanguageMenu />
+          <SidebarFooter class="flex items-end border-line border-t">
+            <DropdownMenu placement="top-end">
+              <DropdownMenuTrigger
+                aria-label={t("settings.openMenu")}
+                class="grid size-8 place-items-center rounded-md text-muted outline-none hover:bg-canvas hover:text-ink focus-visible:ring-2 focus-visible:ring-accent"
+              >
+                <Settings aria-hidden="true" class="size-4" />
+              </DropdownMenuTrigger>
+              <DropdownMenuContent class="w-40">
+                <DropdownMenuItem
+                  aria-current={props.view === "general" ? "page" : undefined}
+                  class="rounded-sm px-2 py-1.5 outline-none data-[highlighted]:bg-canvas aria-[current=page]:bg-canvas aria-[current=page]:font-medium"
+                  onSelect={props.onShowGeneral}
+                >
+                  <Settings aria-hidden="true" class="size-4" />
+                  {t("settings.general")}
+                </DropdownMenuItem>
+                <DropdownMenuItem
+                  aria-current={props.view === "agents" ? "page" : undefined}
+                  class="rounded-sm px-2 py-1.5 outline-none data-[highlighted]:bg-canvas aria-[current=page]:bg-canvas aria-[current=page]:font-medium"
+                  onSelect={props.onManageAgents}
+                >
+                  <Bot aria-hidden="true" class="size-4" />
+                  {t("settings.agents")}
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
           </SidebarFooter>
         </Show>
       </Sidebar>

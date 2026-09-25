@@ -22,6 +22,12 @@ export const en = {
     english: "English",
     korean: "한국어",
   },
+  settings: {
+    openMenu: "Open settings menu",
+    general: "General",
+    agents: "Agents",
+    languageDescription: "Choose the language used throughout Atte.",
+  },
   thread: {
     status: {
       disconnected: "Not connected",
