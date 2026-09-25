@@ -24,7 +24,7 @@ export function GeneralPage() {
   return (
     <main class="h-full min-h-0 overflow-y-auto bg-canvas text-ink">
       <section class="mx-auto max-w-3xl space-y-4 px-6 py-8">
-        <div class="flex flex-col items-start justify-between gap-4 rounded-2xl border border-line bg-panel p-5 sm:flex-row sm:items-center sm:gap-6">
+        <div class="flex flex-col items-start justify-between gap-4 rounded-2xl border border-line bg-input-surface p-5 sm:flex-row sm:items-center sm:gap-6">
           <div class="min-w-0 space-y-1">
             <h2 class="font-medium">{t("theme.label")}</h2>
             <p class="text-sm text-muted">{t("settings.themeDescription")}</p>
@@ -52,7 +52,7 @@ export function GeneralPage() {
             </For>
           </SegmentedControl>
         </div>
-        <div class="flex flex-col items-start justify-between gap-4 rounded-2xl border border-line bg-panel p-5 sm:flex-row sm:items-center sm:gap-6">
+        <div class="flex flex-col items-start justify-between gap-4 rounded-2xl border border-line bg-input-surface p-5 sm:flex-row sm:items-center sm:gap-6">
           <div class="min-w-0 space-y-1">
             <h2 class="font-medium">{t("language.label")}</h2>
             <p class="text-sm text-muted">

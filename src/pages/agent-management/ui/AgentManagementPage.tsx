@@ -1,4 +1,5 @@
-import { Search } from "lucide-solid";
+import { openUrl } from "@tauri-apps/plugin-opener";
+import { Dot, ExternalLink, Search } from "lucide-solid";
 import { useI18n } from "shared/i18n";
 import { AgentIcon } from "shared/ui";
 import { createResource, createSignal, For, Show } from "solid-js";
@@ -13,6 +14,18 @@ import {
 
 import { LogoutAgentDialog } from "./LogoutAgentDialog";
 import { UninstallAgentDialog } from "./UninstallAgentDialog";
+
+function safeExternalUrl(destination: string | null | undefined) {
+  if (!destination || !/^https?:\/\//i.test(destination)) return undefined;
+  try {
+    const url = new URL(destination);
+    return url.protocol === "http:" || url.protocol === "https:"
+      ? url.href
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
 
 export function AgentManagementPage(props: {
   active: boolean;
@@ -137,7 +150,7 @@ export function AgentManagementPage(props: {
             type="search"
             value={search()}
             placeholder={t("agents.search")}
-            class="w-full rounded-lg border border-line bg-panel py-2.5 pr-4 pl-11 text-sm placeholder:text-muted focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
+            class="w-full rounded-lg border border-line bg-input-surface py-2.5 pr-4 pl-11 text-sm placeholder:text-muted focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
             onInput={(event) => setSearch(event.currentTarget.value)}
           />
         </label>
@@ -163,87 +176,115 @@ export function AgentManagementPage(props: {
           {(agent) => {
             const installing = () =>
               work[agent.id]?.busy && work[agent.id]?.operation === "install";
+            const hasAccountDetails = () =>
+              agent.authentication.authenticated &&
+              (agent.authentication.email ||
+                agent.authentication.plan ||
+                agent.authentication.logoutSupported);
+            const externalUrl = safeExternalUrl(
+              agent.website ?? agent.repository,
+            );
             return (
-              <article class="flex items-start justify-between gap-5 rounded-2xl border border-line bg-panel p-5">
-                <div class="flex min-w-0 items-start gap-3">
-                  <AgentIcon id={agent.id} src={agent.icon} />
-                  <div class="min-w-0 space-y-1">
-                    <h2 class="font-medium">{agent.name}</h2>
-                    <p class="text-sm text-muted">{agent.description}</p>
+              <article class="rounded-2xl border border-line bg-input-surface p-5">
+                <div class="flex items-start justify-between gap-5">
+                  <div class="flex min-w-0 items-start gap-3">
+                    <AgentIcon id={agent.id} src={agent.icon} />
+                    <div class="min-w-0 space-y-1">
+                      <div class="flex items-center gap-2">
+                        <h2 class="font-medium">{agent.name}</h2>
+                        <Show when={externalUrl}>
+                          {(url) => (
+                            <a
+                              href={url()}
+                              aria-label={t("agents.externalLinkLabel", {
+                                name: agent.name,
+                              })}
+                              class="rounded-sm opacity-70 transition-opacity hover:opacity-100 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
+                              onClick={(event) => {
+                                event.preventDefault();
+                                void openUrl(url()).catch(() => undefined);
+                              }}
+                            >
+                              <ExternalLink
+                                aria-hidden="true"
+                                class="size-3.5"
+                              />
+                            </a>
+                          )}
+                        </Show>
+                      </div>
+                      <p class="text-sm text-muted">{agent.description}</p>
+                    </div>
+                  </div>
+                  <div class="flex shrink-0 items-center gap-3 text-sm">
                     <Show
-                      when={
-                        agent.authentication.authenticated &&
-                        (agent.authentication.email ||
-                          agent.authentication.plan ||
-                          agent.authentication.logoutSupported)
+                      when={agent.installed}
+                      fallback={
+                        <button
+                          type="button"
+                          aria-label={`${agent.name} ${installing() ? t("agents.installing") : t("agents.install")}`}
+                          disabled={!agent.distribution || installing()}
+                          class="rounded-lg bg-panel px-3 py-1.5 text-ink hover:bg-line focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-accent disabled:opacity-40"
+                          onClick={() => run(agent.id, "install")}
+                        >
+                          {installing()
+                            ? t("agents.installing")
+                            : t("agents.install")}
+                        </button>
                       }
                     >
-                      <div class="space-y-2 pt-3 text-sm">
+                      <span class="text-xs text-muted">
+                        {t("agents.installed")}
+                      </span>
+                      <UninstallAgentDialog
+                        name={agent.name}
+                        disabled={work[agent.id]?.busy ?? false}
+                        onConfirm={() => run(agent.id, "uninstall")}
+                      />
+                    </Show>
+                  </div>
+                </div>
+                <Show when={hasAccountDetails()}>
+                  <div class="mt-4 border-t border-line pt-4 text-sm">
+                    <div class="flex flex-wrap items-center gap-3">
+                      <div class="flex min-w-0 flex-wrap items-center gap-1">
                         <Show when={agent.authentication.email}>
-                          {(email) => (
-                            <p>
-                              <span class="text-muted">
-                                {t("agents.email")}:{" "}
-                              </span>
-                              {email()}
-                            </p>
-                          )}
+                          {(email) => <p>{email()}</p>}
+                        </Show>
+                        <Show
+                          when={
+                            agent.authentication.email &&
+                            agent.authentication.plan
+                          }
+                        >
+                          <Dot
+                            aria-hidden="true"
+                            class="size-4 shrink-0 text-muted"
+                          />
                         </Show>
                         <Show when={agent.authentication.plan}>
-                          {(plan) => (
-                            <p>
-                              <span class="text-muted">
-                                {t("agents.plan")}:{" "}
-                              </span>
-                              {plan()}
-                            </p>
-                          )}
+                          {(plan) => <p>{plan()}</p>}
                         </Show>
-                        <Show when={agent.authentication.logoutSupported}>
+                      </div>
+                      <Show when={agent.authentication.logoutSupported}>
+                        <div class="ml-auto">
                           <LogoutAgentDialog
                             name={agent.name}
                             pending={logoutWork[agent.id]?.pending ?? false}
                             onConfirm={() => void logoutAgent(agent.id)}
                           />
-                        </Show>
-                        <Show when={logoutWork[agent.id]?.error}>
-                          {(logoutError) => (
-                            <p role="alert" class="text-sm text-danger">
-                              {logoutError()}
-                            </p>
-                          )}
-                        </Show>
-                      </div>
+                        </div>
+                      </Show>
+                    </div>
+                    <Show when={logoutWork[agent.id]?.error}>
+                      {(logoutError) => (
+                        <p role="alert" class="mt-2 text-sm text-danger">
+                          {logoutError()}
+                        </p>
+                      )}
                     </Show>
                   </div>
-                </div>
-                <div class="flex shrink-0 items-center gap-3 text-sm">
-                  <Show
-                    when={agent.installed}
-                    fallback={
-                      <button
-                        type="button"
-                        aria-label={`${agent.name} ${installing() ? t("agents.installing") : t("agents.install")}`}
-                        disabled={!agent.distribution || installing()}
-                        class="rounded-lg bg-primary px-4 py-2 text-primary-foreground focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-accent disabled:opacity-40"
-                        onClick={() => run(agent.id, "install")}
-                      >
-                        {installing()
-                          ? t("agents.installing")
-                          : t("agents.install")}
-                      </button>
-                    }
-                  >
-                    <span class="text-xs text-muted">
-                      {t("agents.installed")}
-                    </span>
-                    <UninstallAgentDialog
-                      name={agent.name}
-                      disabled={work[agent.id]?.busy ?? false}
-                      onConfirm={() => run(agent.id, "uninstall")}
-                    />
-                  </Show>
-                </div>
+                </Show>
               </article>
             );
           }}

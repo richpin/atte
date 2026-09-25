@@ -18,6 +18,8 @@ export interface ManagedAgent {
   id: string;
   name: string;
   icon: string | null;
+  website: string | null;
+  repository: string | null;
   installed: boolean;
   description: string;
   unavailableReason: string | null;

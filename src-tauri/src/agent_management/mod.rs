@@ -74,6 +74,8 @@ pub struct ManagedAgent {
     pub id: String,
     pub name: String,
     pub icon: Option<String>,
+    pub website: Option<String>,
+    pub repository: Option<String>,
     pub description: String,
     pub unavailable_reason: Option<String>,
     pub available_version: Option<String>,
@@ -233,6 +235,8 @@ impl AgentManagement {
                 ManagedAgent {
                     id: id.clone(),
                     icon: entry.and_then(|entry| entry.icon.clone()),
+                    website: entry.and_then(|entry| entry.website.clone()),
+                    repository: entry.and_then(|entry| entry.repository.clone()),
                     name: entry
                         .map(|entry| entry.name.clone())
                         .or_else(|| installation.map(|item| item.definition.name.clone()))

@@ -10,12 +10,15 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import App from "./App";
 
+const openUrl = vi.hoisted(() => vi.fn(() => Promise.resolve()));
+
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: vi.fn(),
   Channel: class {
     onmessage = () => {};
   },
 }));
+vi.mock("@tauri-apps/plugin-opener", () => ({ openUrl }));
 let receiveUpdate: (update: Record<string, unknown>) => void;
 let layoutWidth: number;
 let resizeObservers: ResizeObserverFixture[];
@@ -112,19 +115,43 @@ it("shows registry icons and falls back for missing or failed images", async () 
           id: "available",
           name: "Available",
           icon: "https://cdn.agentclientprotocol.com/available.svg",
+          website: "https://example.com/available",
+          repository: "https://github.com/example/available",
         },
         {
           id: "broken",
           name: "Broken",
           icon: "https://cdn.agentclientprotocol.com/broken.svg",
+          website: "javascript:alert('no')",
+          repository: "https://github.com/example/broken",
         },
-        { id: "missing", name: "Missing", icon: null },
+        {
+          id: "missing",
+          name: "Missing",
+          icon: null,
+          repository: "https://github.com/example/missing",
+        },
       ].map((agent) => ({ ...agent, authentication: { methods: [] } }));
   });
   try {
     render(() => <App />);
     await openAgentManagement();
     await screen.findByRole("heading", { name: "Available" });
+    const website = screen.getByRole("link", {
+      name: "Available 관련 링크 열기",
+    });
+    expect(website.querySelector(".lucide-external-link")).not.toBeNull();
+    expect(
+      screen.queryByRole("link", { name: "Broken 관련 링크 열기" }),
+    ).toBeNull();
+    await userEvent.click(website);
+    expect(openUrl).toHaveBeenCalledWith("https://example.com/available");
+    await userEvent.click(
+      screen.getByRole("link", { name: "Missing 관련 링크 열기" }),
+    );
+    expect(openUrl).toHaveBeenLastCalledWith(
+      "https://github.com/example/missing",
+    );
     await waitFor(() => expect(images).toHaveLength(2));
     fireEvent.load(images[0]);
     fireEvent.error(images[1]);
@@ -154,6 +181,7 @@ beforeEach(() => {
   resizeObservers = [];
   vi.stubGlobal("ResizeObserver", ResizeObserverFixture);
   vi.resetAllMocks();
+  openUrl.mockResolvedValue(undefined);
   vi.spyOn(HTMLElement.prototype, "offsetWidth", "get").mockImplementation(
     () => layoutWidth,
   );
@@ -2906,6 +2934,20 @@ it("shows only confirmed account fields and capability-gated logout actions", as
   expect(screen.getByText("email@example.com")).toBeTruthy();
   expect(screen.getByText("Pro")).toBeTruthy();
   expect(screen.getByText("Team")).toBeTruthy();
+  expect(screen.queryByText("이메일:")).toBeNull();
+  expect(screen.queryByText("요금제:")).toBeNull();
+  expect(
+    screen
+      .getByText("complete@example.com")
+      .closest("article")
+      ?.querySelector(".lucide-dot"),
+  ).not.toBeNull();
+  expect(
+    screen
+      .getByText("email@example.com")
+      .closest("article")
+      ?.querySelector(".lucide-dot"),
+  ).toBeNull();
   expect(screen.queryByText("hidden@example.com")).toBeNull();
   expect(screen.queryByText("Enterprise")).toBeNull();
   expect(screen.queryByText("Never render this")).toBeNull();

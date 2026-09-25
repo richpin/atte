@@ -25,6 +25,7 @@ Use untrack only when intentionally excluding a reactive dependency.
 
 ## UI and Styling
 
+Always consider and verify both light and dark themes when implementing UI.
 Check Solid UI first, leave source-code copying to the user, and only apply or replace components the user has added.
 Use Kobalte primitives when a suitable Solid UI component is unavailable or custom behavior is required.
 Use Tailwind CSS for styling and customization.

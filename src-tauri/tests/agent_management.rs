@@ -831,14 +831,16 @@ async fn reopening_promotes_pending_and_cleans_staging_orphans_but_keeps_runtime
 }
 
 #[test]
-fn catalog_preserves_optional_registry_icons_after_restart() {
+fn catalog_preserves_optional_registry_links_and_icons_after_restart() {
     let root = tempfile::tempdir().unwrap();
     let manager = AgentManagement::open(root.path()).unwrap();
     let registry = serde_json::from_value(serde_json::json!({
         "version": "1.0.0",
         "agents": [
             {"id": "with-icon", "name": "With icon", "version": "1", "distribution": {"npx": {"package": "with-icon@1.0.0"}},
-             "icon": "https://cdn.agentclientprotocol.com/registry/v1/latest/example.svg"},
+             "icon": "https://cdn.agentclientprotocol.com/registry/v1/latest/example.svg",
+             "website": "https://example.com/with-icon",
+             "repository": "https://github.com/example/with-icon"},
             {"id": "without-icon", "name": "Without icon", "version": "1", "distribution": {"npx": {"package": "without-icon@1.0.0"}}}
         ]
     }))
@@ -851,7 +853,14 @@ fn catalog_preserves_optional_registry_icons_after_restart() {
         catalog[0]["icon"],
         "https://cdn.agentclientprotocol.com/registry/v1/latest/example.svg"
     );
+    assert_eq!(catalog[0]["website"], "https://example.com/with-icon");
+    assert_eq!(
+        catalog[0]["repository"],
+        "https://github.com/example/with-icon"
+    );
     assert!(catalog[1]["icon"].is_null());
+    assert!(catalog[1]["website"].is_null());
+    assert!(catalog[1]["repository"].is_null());
 }
 
 #[tokio::test]

@@ -15,7 +15,7 @@ export function LogoutAgentDialog(props: {
           props.pending ? "agents.logoutPendingLabel" : "agents.logoutLabel",
           { name: props.name },
         )}
-        class="rounded-lg border border-line px-3 py-1.5 text-xs focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-accent disabled:opacity-40"
+        class="rounded-lg bg-panel px-3 py-1.5 text-ink hover:bg-line focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-accent disabled:opacity-40"
       >
         {props.pending ? t("agents.loggingOut") : t("agents.logout")}
       </AlertDialog.Trigger>

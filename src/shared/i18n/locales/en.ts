@@ -178,6 +178,7 @@ export const en = {
     install: "Install",
     installing: "Installing",
     installed: "Installed",
+    externalLinkLabel: "Open {{ name }} link",
     requestFailed: "The request could not be completed. Try again.",
     uninstallLabel: "Uninstall {{ name }}",
     uninstall: "Uninstall",

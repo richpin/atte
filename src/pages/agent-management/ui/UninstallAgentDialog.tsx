@@ -12,7 +12,7 @@ export function UninstallAgentDialog(props: {
       <AlertDialog.Trigger
         disabled={props.disabled}
         aria-label={t("agents.uninstallLabel", { name: props.name })}
-        class="rounded-lg border border-line px-4 py-2 focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-accent disabled:opacity-40"
+        class="rounded-lg bg-danger-soft px-3 py-1.5 text-danger hover:bg-danger/15 focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-accent disabled:opacity-40"
       >
         {t("agents.uninstall")}
       </AlertDialog.Trigger>

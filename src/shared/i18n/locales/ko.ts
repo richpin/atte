@@ -183,6 +183,7 @@ export const ko = {
     install: "설치",
     installing: "설치 중",
     installed: "설치됨",
+    externalLinkLabel: "{{ name }} 관련 링크 열기",
     requestFailed: "요청을 완료할 수 없습니다. 다시 시도해주세요.",
     uninstallLabel: "{{ name }} 삭제",
     uninstall: "삭제",
