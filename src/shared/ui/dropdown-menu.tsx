@@ -30,7 +30,7 @@ const DropdownMenuContent = <T extends ValidComponent = "div">(
     <DropdownMenuPrimitive.Portal>
       <DropdownMenuPrimitive.Content
         class={cn(
-          "min-w-32 origin-[var(--kb-menu-content-transform-origin)] animate-content-hide overflow-hidden rounded-md border border-line bg-popover p-1 text-popover-foreground shadow-md data-[expanded]:animate-content-show",
+          "min-w-44 origin-[var(--kb-menu-content-transform-origin)] animate-content-hide overflow-hidden rounded-xl border border-line bg-menu p-1 text-xs text-ink shadow-md data-[expanded]:animate-content-show",
           props.class,
         )}
         {...rest}
@@ -51,7 +51,7 @@ const DropdownMenuItem = <T extends ValidComponent = "div">(
   return (
     <DropdownMenuPrimitive.Item
       class={cn(
-        "relative flex cursor-default select-none items-center gap-2 rounded-sm px-2 py-1.5 text-sm outline-none transition-colors data-[highlighted]:bg-canvas data-[disabled]:pointer-events-none data-[disabled]:opacity-50",
+        "relative flex cursor-default select-none items-center gap-2 rounded-lg px-2 py-1.5 text-xs outline-none transition-colors hover:bg-menu-hover data-[highlighted]:bg-menu-hover data-[disabled]:pointer-events-none data-[disabled]:opacity-50",
         props.class,
       )}
       {...rest}
@@ -76,7 +76,7 @@ const DropdownMenuLabel: Component<
   return (
     <div
       class={cn(
-        "px-2 py-1.5 text-sm font-semibold",
+        "px-2 py-1.5 text-xs font-semibold",
         props.inset && "pl-8",
         props.class,
       )}
@@ -118,7 +118,7 @@ const DropdownMenuSubTrigger = <T extends ValidComponent = "div">(
   return (
     <DropdownMenuPrimitive.SubTrigger
       class={cn(
-        "flex cursor-default select-none items-center rounded-sm px-2 py-1.5 text-sm outline-none data-[highlighted]:bg-canvas data-[state=open]:bg-canvas",
+        "flex cursor-default select-none items-center rounded-lg px-2 py-1.5 text-xs outline-none hover:bg-menu-hover data-[highlighted]:bg-menu-hover data-[state=open]:bg-menu-hover",
         props.class,
       )}
       {...rest}
@@ -153,7 +153,7 @@ const DropdownMenuSubContent = <T extends ValidComponent = "div">(
   return (
     <DropdownMenuPrimitive.SubContent
       class={cn(
-        "min-w-32 origin-[var(--kb-menu-content-transform-origin)] overflow-hidden rounded-md border border-line bg-popover p-1 text-popover-foreground shadow-md animate-in",
+        "min-w-44 origin-[var(--kb-menu-content-transform-origin)] overflow-hidden rounded-xl border border-line bg-menu p-1 text-xs text-ink shadow-md animate-in",
         props.class,
       )}
       {...rest}
@@ -177,7 +177,7 @@ const DropdownMenuCheckboxItem = <T extends ValidComponent = "div">(
   return (
     <DropdownMenuPrimitive.CheckboxItem
       class={cn(
-        "relative flex cursor-default select-none items-center rounded-sm py-1.5 pr-2 pl-8 text-sm outline-none transition-colors data-[highlighted]:bg-canvas data-[disabled]:pointer-events-none data-[disabled]:opacity-50",
+        "relative flex cursor-default select-none items-center rounded-lg py-1.5 pr-2 pl-8 text-xs outline-none transition-colors hover:bg-menu-hover data-[highlighted]:bg-menu-hover data-[disabled]:pointer-events-none data-[disabled]:opacity-50",
         props.class,
       )}
       {...rest}
@@ -215,7 +215,7 @@ const DropdownMenuGroupLabel = <T extends ValidComponent = "span">(
   const [, rest] = splitProps(props as DropdownMenuGroupLabelProps, ["class"]);
   return (
     <DropdownMenuPrimitive.GroupLabel
-      class={cn("px-2 py-1.5 text-sm font-semibold", props.class)}
+      class={cn("px-2 py-1.5 text-xs font-semibold", props.class)}
       {...rest}
     />
   );
@@ -237,7 +237,7 @@ const DropdownMenuRadioItem = <T extends ValidComponent = "div">(
   return (
     <DropdownMenuPrimitive.RadioItem
       class={cn(
-        "relative flex cursor-default select-none items-center rounded-sm py-1.5 pr-2 pl-8 text-sm outline-none transition-colors data-[highlighted]:bg-canvas data-[disabled]:pointer-events-none data-[disabled]:opacity-50",
+        "relative flex cursor-default select-none items-center rounded-lg py-1.5 pr-2 pl-8 text-xs outline-none transition-colors hover:bg-menu-hover data-[highlighted]:bg-menu-hover data-[disabled]:pointer-events-none data-[disabled]:opacity-50",
         props.class,
       )}
       {...rest}

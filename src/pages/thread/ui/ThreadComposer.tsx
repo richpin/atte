@@ -1,8 +1,19 @@
-import { DropdownMenu } from "@kobalte/core/dropdown-menu";
 import { Popover } from "@kobalte/core/popover";
 import type { AgentAuthenticationState } from "features/agent-authentication";
-import { ArrowUp, Plus } from "lucide-solid";
+import {
+  ArrowUp,
+  AudioLines,
+  File as FileIcon,
+  Image as ImageIcon,
+  Plus,
+} from "lucide-solid";
 import { useI18n } from "shared/i18n";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "shared/ui";
 import { For, Match, Show, Switch } from "solid-js";
 import type {
   Attachment,
@@ -150,7 +161,7 @@ export function ThreadComposer(props: {
             <div class="mt-3 flex items-center justify-between gap-3 text-xs text-muted">
               <div class="flex min-w-0 items-center gap-2">
                 <DropdownMenu placement="top-start">
-                  <DropdownMenu.Trigger
+                  <DropdownMenuTrigger
                     aria-label={t("thread.addAttachment")}
                     disabled={!props.canSend}
                     class="grid size-7 shrink-0 place-items-center rounded-full text-muted transition-colors hover:bg-panel focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent disabled:opacity-40"
@@ -160,33 +171,34 @@ export function ThreadComposer(props: {
                       size={16}
                       style={{ "stroke-width": "2.5px" }}
                     />
-                  </DropdownMenu.Trigger>
-                  <DropdownMenu.Portal>
-                    <DropdownMenu.Content class="z-50 min-w-32 rounded-lg border border-line bg-panel p-1 text-sm text-ink shadow-lg">
-                      <DropdownMenu.Item
-                        class="rounded px-3 py-2 outline-none data-[highlighted]:bg-canvas"
-                        onSelect={() => props.onSelectFiles?.()}
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent>
+                    <DropdownMenuItem
+                      class="px-3 py-2"
+                      onSelect={() => props.onSelectFiles?.()}
+                    >
+                      <FileIcon aria-hidden="true" class="size-3.5" />
+                      {t("thread.file")}
+                    </DropdownMenuItem>
+                    <Show when={props.thread.promptCapabilities?.image}>
+                      <DropdownMenuItem
+                        class="px-3 py-2"
+                        onSelect={() => props.onSelectMedia?.("image")}
                       >
-                        {t("thread.file")}
-                      </DropdownMenu.Item>
-                      <Show when={props.thread.promptCapabilities?.image}>
-                        <DropdownMenu.Item
-                          class="rounded px-3 py-2 outline-none data-[highlighted]:bg-canvas"
-                          onSelect={() => props.onSelectMedia?.("image")}
-                        >
-                          {t("thread.image")}
-                        </DropdownMenu.Item>
-                      </Show>
-                      <Show when={props.thread.promptCapabilities?.audio}>
-                        <DropdownMenu.Item
-                          class="rounded px-3 py-2 outline-none data-[highlighted]:bg-canvas"
-                          onSelect={() => props.onSelectMedia?.("audio")}
-                        >
-                          {t("thread.audio")}
-                        </DropdownMenu.Item>
-                      </Show>
-                    </DropdownMenu.Content>
-                  </DropdownMenu.Portal>
+                        <ImageIcon aria-hidden="true" class="size-3.5" />
+                        {t("thread.image")}
+                      </DropdownMenuItem>
+                    </Show>
+                    <Show when={props.thread.promptCapabilities?.audio}>
+                      <DropdownMenuItem
+                        class="px-3 py-2"
+                        onSelect={() => props.onSelectMedia?.("audio")}
+                      >
+                        <AudioLines aria-hidden="true" class="size-3.5" />
+                        {t("thread.audio")}
+                      </DropdownMenuItem>
+                    </Show>
+                  </DropdownMenuContent>
                 </DropdownMenu>
                 <For each={promotedConfiguration()}>
                   {(configuration) => (

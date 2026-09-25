@@ -1,5 +1,4 @@
 import { AlertDialog } from "@kobalte/core/alert-dialog";
-import { ContextMenu } from "@kobalte/core/context-menu";
 import {
   Bot,
   EllipsisVertical,
@@ -8,6 +7,7 @@ import {
   Plus,
   Settings,
   SquarePen,
+  Trash2,
 } from "lucide-solid";
 import { useI18n } from "shared/i18n";
 import {
@@ -45,11 +45,6 @@ type SidebarThread = {
   agentId: string;
   status: string;
 };
-
-const menuClass =
-  "min-w-32 rounded-lg border border-line bg-panel p-1 text-sm text-ink shadow-lg";
-const deleteItemClass =
-  "rounded px-3 py-2 text-danger outline-none data-[highlighted]:bg-danger-soft";
 
 export function AppSidebar(props: {
   view: AppView;
@@ -224,7 +219,8 @@ export function AppSidebar(props: {
                             <SidebarMenuSub class="mr-0 translate-x-0 pr-0">
                               <For each={group.entries}>
                                 {(entry) => {
-                                  let row: HTMLDivElement | undefined;
+                                  const [menuOpen, setMenuOpen] =
+                                    createSignal(false);
                                   const title = () =>
                                     content(entry.title) ||
                                     t("common.newThread");
@@ -233,103 +229,91 @@ export function AppSidebar(props: {
                                     props.selected === entry.id;
 
                                   return (
-                                    <ContextMenu>
-                                      <ContextMenu.Trigger
-                                        ref={(element) => {
-                                          row = element;
-                                        }}
+                                    <DropdownMenu
+                                      open={menuOpen()}
+                                      onOpenChange={setMenuOpen}
+                                      placement="right-start"
+                                    >
+                                      <SidebarMenuSubItem
                                         class="group/menu-item relative"
+                                        onContextMenu={(event) => {
+                                          event.preventDefault();
+                                          setMenuOpen(true);
+                                        }}
                                       >
-                                        <SidebarMenuSubItem>
-                                          <SidebarMenuSubButton
-                                            as="button"
-                                            aria-current={
-                                              selected() ? "page" : undefined
-                                            }
-                                            class="h-8 w-full pr-7 text-left"
-                                            isActive={selected()}
-                                            onClick={() =>
-                                              props.onSelectThread(entry.id)
+                                        <SidebarMenuSubButton
+                                          as="button"
+                                          aria-current={
+                                            selected() ? "page" : undefined
+                                          }
+                                          class="h-8 w-full pr-7 text-left"
+                                          isActive={selected()}
+                                          onClick={() =>
+                                            props.onSelectThread(entry.id)
+                                          }
+                                        >
+                                          <AgentIcon
+                                            id={entry.agentId}
+                                            src={null}
+                                            compact
+                                          />
+                                          <span class="min-w-0 flex-1 truncate">
+                                            {title()}
+                                          </span>
+                                          <Show
+                                            when={
+                                              entry.status === "running" ||
+                                              entry.status === "cancelling"
                                             }
                                           >
-                                            <AgentIcon
-                                              id={entry.agentId}
-                                              src={null}
-                                              compact
-                                            />
-                                            <span class="min-w-0 flex-1 truncate">
-                                              {title()}
+                                            <span class="shrink-0 text-xs text-muted">
+                                              {t("sidebar.running")}
                                             </span>
-                                            <Show
-                                              when={
-                                                entry.status === "running" ||
-                                                entry.status === "cancelling"
-                                              }
-                                            >
-                                              <span class="shrink-0 text-xs text-muted">
-                                                {t("sidebar.running")}
-                                              </span>
-                                            </Show>
-                                            <Show
-                                              when={
-                                                entry.status ===
-                                                "waitingForApproval"
-                                              }
-                                            >
-                                              <span class="shrink-0 text-xs text-accent">
-                                                {t(
-                                                  "sidebar.waitingForApproval",
-                                                )}
-                                              </span>
-                                            </Show>
-                                            <Show
-                                              when={entry.status === "failed"}
-                                            >
-                                              <span class="shrink-0 text-xs text-muted">
-                                                {t("sidebar.connectionError")}
-                                              </span>
-                                            </Show>
-                                          </SidebarMenuSubButton>
-                                          <SidebarMenuAction
-                                            aria-label={t(
-                                              "sidebar.threadMenu",
-                                              { name: title() },
-                                            )}
-                                            showOnHover
-                                            onClick={(event) => {
-                                              if (!row) return;
-                                              const bounds =
-                                                event.currentTarget.getBoundingClientRect();
-                                              row.dispatchEvent(
-                                                new MouseEvent("contextmenu", {
-                                                  bubbles: true,
-                                                  cancelable: true,
-                                                  clientX: bounds.right,
-                                                  clientY: bounds.bottom,
-                                                }),
-                                              );
-                                            }}
-                                          >
-                                            <EllipsisVertical
-                                              aria-hidden="true"
-                                              style={{ "stroke-width": "1px" }}
-                                            />
-                                          </SidebarMenuAction>
-                                        </SidebarMenuSubItem>
-                                      </ContextMenu.Trigger>
-                                      <ContextMenu.Portal>
-                                        <ContextMenu.Content class={menuClass}>
-                                          <ContextMenu.Item
-                                            class={deleteItemClass}
-                                            onSelect={() =>
-                                              requestDelete(entry)
+                                          </Show>
+                                          <Show
+                                            when={
+                                              entry.status ===
+                                              "waitingForApproval"
                                             }
                                           >
-                                            {t("common.delete")}
-                                          </ContextMenu.Item>
-                                        </ContextMenu.Content>
-                                      </ContextMenu.Portal>
-                                    </ContextMenu>
+                                            <span class="shrink-0 text-xs text-accent">
+                                              {t("sidebar.waitingForApproval")}
+                                            </span>
+                                          </Show>
+                                          <Show
+                                            when={entry.status === "failed"}
+                                          >
+                                            <span class="shrink-0 text-xs text-muted">
+                                              {t("sidebar.connectionError")}
+                                            </span>
+                                          </Show>
+                                        </SidebarMenuSubButton>
+                                        <DropdownMenuTrigger
+                                          as={SidebarMenuAction}
+                                          aria-label={t("sidebar.threadMenu", {
+                                            name: title(),
+                                          })}
+                                          showOnHover
+                                        >
+                                          <EllipsisVertical
+                                            aria-hidden="true"
+                                            style={{ "stroke-width": "1px" }}
+                                          />
+                                        </DropdownMenuTrigger>
+                                      </SidebarMenuSubItem>
+                                      <DropdownMenuContent>
+                                        <DropdownMenuItem
+                                          class="px-3 py-2 text-danger hover:bg-danger-soft data-[highlighted]:bg-danger-soft"
+                                          onSelect={() => requestDelete(entry)}
+                                        >
+                                          <Trash2
+                                            aria-hidden="true"
+                                            class="size-3.5"
+                                          />
+                                          {t("common.delete")}
+                                        </DropdownMenuItem>
+                                      </DropdownMenuContent>
+                                    </DropdownMenu>
                                   );
                                 }}
                               </For>
@@ -355,7 +339,7 @@ export function AppSidebar(props: {
               <DropdownMenuContent class="w-40">
                 <DropdownMenuItem
                   aria-current={props.view === "general" ? "page" : undefined}
-                  class="rounded-sm px-2 py-1.5 outline-none data-[highlighted]:bg-canvas aria-[current=page]:bg-canvas aria-[current=page]:font-medium"
+                  class="aria-[current=page]:bg-menu-hover aria-[current=page]:font-medium"
                   onSelect={props.onShowGeneral}
                 >
                   <Settings aria-hidden="true" class="size-4" />
@@ -363,7 +347,7 @@ export function AppSidebar(props: {
                 </DropdownMenuItem>
                 <DropdownMenuItem
                   aria-current={props.view === "agents" ? "page" : undefined}
-                  class="rounded-sm px-2 py-1.5 outline-none data-[highlighted]:bg-canvas aria-[current=page]:bg-canvas aria-[current=page]:font-medium"
+                  class="aria-[current=page]:bg-menu-hover aria-[current=page]:font-medium"
                   onSelect={props.onManageAgents}
                 >
                   <Bot aria-hidden="true" class="size-4" />

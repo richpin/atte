@@ -1,6 +1,7 @@
 import { makeResizeObserver } from "@solid-primitives/resize-observer";
 import { QueryClient, QueryClientProvider } from "@tanstack/solid-query";
 import { AgentAuthenticationProvider } from "features/agent-authentication";
+import { Bot, Settings } from "lucide-solid";
 import { AgentManagementPage } from "pages/agent-management";
 import { GeneralPage } from "pages/general";
 import { NewChatPage } from "pages/new-chat";
@@ -244,6 +245,12 @@ function ShellContent(props: { shell: AppShellModel }) {
           <h1 class="relative flex min-w-0 flex-1 items-center gap-2 text-left text-sm font-medium">
             <Show when={threadAgentId()}>
               {(agentId) => <AgentIcon id={agentId()} src={null} compact />}
+            </Show>
+            <Show when={shell.view() === "general"}>
+              <Settings aria-hidden="true" class="size-4" />
+            </Show>
+            <Show when={shell.view() === "agents"}>
+              <Bot aria-hidden="true" class="size-4" />
             </Show>
             <span class="truncate">{title()}</span>
           </h1>
