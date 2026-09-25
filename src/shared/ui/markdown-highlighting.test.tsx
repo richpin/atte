@@ -8,6 +8,7 @@ import {
 import { createSignal } from "solid-js";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { I18nProvider } from "../i18n";
+import { ThemeProvider, useTheme } from "../theme";
 import { Markdown } from "./markdown";
 
 const highlightCode = vi.hoisted(() => vi.fn());
@@ -50,6 +51,7 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   localStorage.removeItem("atte.locale");
+  localStorage.removeItem("atte.theme");
   vi.unstubAllGlobals();
 });
 
@@ -136,6 +138,31 @@ print('done')`}
     "print('done')",
     "python",
     "light",
+  );
+});
+
+it("rehighlights agent code when the resolved appearance changes", async () => {
+  highlightCode.mockReturnValue(new Promise(() => undefined));
+  localStorage.setItem("atte.theme", "light");
+  render(() => (
+    <ThemeProvider>
+      <ThemeMarkdown />
+    </ThemeProvider>
+  ));
+
+  expect(highlightCode).toHaveBeenCalledWith(
+    "const themed = true;",
+    "javascript",
+    "light",
+  );
+
+  fireEvent.click(screen.getByRole("button", { name: "Use dark theme" }));
+  await waitFor(() =>
+    expect(highlightCode).toHaveBeenCalledWith(
+      "const themed = true;",
+      "javascript",
+      "dark",
+    ),
   );
 });
 
@@ -260,3 +287,21 @@ fn main() {}
 
   expect(code?.textContent).toBe("fn main() {}");
 });
+
+function ThemeMarkdown() {
+  const { setPreference } = useTheme();
+  return (
+    <>
+      <button type="button" onClick={() => setPreference("dark")}>
+        Use dark theme
+      </button>
+      <Markdown
+        source={`\`\`\`javascript
+const themed = true;
+\`\`\``}
+        variant="agent"
+        streaming={false}
+      />
+    </>
+  );
+}

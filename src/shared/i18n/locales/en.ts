@@ -22,10 +22,17 @@ export const en = {
     english: "English",
     korean: "한국어",
   },
+  theme: {
+    label: "Appearance",
+    system: "System",
+    light: "Light",
+    dark: "Dark",
+  },
   settings: {
     openMenu: "Open settings menu",
     general: "General",
     agents: "Agents",
+    themeDescription: "Choose how Atte looks on this device.",
     languageDescription: "Choose the language used throughout Atte.",
   },
   thread: {

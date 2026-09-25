@@ -227,6 +227,24 @@ it("opens settings pages from the sidebar menu and keeps language selection ther
   expect(
     screen.getByText("Atte 전체에서 사용할 언어를 선택합니다."),
   ).toBeTruthy();
+  expect(
+    screen.getByText("이 기기에서 사용할 Atte의 화면 모드를 선택합니다."),
+  ).toBeTruthy();
+  const systemTheme = screen.getByRole("radio", { name: "시스템" });
+  expect(systemTheme).toHaveProperty("checked", true);
+
+  systemTheme.focus();
+  expect(document.activeElement).toBe(systemTheme);
+  expect(screen.getByRole("radio", { name: "라이트" })).toBeTruthy();
+
+  await userEvent.click(screen.getByRole("radio", { name: "다크" }));
+  expect(document.documentElement.dataset.theme).toBe("dark");
+  expect(document.documentElement.style.colorScheme).toBe("dark");
+  expect(localStorage.getItem("atte.theme")).toBe("dark");
+
+  await userEvent.click(screen.getByRole("radio", { name: "시스템" }));
+  expect(document.documentElement.dataset.theme).toBe("light");
+  expect(localStorage.getItem("atte.theme")).toBe("system");
 
   await userEvent.click(screen.getByRole("button", { name: "언어" }));
   await userEvent.click(screen.getByRole("menuitemradio", { name: "English" }));
@@ -2152,6 +2170,7 @@ it("lays the composer over the full-height timeline and reserves its measured he
   expect(form).not.toBeNull();
   const overlay = form?.parentElement?.parentElement as HTMLElement;
   expect(overlay.classList).toContain("absolute");
+  expect(overlay.classList).toContain("bottom-4");
   expect(viewport.parentElement?.classList).toContain("h-full");
   const observer = observers.find(({ targets }) => targets.includes(overlay));
   expect(observer).toBeDefined();
@@ -2164,7 +2183,7 @@ it("lays the composer over the full-height timeline and reserves its measured he
     ],
     {} as ResizeObserver,
   );
-  expect(viewport.style.scrollPaddingBottom).toBe("192px");
+  expect(viewport.style.scrollPaddingBottom).toBe("224px");
 });
 
 it("sends once, renders streaming text and completion, and admits the next message", async () => {

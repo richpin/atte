@@ -40,7 +40,7 @@ function UserMessage(props: { message: string; attachments: Attachment[] }) {
   return (
     <div
       data-message-participant="user"
-      class="ml-auto min-w-0 max-w-[85%] rounded-2xl bg-user-bubble px-4 py-3 text-sm text-white"
+      class="ml-auto min-w-0 max-w-[85%] rounded-2xl bg-user-bubble px-4 py-3 text-ink text-sm"
     >
       <div
         class={
@@ -70,7 +70,7 @@ function UserMessage(props: { message: string; attachments: Attachment[] }) {
         <button
           type="button"
           aria-expanded={expanded()}
-          class="mt-2 flex items-center gap-1 text-xs text-white/75 hover:text-white focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white"
+          class="mt-2 flex items-center gap-1 text-muted text-xs hover:text-ink focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
           onClick={() => setExpanded((value) => !value)}
         >
           {expanded() ? t("thread.showLess") : t("thread.showMore")}

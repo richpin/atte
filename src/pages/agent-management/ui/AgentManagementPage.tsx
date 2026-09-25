@@ -225,7 +225,7 @@ export function AgentManagementPage(props: {
                         type="button"
                         aria-label={`${agent.name} ${installing() ? t("agents.installing") : t("agents.install")}`}
                         disabled={!agent.distribution || installing()}
-                        class="rounded-lg bg-accent px-4 py-2 text-white focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-accent disabled:opacity-40"
+                        class="rounded-lg bg-primary px-4 py-2 text-primary-foreground focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-accent disabled:opacity-40"
                         onClick={() => run(agent.id, "install")}
                       >
                         {installing()

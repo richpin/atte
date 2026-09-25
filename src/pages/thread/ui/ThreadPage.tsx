@@ -9,6 +9,9 @@ import { Message } from "./Message";
 import { ThreadComposer } from "./ThreadComposer";
 import { ThreadTimeline } from "./ThreadTimeline";
 
+const composerBottomOffset = 16;
+const timelineComposerGap = 48;
+
 export function ThreadPage(props: {
   active: boolean;
   model: ThreadModel;
@@ -57,7 +60,8 @@ export function ThreadPage(props: {
     const entry = entries.find(({ target }) => target === composerOverlay);
     if (entry) setComposerHeight(entry.contentRect.height);
   });
-  const composerInset = () => composerHeight() + 32;
+  const composerInset = () =>
+    composerHeight() + composerBottomOffset + timelineComposerGap;
   const [authenticationReconnect, setAuthenticationReconnect] = createStore({
     attemptedByThread: {} as Record<string, number | undefined>,
     blockedByThread: {} as Record<string, number | undefined>,
@@ -240,7 +244,7 @@ export function ThreadPage(props: {
             >
               <button
                 type="button"
-                class="rounded-lg bg-accent px-4 py-2 text-sm text-white focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-accent disabled:opacity-50"
+                class="rounded-lg bg-primary px-4 py-2 text-primary-foreground text-sm focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-accent disabled:opacity-50"
                 disabled={connecting() || thread()?.status === "connecting"}
                 onClick={connect}
               >

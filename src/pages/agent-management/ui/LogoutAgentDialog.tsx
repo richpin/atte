@@ -37,7 +37,7 @@ export function LogoutAgentDialog(props: {
             </AlertDialog.CloseButton>
             <AlertDialog.CloseButton
               aria-label={t("agents.confirmLogout")}
-              class="rounded-lg bg-accent px-4 py-2 text-white focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-accent"
+              class="rounded-lg bg-primary px-4 py-2 text-primary-foreground focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-accent"
               onClick={props.onConfirm}
             >
               {t("agents.confirmLogout")}

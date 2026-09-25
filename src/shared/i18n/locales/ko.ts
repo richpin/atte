@@ -28,10 +28,17 @@ export const ko = {
     english: "English",
     korean: "한국어",
   },
+  theme: {
+    label: "외관",
+    system: "시스템",
+    light: "라이트",
+    dark: "다크",
+  },
   settings: {
     openMenu: "설정 메뉴 열기",
     general: "일반",
     agents: "에이전트",
+    themeDescription: "이 기기에서 사용할 Atte의 화면 모드를 선택합니다.",
     languageDescription: "Atte 전체에서 사용할 언어를 선택합니다.",
   },
   thread: {

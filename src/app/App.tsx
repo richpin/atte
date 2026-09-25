@@ -6,6 +6,7 @@ import { GeneralPage } from "pages/general";
 import { NewChatPage } from "pages/new-chat";
 import { ThreadPage } from "pages/thread";
 import { I18nProvider, useI18n } from "shared/i18n";
+import { ThemeProvider } from "shared/theme";
 import {
   Resizable,
   ResizableHandle,
@@ -31,13 +32,15 @@ const CONTENT_MIN_SIZE = "320px";
 export default function App() {
   const queryClient = new QueryClient();
   return (
-    <I18nProvider>
-      <QueryClientProvider client={queryClient}>
-        <AgentAuthenticationProvider>
-          <AppShell />
-        </AgentAuthenticationProvider>
-      </QueryClientProvider>
-    </I18nProvider>
+    <ThemeProvider>
+      <I18nProvider>
+        <QueryClientProvider client={queryClient}>
+          <AgentAuthenticationProvider>
+            <AppShell />
+          </AgentAuthenticationProvider>
+        </QueryClientProvider>
+      </I18nProvider>
+    </ThemeProvider>
   );
 }
 

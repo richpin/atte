@@ -81,7 +81,7 @@ export function ThreadComposer(props: {
         when={props.thread.failure === "authenticationRequired"}
         fallback={
           <form
-            class="max-h-thread-composer-form shrink-0 overflow-y-auto overscroll-contain rounded-2xl border border-line bg-panel p-4"
+            class="max-h-thread-composer-form shrink-0 overflow-y-auto overscroll-contain rounded-3xl border border-line bg-input-surface p-4 shadow-sm"
             onSubmit={(event) => {
               event.preventDefault();
               props.onSend();
@@ -226,7 +226,7 @@ export function ThreadComposer(props: {
                 aria-label={
                   props.showStop ? t("thread.stop") : t("thread.send")
                 }
-                class="grid size-8 shrink-0 place-items-center rounded-full bg-accent text-white focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-accent disabled:opacity-40"
+                class="grid size-8 shrink-0 place-items-center rounded-full bg-primary text-primary-foreground focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-accent disabled:opacity-40"
                 disabled={
                   props.showStop
                     ? !props.actionsEnabled || props.stopping
@@ -252,7 +252,7 @@ export function ThreadComposer(props: {
           </form>
         }
       >
-        <section class="shrink-0 rounded-2xl border border-line bg-panel p-4">
+        <section class="shrink-0 rounded-3xl border border-line bg-input-surface p-4 shadow-sm">
           <Switch>
             <Match when={authenticationState("loading")}>
               <p role="status">{t("thread.authentication.loading")}</p>
@@ -263,7 +263,7 @@ export function ThreadComposer(props: {
                   <p role="alert">{state().message}</p>
                   <button
                     type="button"
-                    class="mt-3 rounded-lg bg-accent px-4 py-2 text-sm text-white focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-accent"
+                    class="mt-3 rounded-lg bg-primary px-4 py-2 text-primary-foreground text-sm focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-accent"
                     onClick={() => props.onRetryAuthentication?.()}
                   >
                     {t("common.retry")}
@@ -279,7 +279,7 @@ export function ThreadComposer(props: {
                       <div>
                         <button
                           type="button"
-                          class="w-full rounded-lg bg-accent px-4 py-2 text-sm text-white focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-accent"
+                          class="w-full rounded-lg bg-primary px-4 py-2 text-primary-foreground text-sm focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-accent"
                           onClick={() => props.onAuthenticate?.(method.id)}
                         >
                           {method.name}

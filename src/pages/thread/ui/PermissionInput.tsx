@@ -28,7 +28,7 @@ export function PermissionInput(props: {
               <button
                 type="button"
                 disabled={props.disabled}
-                class="min-w-0 max-w-full whitespace-normal break-words rounded-lg bg-accent px-3 py-2 text-left text-white focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-accent disabled:opacity-40"
+                class="min-w-0 max-w-full whitespace-normal break-words rounded-lg bg-primary px-3 py-2 text-left text-primary-foreground focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-accent disabled:opacity-40"
                 onClick={() => props.onAnswer(props.request.id, option.id)}
               >
                 {option.name}

@@ -51,7 +51,7 @@ export function NewChatPage(props: {
           </label>
           <button
             type="button"
-            class="rounded-lg bg-accent px-4 py-2.5 text-sm text-white focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-accent disabled:opacity-50"
+            class="rounded-lg bg-primary px-4 py-2.5 text-primary-foreground text-sm focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-accent disabled:opacity-50"
             disabled={props.loading || props.failed || props.selecting}
             onClick={props.onSelectFolder}
           >

@@ -2,6 +2,7 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import morphdom from "morphdom";
 import { createEffect, on, onCleanup } from "solid-js";
 import { useI18n } from "../i18n";
+import { useTheme } from "../theme";
 import { renderMarkdown, safeWebUrl } from "./markdown-parser";
 import { type HighlightedCode, highlightCode } from "./syntax-highlighter";
 
@@ -17,6 +18,7 @@ export type MarkdownProps = {
 
 export function Markdown(props: MarkdownProps) {
   const { locale, t } = useI18n();
+  const { resolvedTheme } = useTheme();
   let body!: HTMLDivElement;
   let disposed = false;
   let frame: number | undefined;
@@ -128,7 +130,7 @@ export function Markdown(props: MarkdownProps) {
       highlightTargets.set(code, "");
       if (!block.language || (streaming && !block.closed)) continue;
 
-      const appearance = props.variant === "user" ? "dark" : "light";
+      const appearance = resolvedTheme();
       const language = block.language.id;
       const key = `${appearance}\0${language}\0${block.source}`;
       highlightTargets.set(code, key);
@@ -295,6 +297,7 @@ export function Markdown(props: MarkdownProps) {
           props.streaming ?? false,
           props.generation,
           locale(),
+          resolvedTheme(),
         ] as const,
       ([source, streaming, generation], previous) => {
         latestSource = source;
