@@ -1,7 +1,7 @@
 import { DropdownMenu } from "@kobalte/core/dropdown-menu";
 import { Popover } from "@kobalte/core/popover";
 import type { AgentAuthenticationState } from "features/agent-authentication";
-import { ArrowUp } from "lucide-solid";
+import { ArrowUp, Plus } from "lucide-solid";
 import { useI18n } from "shared/i18n";
 import { For, Match, Show, Switch } from "solid-js";
 import type {
@@ -153,9 +153,13 @@ export function ThreadComposer(props: {
                   <DropdownMenu.Trigger
                     aria-label={t("thread.addAttachment")}
                     disabled={!props.canSend}
-                    class="grid size-7 shrink-0 place-items-center rounded-full border border-line text-base focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent disabled:opacity-40"
+                    class="grid size-7 shrink-0 place-items-center rounded-full text-muted transition-colors hover:bg-panel focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent disabled:opacity-40"
                   >
-                    +
+                    <Plus
+                      aria-hidden="true"
+                      size={16}
+                      style={{ "stroke-width": "2.5px" }}
+                    />
                   </DropdownMenu.Trigger>
                   <DropdownMenu.Portal>
                     <DropdownMenu.Content class="z-50 min-w-32 rounded-lg border border-line bg-panel p-1 text-sm text-ink shadow-lg">

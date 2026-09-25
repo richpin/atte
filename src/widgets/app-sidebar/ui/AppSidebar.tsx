@@ -2,7 +2,7 @@ import { AlertDialog } from "@kobalte/core/alert-dialog";
 import { ContextMenu } from "@kobalte/core/context-menu";
 import {
   Bot,
-  Ellipsis,
+  EllipsisVertical,
   FolderClosed,
   FolderOpen,
   Plus,
@@ -214,7 +214,11 @@ export function AppSidebar(props: {
                               props.onCreateInProject(group.folder)
                             }
                           >
-                            <Plus aria-hidden="true" />
+                            <Plus
+                              aria-hidden="true"
+                              class="text-muted"
+                              size={20}
+                            />
                           </SidebarMenuAction>
                           <Show when={!collapsedProjects().has(group.folder)}>
                             <SidebarMenuSub class="mr-0 translate-x-0 pr-0">
@@ -242,7 +246,7 @@ export function AppSidebar(props: {
                                             aria-current={
                                               selected() ? "page" : undefined
                                             }
-                                            class="w-full pr-7 text-left"
+                                            class="h-8 w-full pr-7 text-left"
                                             isActive={selected()}
                                             onClick={() =>
                                               props.onSelectThread(entry.id)
@@ -306,7 +310,10 @@ export function AppSidebar(props: {
                                               );
                                             }}
                                           >
-                                            <Ellipsis aria-hidden="true" />
+                                            <EllipsisVertical
+                                              aria-hidden="true"
+                                              style={{ "stroke-width": "1px" }}
+                                            />
                                           </SidebarMenuAction>
                                         </SidebarMenuSubItem>
                                       </ContextMenu.Trigger>
