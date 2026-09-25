@@ -1,4 +1,5 @@
 import { openUrl } from "@tauri-apps/plugin-opener";
+import { Copy } from "lucide-solid";
 import morphdom from "morphdom";
 import { createEffect, on, onCleanup } from "solid-js";
 import { useI18n } from "../i18n";
@@ -30,6 +31,13 @@ export function Markdown(props: MarkdownProps) {
   const copyRequests = new WeakMap<HTMLElement, number>();
   const feedbackTimers = new Map<HTMLElement, ReturnType<typeof setTimeout>>();
   const highlightTargets = new WeakMap<HTMLElement, string>();
+  const copyIcon = (
+    <Copy aria-hidden="true" class="size-3.5" />
+  ) as SVGSVGElement;
+
+  function showCopyIcon(button: HTMLButtonElement) {
+    button.replaceChildren(copyIcon.cloneNode(true));
+  }
 
   function decorateTables(target: HTMLElement) {
     for (const table of target.querySelectorAll<HTMLTableElement>("table")) {
@@ -47,9 +55,9 @@ export function Markdown(props: MarkdownProps) {
     button.type = "button";
     button.dataset.codeCopy = String(index);
     button.className =
-      "markdown-code-copy rounded px-2 py-1 text-xs font-medium hover:bg-current/10 focus-visible:outline-2 focus-visible:outline-offset-2";
+      "markdown-code-copy inline-flex items-center justify-center rounded px-2 py-1 text-xs font-medium hover:bg-current/10 focus-visible:outline-2 focus-visible:outline-offset-2";
     button.setAttribute("aria-label", t("markdown.code.copy"));
-    button.textContent = t("markdown.code.copyVisual");
+    showCopyIcon(button);
     return button;
   }
 
@@ -67,11 +75,11 @@ export function Markdown(props: MarkdownProps) {
       const wrapper = document.createElement("div");
       wrapper.dataset.markdownCodeBlock = "";
       wrapper.className =
-        "markdown-code-block my-3 min-w-0 max-w-full overflow-hidden rounded-lg border border-line";
+        "markdown-code-block my-3 min-w-0 max-w-full overflow-hidden rounded-2xl border border-line";
 
       const header = document.createElement("div");
       header.className =
-        "markdown-code-header flex min-h-9 items-center justify-between gap-3 border-line border-b px-2";
+        "markdown-code-header flex min-h-9 items-center justify-between gap-3 px-2";
       if (block.language) {
         const language = document.createElement("span");
         language.dataset.codeLanguage = block.language.id;
@@ -227,7 +235,7 @@ export function Markdown(props: MarkdownProps) {
     );
     if (button) {
       button.setAttribute("aria-label", t("markdown.code.copy"));
-      button.textContent = t("markdown.code.copyVisual");
+      showCopyIcon(button);
     }
     if (feedback) {
       feedback.textContent = "";

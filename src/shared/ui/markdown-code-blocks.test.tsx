@@ -49,6 +49,10 @@ plain();
   expect(blocks[1]?.querySelector("[data-code-language]")).toBeNull();
   expect(blocks[1]?.querySelector("code")?.textContent).toBe("plain();");
   expect(blocks[0]?.classList).toContain("max-w-full");
+  expect(blocks[0]?.classList).toContain("rounded-2xl");
+  expect(
+    blocks[0]?.querySelector(".markdown-code-header")?.classList,
+  ).not.toContain("border-b");
   expect(blocks[0]?.querySelector("pre")?.classList).toContain(
     "overflow-x-auto",
   );
@@ -59,7 +63,10 @@ it("renders an open fence as copyable plain code", async () => {
   const { container } = renderCode(`\`\`\`javascript\n${exactSource}`);
 
   expect(container.querySelector("pre code")?.textContent).toBe(exactSource);
-  await fireEvent.click(screen.getByRole("button", { name: "Copy code" }));
+  const button = screen.getByRole("button", { name: "Copy code" });
+  expect(button.textContent).toBe("");
+  expect(button.querySelector("svg.lucide-copy")).toBeTruthy();
+  await fireEvent.click(button);
   expect(writeText).toHaveBeenCalledWith(exactSource);
 });
 
@@ -84,9 +91,9 @@ it("acknowledges successful copy accessibly for two seconds and safely restarts 
   expect(screen.getByRole("button", { name: "Copied code" })).toBeTruthy();
 
   vi.advanceTimersByTime(900);
-  expect(screen.getByRole("button", { name: "Copy code" }).textContent).toBe(
-    "Copy",
-  );
+  const resetButton = screen.getByRole("button", { name: "Copy code" });
+  expect(resetButton.textContent).toBe("");
+  expect(resetButton.querySelector("svg.lucide-copy")).toBeTruthy();
 
   fireEvent.click(button);
   await Promise.resolve();
