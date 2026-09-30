@@ -20,6 +20,8 @@ export {
   Select,
   SelectContent,
   SelectItem,
+  SelectLabel,
+  SelectSection,
   SelectTrigger,
   SelectValue,
 } from "./select";
@@ -43,3 +45,5 @@ export {
   SidebarTrigger,
   useSidebar,
 } from "./sidebar";
+
+export { Switch, SwitchControl, SwitchLabel, SwitchThumb } from "./switch";

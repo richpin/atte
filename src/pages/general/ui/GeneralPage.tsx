@@ -1,11 +1,21 @@
 import { SegmentedControl } from "@kobalte/core/segmented-control";
-import { useI18n } from "shared/i18n";
+import {
+  type LocalePreference,
+  type TranslationKey,
+  useI18n,
+} from "shared/i18n";
 import {
   isThemePreference,
   type ThemePreference,
   useTheme,
 } from "shared/theme";
-import { LanguageMenu } from "shared/ui";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "shared/ui";
 import { For } from "solid-js";
 
 const themeOptions: {
@@ -17,8 +27,19 @@ const themeOptions: {
   { value: "dark", label: "theme.dark" },
 ];
 
+const languageOptions: LocalePreference[] = ["system", "en", "ko"];
+const languageLabels: Record<LocalePreference, TranslationKey> = {
+  system: "language.system",
+  en: "language.english",
+  ko: "language.korean",
+};
+
 export function GeneralPage() {
-  const { t } = useI18n();
+  const {
+    t,
+    preference: languagePreference,
+    setPreference: setLanguagePreference,
+  } = useI18n();
   const { preference, setPreference } = useTheme();
 
   return (
@@ -59,7 +80,25 @@ export function GeneralPage() {
               {t("settings.languageDescription")}
             </p>
           </div>
-          <LanguageMenu />
+          <Select<LocalePreference>
+            class="w-44 shrink-0"
+            options={languageOptions}
+            optionTextValue={(option) => t(languageLabels[option])}
+            value={languagePreference()}
+            onChange={(value) => value && setLanguagePreference(value)}
+            itemComponent={(itemProps) => (
+              <SelectItem item={itemProps.item}>
+                {t(languageLabels[itemProps.item.rawValue])}
+              </SelectItem>
+            )}
+          >
+            <SelectTrigger aria-label={t("language.label")}>
+              <SelectValue<LocalePreference>>
+                {(state) => t(languageLabels[state.selectedOption()])}
+              </SelectValue>
+            </SelectTrigger>
+            <SelectContent class="border-line bg-menu text-ink" />
+          </Select>
         </div>
       </section>
     </main>

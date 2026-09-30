@@ -119,7 +119,7 @@ export function NewChatPage(props: {
                 <SelectTrigger
                   id="new-chat-agent"
                   aria-label={t("thread.newThreadAgent")}
-                  class="min-w-0 gap-2 rounded-lg border-0 px-2"
+                  class="min-w-0 gap-2 border-0 px-2"
                 >
                   <SelectValue<NewChatAgent> class="min-w-0">
                     {(state) => (
@@ -134,7 +134,7 @@ export function NewChatPage(props: {
                     )}
                   </SelectValue>
                 </SelectTrigger>
-                <SelectContent class="max-w-[calc(100vw-2rem)] rounded-xl border-line bg-menu text-ink" />
+                <SelectContent class="max-w-[calc(100vw-2rem)] border-line bg-menu text-ink" />
               </Select>
             </Show>
           </div>

@@ -293,8 +293,10 @@ it("opens settings pages from the sidebar menu and keeps language selection ther
   expect(document.documentElement.dataset.theme).toBe("light");
   expect(localStorage.getItem("atte.theme")).toBe("system");
 
-  await userEvent.click(screen.getByRole("button", { name: "언어" }));
-  await userEvent.click(screen.getByRole("menuitemradio", { name: "English" }));
+  await userEvent.click(
+    screen.getByRole("button", { name: "언어 시스템 설정" }),
+  );
+  await userEvent.click(screen.getByRole("option", { name: "English" }));
   expect(await screen.findByRole("heading", { name: "General" })).toBeTruthy();
   expect(localStorage.getItem("atte.locale")).toBe("en");
 
@@ -664,40 +666,42 @@ it("presents agent configuration and reconciles it from the thread subscription"
     await screen.findByRole("button", { name: "Configured thread" }),
   );
 
-  expect(
-    screen
-      .getByRole("combobox", { name: "Reasoning effort: Balanced" })
-      .getAttribute("title"),
-  ).toBe("Choose how deeply the agent reasons");
-  expect(screen.getByRole("group", { name: "Standard efforts" })).toBeTruthy();
+  const reasoning = screen.getByRole("button", {
+    name: "Reasoning effort Balanced",
+  });
+  expect(reasoning.getAttribute("title")).toBe(
+    "Choose how deeply the agent reasons",
+  );
+  await userEvent.click(reasoning);
+  expect(screen.getByText("Standard efforts")).toBeTruthy();
+  await userEvent.keyboard("{Escape}");
   expect(
     screen
       .getByRole("switch", { name: "Planning mode: 켜짐" })
       .getAttribute("title"),
   ).toBe("Plan before acting");
 
-  const settings = screen.getByText("스레드 설정");
-  settings.focus();
-  expect(document.activeElement).toBe(settings);
-  await userEvent.click(settings);
-  expect(settings.getAttribute("aria-expanded")).toBe("true");
-  expect(screen.getByText("Limit file access")).toBeTruthy();
-  expect(screen.getByRole("group", { name: "Safe modes" })).toBeTruthy();
+  expect(screen.queryByText("스레드 설정")).toBeNull();
+  const sandbox = screen.getByRole("button", { name: "Sandbox Workspace" });
+  expect(sandbox.getAttribute("title")).toBe("Limit file access");
+  await userEvent.click(sandbox);
+  expect(screen.getByText("Safe modes")).toBeTruthy();
+  await userEvent.keyboard("{Escape}");
   expect(
     screen.getByRole("switch", { name: "Notifications: 꺼짐" }),
   ).toBeTruthy();
 
-  await userEvent.selectOptions(
-    await screen.findByRole("combobox", { name: "Model: Model A" }),
-    "model-b",
+  await userEvent.click(
+    await screen.findByRole("button", { name: "Model Model A" }),
   );
+  await userEvent.click(screen.getByRole("option", { name: "Model B" }));
   expect(invoke).toHaveBeenCalledWith("set_thread_configuration", {
     id: "configured",
     configId: "opaque-model",
     value: { type: "select", value: "model-b" },
   });
   expect(
-    await screen.findByRole("combobox", { name: "Model: Model B" }),
+    await screen.findByRole("button", { name: "Model Model B" }),
   ).toBeTruthy();
   expect(
     (screen.getByRole("textbox", { name: "메시지" }) as HTMLTextAreaElement)
@@ -727,7 +731,7 @@ it("presents agent configuration and reconciles it from the thread subscription"
 
   receive({ ...saved, status: "connecting", configuration: [] });
   await waitFor(() =>
-    expect(screen.queryByRole("combobox", { name: /Model:/ })).toBeNull(),
+    expect(screen.queryByRole("button", { name: /^Model Model/ })).toBeNull(),
   );
 
   receive(saved);
@@ -818,12 +822,10 @@ it("keeps cancellation and permission responses usable during configuration reco
     }),
   );
 
-  await userEvent.selectOptions(
-    screen.getByRole("combobox", { name: "Model: Model A" }),
-    "model-b",
-  );
+  await userEvent.click(screen.getByRole("button", { name: "Model Model A" }));
+  await userEvent.click(screen.getByRole("option", { name: "Model B" }));
   expect(
-    await screen.findByRole("combobox", { name: "Model: Model B" }),
+    await screen.findByRole("button", { name: "Model Model B" }),
   ).toBeTruthy();
   await userEvent.click(screen.getByRole("button", { name: "현재 작업 중단" }));
   expect(invoke).toHaveBeenCalledWith("cancel_turn", {
@@ -864,7 +866,7 @@ it("keeps cancellation and permission responses usable during configuration reco
     option: "allow",
   });
   expect(
-    screen.getByRole("combobox", { name: "Reasoning effort: Low" }),
+    screen.getByRole("button", { name: "Reasoning effort Low" }),
   ).toBeTruthy();
   expect(screen.queryByRole("option", { name: "High" })).toBeNull();
   finishConfiguration();

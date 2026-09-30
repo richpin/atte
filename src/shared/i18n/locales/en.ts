@@ -145,7 +145,6 @@ export const en = {
     retryQueued: "Retry queued message: {{ message }}",
     queuedFailed: "Failed",
     permission: "Permission request",
-    settings: "Thread settings",
     settingOn: "On",
     settingOff: "Off",
   },

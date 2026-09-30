@@ -150,7 +150,6 @@ export const ko = {
     retryQueued: "대기 메시지 다시 시도: {{ message }}",
     queuedFailed: "실패",
     permission: "승인 요청",
-    settings: "스레드 설정",
     settingOn: "켜짐",
     settingOff: "꺼짐",
   },

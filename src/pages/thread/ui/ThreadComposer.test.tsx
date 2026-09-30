@@ -41,7 +41,7 @@ function readyThread(): Thread {
   };
 }
 
-it("renders agent-provided thread configuration and sends typed selections", () => {
+it("renders agent-provided thread configuration and sends typed selections", async () => {
   const onConfigure = vi.fn();
   const current = readyThread();
   current.configuration = [
@@ -113,22 +113,27 @@ it("renders agent-provided thread configuration and sends typed selections", () 
     </I18nProvider>
   ));
 
-  fireEvent.change(screen.getByRole("combobox", { name: "Model: Model A" }), {
-    target: { value: "model-b" },
-  });
+  await userEvent.click(screen.getByRole("button", { name: "Model Model A" }));
+  await userEvent.click(screen.getByRole("option", { name: "Model B" }));
   expect(onConfigure).toHaveBeenCalledWith("opaque-model", {
     type: "select",
     value: "model-b",
   });
 
-  fireEvent.click(screen.getByText("Thread settings"));
-  expect(screen.getByRole("group", { name: "Safe modes" })).toBeTruthy();
-  fireEvent.click(screen.getByRole("switch", { name: "Thinking: On" }));
+  expect(screen.queryByText("Thread settings")).toBeNull();
+  expect(screen.getByRole("button", { name: "Sandbox Workspace" }).title).toBe(
+    "Limit file access",
+  );
+  await userEvent.click(
+    screen.getByRole("button", { name: "Sandbox Workspace" }),
+  );
+  expect(screen.getByText("Safe modes")).toBeTruthy();
+  await userEvent.keyboard("{Escape}");
+  await userEvent.click(screen.getByRole("switch", { name: "Thinking: On" }));
   expect(onConfigure).toHaveBeenCalledWith("opaque-thinking", {
     type: "boolean",
     value: false,
   });
-  expect(screen.getByText("Limit file access")).toBeTruthy();
 });
 
 it("switches from PromptInput to PermissionInput when approval is requested", () => {
