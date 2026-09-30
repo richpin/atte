@@ -21,7 +21,9 @@ export function AgentIcon(props: {
         alt=""
         referrerPolicy="no-referrer"
         class={
-          props.compact ? "size-4 object-contain" : "size-6 object-contain"
+          props.compact
+            ? "size-4 object-contain dark:brightness-0 dark:invert"
+            : "size-6 object-contain dark:brightness-0 dark:invert"
         }
       />
       <Image.Fallback>
