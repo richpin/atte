@@ -698,20 +698,14 @@ export function createThreadModel(queryClient?: QueryClient) {
     }
   }
 
-  async function selectFolder(agentId: string) {
+  async function selectFolder() {
     if (selecting()) return;
     setSelecting(true);
     setError(undefined);
     const attempt = ++selection;
     try {
-      const id = await selectWorkingFolder(
-        agentId,
-        t("thread.folderDialogTitle"),
-      );
-      if (id) {
-        if (disposed) return;
-        if (attempt === selection) await openThread(id);
-      }
+      const folder = await selectWorkingFolder(t("thread.folderDialogTitle"));
+      if (!disposed && attempt === selection) return folder;
     } catch (cause) {
       if (attempt !== selection) return;
       setError(localizedMessage(cause, "thread.error.selectFolder"));

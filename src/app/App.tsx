@@ -260,12 +260,15 @@ function ShellContent(props: { shell: AppShellModel }) {
         <NewChatPage
           agents={shell.agents()}
           selectedAgent={shell.agentId()}
+          selectedFolder={shell.selectedFolder()}
           loading={shell.agentsLoading()}
           failed={shell.agentsFailed()}
           selecting={threads.selecting()}
           error={shell.newChatError()}
           onSelectAgent={shell.setSelectedAgent}
           onSelectFolder={() => void shell.selectFolder()}
+          onStart={() => void shell.startChat()}
+          onManageAgents={shell.showAgents}
         />
       </div>
       <div hidden={shell.view() !== "thread"} class="min-h-0 flex-1">

@@ -1,5 +1,15 @@
+import { ArrowRight, Bot, ChevronDown, Folder } from "lucide-solid";
 import { useI18n } from "shared/i18n";
-import { For, Show } from "solid-js";
+import {
+  AgentIcon,
+  Button,
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "shared/ui";
+import { Show } from "solid-js";
 
 type NewChatAgent = {
   id: string;
@@ -9,54 +19,144 @@ type NewChatAgent = {
 export function NewChatPage(props: {
   agents: NewChatAgent[];
   selectedAgent: string;
+  selectedFolder?: string;
   loading: boolean;
   failed: boolean;
   selecting: boolean;
   error?: string;
   onSelectAgent: (id: string) => void;
   onSelectFolder: () => void;
+  onStart: () => void;
+  onManageAgents: () => void;
 }) {
   const { t } = useI18n();
+  const folderName = () =>
+    props.selectedFolder?.split(/[\\/]/).filter(Boolean).at(-1) ||
+    props.selectedFolder;
+  const disabled = () => props.loading || props.failed || props.selecting;
 
   return (
     <main class="flex h-full min-h-0 flex-col overflow-y-auto bg-canvas text-ink">
-      <section class="m-auto flex w-full max-w-lg flex-col items-center gap-5 px-6 py-10 text-center">
-        <div class="space-y-2">
-          <h1 class="text-xl font-medium">{t("thread.empty.title")}</h1>
-          <p class="text-sm text-muted">{t("thread.empty.description")}</p>
+      <section class="@container m-auto w-full max-w-xl space-y-6 px-6 py-10">
+        <div class="space-y-4">
+          <h1 class="text-3xl font-medium tracking-tight">
+            {t("thread.empty.title")}
+          </h1>
+          <p class="text-lg text-muted">{t("thread.empty.description")}</p>
+        </div>
+        <div class="divide-y divide-line rounded-xl border border-line bg-panel px-4">
+          <div class="grid grid-cols-1 @sm:grid-cols-[9.5rem_minmax(0,1fr)] items-center gap-3 py-3">
+            <span
+              id="new-chat-folder-label"
+              class="flex items-center gap-2 whitespace-nowrap text-sm text-muted"
+            >
+              <Folder aria-hidden="true" class="size-4 shrink-0" />
+              {t("thread.workingFolder")}
+            </span>
+            <button
+              type="button"
+              aria-describedby="new-chat-folder-label"
+              class="flex min-w-0 items-center justify-between gap-2 rounded-md px-2 py-2 text-left text-sm hover:bg-canvas focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent disabled:opacity-50"
+              disabled={disabled()}
+              onClick={props.onSelectFolder}
+            >
+              <span class="min-w-0 truncate">
+                {props.selecting
+                  ? t("thread.selecting")
+                  : folderName() || t("thread.selectFolder")}
+              </span>
+              <ChevronDown
+                aria-hidden="true"
+                class="size-4 shrink-0 text-muted"
+              />
+            </button>
+          </div>
+          <div class="grid grid-cols-1 @sm:grid-cols-[9.5rem_minmax(0,1fr)] items-center gap-3 py-3">
+            <label
+              for="new-chat-agent"
+              class="flex items-center gap-2 whitespace-nowrap text-sm text-muted"
+            >
+              <Bot aria-hidden="true" class="size-4 shrink-0" />
+              {t("thread.agent")}
+            </label>
+            <Show
+              when={props.loading || props.failed || props.agents.length}
+              fallback={
+                <Button
+                  variant="ghost"
+                  class="justify-start"
+                  onClick={props.onManageAgents}
+                >
+                  {t("thread.manageAgents")}
+                </Button>
+              }
+            >
+              <Select<NewChatAgent>
+                class="min-w-0"
+                options={props.agents}
+                optionValue="id"
+                optionTextValue="name"
+                value={
+                  props.agents.find(
+                    (agent) => agent.id === props.selectedAgent,
+                  ) ?? null
+                }
+                disabled={disabled() || !props.agents.length}
+                onChange={(agent) => agent && props.onSelectAgent(agent.id)}
+                itemComponent={(itemProps) => (
+                  <SelectItem item={itemProps.item}>
+                    <span class="flex items-center gap-2 [[data-theme=dark]_&_img]:invert">
+                      <AgentIcon
+                        id={itemProps.item.rawValue.id}
+                        src={null}
+                        compact
+                      />
+                      {itemProps.item.rawValue.name}
+                    </span>
+                  </SelectItem>
+                )}
+              >
+                <SelectTrigger
+                  id="new-chat-agent"
+                  aria-label={t("thread.newThreadAgent")}
+                  class="min-w-0 gap-2 rounded-lg border-0 px-2"
+                >
+                  <SelectValue<NewChatAgent> class="min-w-0">
+                    {(state) => (
+                      <Show when={state.selectedOption()}>
+                        {(agent) => (
+                          <span class="flex min-w-0 items-center gap-2 [[data-theme=dark]_&_img]:invert">
+                            <AgentIcon id={agent().id} src={null} compact />
+                            <span class="truncate">{agent().name}</span>
+                          </span>
+                        )}
+                      </Show>
+                    )}
+                  </SelectValue>
+                </SelectTrigger>
+                <SelectContent class="max-w-[calc(100vw-2rem)] rounded-xl border-line bg-menu text-ink" />
+              </Select>
+            </Show>
+          </div>
         </div>
         <Show when={props.error}>
           {(error) => (
-            <p role="alert" class="text-sm text-danger">
+            <p role="alert" class="text-base text-danger">
               {error()}
             </p>
           )}
         </Show>
-        <div class="flex w-full max-w-sm flex-col gap-3 rounded-2xl border border-line bg-panel p-4 text-left">
-          <label class="flex flex-col gap-2 text-xs text-muted">
-            {t("thread.newThreadAgent")}
-            <select
-              aria-label={t("thread.newThreadAgent")}
-              class="rounded-lg border border-line bg-canvas px-3 py-2 text-sm text-ink focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
-              value={props.selectedAgent}
-              disabled={props.loading || props.failed || !props.agents.length}
-              onChange={(event) =>
-                props.onSelectAgent(event.currentTarget.value)
-              }
-            >
-              <For each={props.agents}>
-                {(agent) => <option value={agent.id}>{agent.name}</option>}
-              </For>
-            </select>
-          </label>
-          <button
-            type="button"
-            class="rounded-lg bg-primary px-4 py-2.5 text-primary-foreground text-sm focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-accent disabled:opacity-50"
-            disabled={props.loading || props.failed || props.selecting}
-            onClick={props.onSelectFolder}
+        <div class="flex justify-end">
+          <Button
+            class="rounded-xl"
+            disabled={
+              disabled() || !props.selectedFolder || !props.selectedAgent
+            }
+            onClick={props.onStart}
           >
-            {props.selecting ? t("thread.selecting") : t("thread.selectFolder")}
-          </button>
+            {t("thread.startChat")}
+            <ArrowRight aria-hidden="true" />
+          </Button>
         </div>
       </section>
     </main>

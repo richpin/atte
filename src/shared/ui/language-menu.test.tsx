@@ -14,7 +14,7 @@ test("changes the app language from the menu", async () => {
   await userEvent.click(screen.getByRole("menuitemradio", { name: "English" }));
 
   expect(await screen.findByRole("button", { name: "Language" })).toBeTruthy();
-  expect(screen.getByText("Where do you want to work?")).toBeTruthy();
+  expect(screen.getByText("What do you want to build?")).toBeTruthy();
   expect(localStorage.getItem("atte.locale")).toBe("en");
 });
 
@@ -22,14 +22,14 @@ test("restores a saved language and can return to the system setting", async () 
   localStorage.setItem("atte.locale", "en");
   renderApp();
 
-  expect(screen.getByText("Where do you want to work?")).toBeTruthy();
+  expect(screen.getByText("What do you want to build?")).toBeTruthy();
   await userEvent.click(screen.getByRole("button", { name: "Language" }));
   await userEvent.click(
     screen.getByRole("menuitemradio", { name: "System settings" }),
   );
 
   expect(await screen.findByRole("button", { name: "언어" })).toBeTruthy();
-  expect(screen.getByText("어디에서 작업할까요?")).toBeTruthy();
+  expect(screen.getByText("무엇을 만들고 싶으세요?")).toBeTruthy();
   expect(localStorage.getItem("atte.locale")).toBe("system");
 });
 

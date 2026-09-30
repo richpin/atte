@@ -36,9 +36,8 @@ struct Subscription {
 #[tauri::command]
 async fn select_working_folder(
     app: tauri::AppHandle,
-    agent_id: String,
     dialog_title: String,
-) -> Result<Option<Uuid>, ThreadError> {
+) -> Result<Option<std::path::PathBuf>, ThreadError> {
     tauri::async_runtime::spawn_blocking(move || {
         let selection = app
             .dialog()
@@ -51,9 +50,7 @@ async fn select_working_folder(
         let path = selection.into_path().map_err(|_| {
             ThreadError::InvalidWorkingFolder("로컬 작업 폴더를 선택해주세요.".into())
         })?;
-        app.state::<Threads>()
-            .create_for_agent(&path, &agent_id)
-            .map(|thread| Some(thread.id))
+        Ok(Some(path))
     })
     .await
     .map_err(|_| {

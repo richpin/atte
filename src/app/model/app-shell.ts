@@ -11,6 +11,7 @@ export function createAppShellModel() {
   const [agentsRevision, setAgentsRevision] = createSignal(0);
   const [agentsFailed, setAgentsFailed] = createSignal(false);
   const [selectedAgent, setSelectedAgent] = createSignal("");
+  const [selectedFolder, setSelectedFolder] = createSignal<string>();
   const [pendingFolder, setPendingFolder] = createSignal<string>();
   const [agents] = createResource(agentsRevision, async () => {
     try {
@@ -30,6 +31,7 @@ export function createAppShellModel() {
 
   function showNewChat() {
     threads.startNewChat();
+    setSelectedFolder(undefined);
     setPendingFolder(undefined);
     setView("new-chat");
   }
@@ -49,15 +51,14 @@ export function createAppShellModel() {
   }
 
   async function selectFolder() {
-    const agent = agentId();
-    if (!agent) {
-      showAgents();
-      return;
-    }
-    const previous = threads.selectedThreadId();
-    await threads.selectFolder(agent);
-    const selected = threads.selectedThreadId();
-    if (selected && selected !== previous) setView("thread");
+    const folder = await threads.selectFolder();
+    if (folder) setSelectedFolder(folder);
+  }
+
+  async function startChat() {
+    const folder = selectedFolder();
+    if (!folder || agents.loading || agentsFailed()) return;
+    await createInProject(folder);
   }
 
   async function createInProject(folder: string) {
@@ -100,6 +101,7 @@ export function createAppShellModel() {
     agentsLoading: () => agents.loading,
     agentsFailed,
     agentId,
+    selectedFolder,
     newChatError,
     setSelectedAgent,
     showNewChat,
@@ -107,6 +109,7 @@ export function createAppShellModel() {
     showGeneral,
     showAgents,
     selectFolder,
+    startChat,
     createInProject,
     removeThread,
     agentsChanged,

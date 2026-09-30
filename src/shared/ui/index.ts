@@ -17,6 +17,13 @@ export {
   useResizable,
 } from "./resizable";
 export {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "./select";
+export {
   Sidebar,
   SidebarContent,
   SidebarFooter,

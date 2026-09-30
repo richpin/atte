@@ -22,7 +22,7 @@ test("renders English and reacts when the system language changes", async () => 
     </I18nProvider>
   ));
 
-  expect(screen.getByText("Where do you want to work?")).toBeTruthy();
+  expect(screen.getByText("What do you want to build?")).toBeTruthy();
   expect(screen.getByText("New Thread")).toBeTruthy();
   expect(
     screen.getByText(
@@ -34,7 +34,7 @@ test("renders English and reacts when the system language changes", async () => 
   setLanguages("ko-KR");
   window.dispatchEvent(new Event("languagechange"));
 
-  expect(await screen.findByText("어디에서 작업할까요?")).toBeTruthy();
+  expect(await screen.findByText("무엇을 만들고 싶으세요?")).toBeTruthy();
   expect(document.documentElement.lang).toBe("ko");
 });
 
