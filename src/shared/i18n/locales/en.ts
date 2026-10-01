@@ -83,6 +83,7 @@ export const en = {
     agent: "Agent",
     startThread: "Start Thread",
     newThreadAgent: "New thread agent",
+    selectAgent: "Choose agent",
     selecting: "Selecting…",
     selectFolder: "Choose folder",
     folderDialogTitle: "Choose a working folder",

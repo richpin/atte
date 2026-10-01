@@ -185,13 +185,11 @@ function ShellSidebar(props: { shell: AppShellModel }) {
       selected={threads.selectedThreadId()}
       loading={threads.listLoading()}
       failed={threads.listError()}
-      creating={
-        threads.selecting() || shell.agentsLoading() || shell.agentsFailed()
-      }
+      creating={threads.selecting()}
       onRetry={() => void threads.reloadList()}
-      onNewThread={shell.showNewThread}
+      onNewThread={() => shell.showNewThread()}
       onSelectThread={(id) => void shell.openThread(id)}
-      onCreateInProject={(folder) => void shell.createInProject(folder)}
+      onNewThreadInProject={(folder) => shell.showNewThread(folder)}
       onDeleteThread={shell.removeThread}
       onShowGeneral={shell.showGeneral}
       onManageAgents={shell.showAgents}

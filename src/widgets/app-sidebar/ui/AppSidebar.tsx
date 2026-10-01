@@ -62,7 +62,7 @@ export function AppSidebar(props: {
   onRetry: () => void;
   onNewThread: () => void;
   onSelectThread: (id: string) => void;
-  onCreateInProject: (folder: string) => void;
+  onNewThreadInProject: (folder: string) => void;
   onDeleteThread: (id: string) => Promise<void>;
   onShowGeneral: () => void;
   onManageAgents: () => void;
@@ -208,7 +208,7 @@ export function AppSidebar(props: {
                             })}
                             disabled={props.creating}
                             onClick={() =>
-                              props.onCreateInProject(group.folder)
+                              props.onNewThreadInProject(group.folder)
                             }
                           >
                             <Plus

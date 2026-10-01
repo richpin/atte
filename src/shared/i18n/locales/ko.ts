@@ -90,6 +90,7 @@ export const ko = {
     agent: "에이전트",
     startThread: "스레드 시작",
     newThreadAgent: "새 스레드 에이전트",
+    selectAgent: "에이전트 선택",
     selecting: "선택 중…",
     selectFolder: "폴더 선택",
     folderDialogTitle: "작업 폴더 선택",

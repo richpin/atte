@@ -95,6 +95,7 @@ export function NewThreadPage(props: {
                 options={props.agents}
                 optionValue="id"
                 optionTextValue="name"
+                placeholder={t("thread.selectAgent")}
                 value={
                   props.agents.find(
                     (agent) => agent.id === props.selectedAgent,

@@ -13,7 +13,6 @@ export function createAppShellModel() {
   const [agentsFailed, setAgentsFailed] = createSignal(false);
   const [selectedAgent, setSelectedAgent] = createSignal("");
   const [selectedFolder, setSelectedFolder] = createSignal<string>();
-  const [pendingFolder, setPendingFolder] = createSignal<string>();
   const [agents] = createResource(agentsRevision, async () => {
     try {
       setAgentsFailed(false);
@@ -27,20 +26,19 @@ export function createAppShellModel() {
   const agentId = () =>
     agents()?.some((agent) => agent.id === selectedAgent())
       ? selectedAgent()
-      : agents()?.[0]?.id || "";
+      : "";
   const newThreadError = () =>
     threads.error() ?? (agentsFailed() ? t("thread.error.agents") : undefined);
 
-  function showNewThread() {
+  function showNewThread(folder?: string) {
     threads.startNewThread();
-    setSelectedFolder(undefined);
-    setPendingFolder(undefined);
+    setSelectedFolder(folder);
+    setSelectedAgent("");
     setView("new-thread");
   }
 
   async function openThread(id: string) {
     await threads.openThread(id);
-    setPendingFolder(undefined);
     setView("thread");
   }
 
@@ -59,19 +57,15 @@ export function createAppShellModel() {
 
   async function startThread() {
     const folder = selectedFolder();
-    if (!folder || agents.loading || agentsFailed()) return;
-    await createInProject(folder);
-  }
-
-  async function createInProject(folder: string) {
-    if (threads.selecting()) return;
     const agent = agentId();
-    if (!agent) {
-      setPendingFolder(folder);
-      showAgents();
+    if (
+      !folder ||
+      !agent ||
+      agents.loading ||
+      agentsFailed() ||
+      threads.selecting()
+    )
       return;
-    }
-    setPendingFolder(undefined);
     await threads.createInFolder(folder, agent);
     if (threads.selectedThreadId()) setView("thread");
   }
@@ -79,7 +73,7 @@ export function createAppShellModel() {
   async function removeThread(id: string) {
     const selected = threads.selectedThreadId() === id;
     await threads.removeThread(id);
-    if (selected) setView("new-thread");
+    if (selected) showNewThread();
   }
 
   function agentsChanged() {
@@ -87,14 +81,7 @@ export function createAppShellModel() {
   }
 
   createEffect(() => {
-    if (view() === "thread" && !threads.selectedThreadId())
-      setView("new-thread");
-  });
-
-  createEffect(() => {
-    const folder = pendingFolder();
-    if (view() === "agents" || agents.loading || !agentId() || !folder) return;
-    void createInProject(folder);
+    if (view() === "thread" && !threads.selectedThreadId()) showNewThread();
   });
 
   return {
@@ -113,7 +100,6 @@ export function createAppShellModel() {
     showAgents,
     selectFolder,
     startThread,
-    createInProject,
     removeThread,
     agentsChanged,
   };
