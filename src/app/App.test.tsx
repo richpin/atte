@@ -433,6 +433,77 @@ it("shows the thread agent icon beside both titles and keeps the composer free o
   ).not.toContain("Codex");
 });
 
+it("updates sidebar and header titles through subscriptions and shows the default after clearing", async () => {
+  const saved = {
+    id: "title-thread",
+    title: "Provisional title",
+    workingFolder: "/work/project",
+    agentId: "codex",
+    status: "sessionReady",
+    authentication: "authenticated",
+    turns: [],
+    permissions: [],
+    queuedMessages: [],
+  };
+  const other = { ...saved, id: "other", title: "Other thread" };
+  let receiveList!: (entries: unknown[]) => void;
+  const original = vi.mocked(invoke).getMockImplementation();
+  vi.mocked(invoke).mockImplementation((command, args) => {
+    if (command === "list_threads") return Promise.resolve([saved, other]);
+    if (command === "subscribe_thread_list") {
+      receiveList = (args as { channel: { onmessage: typeof receiveList } })
+        .channel.onmessage;
+      return Promise.resolve("list");
+    }
+    if (command === "subscribe_thread")
+      return subscribeWith(
+        args,
+        (args as { id: string }).id === saved.id ? saved : other,
+      );
+    return original?.(command, args) ?? Promise.resolve();
+  });
+  render(() => <App />);
+  await userEvent.click(
+    await screen.findByRole("button", { name: saved.title }),
+  );
+  await screen.findByRole("heading", { name: saved.title });
+
+  const title = "에이전트 제목 ".repeat(20);
+  const renamed = { ...saved, title };
+  receiveUpdate({
+    kind: "patch",
+    thread: renamed,
+    turnUpdates: [],
+    errors: [],
+  });
+  receiveList([renamed, other]);
+  expect(
+    await screen.findByRole("heading", { name: title.trim() }),
+  ).toBeTruthy();
+  await waitFor(() =>
+    expect(getSidebarThreadButton(title.trim())).toBeTruthy(),
+  );
+
+  const cleared = { ...saved, title: "" };
+  receiveUpdate({
+    kind: "patch",
+    thread: cleared,
+    turnUpdates: [],
+    errors: [],
+  });
+  receiveList([cleared, other]);
+  expect(
+    await screen.findByRole("heading", { name: "새 스레드" }),
+  ).toBeTruthy();
+  await waitFor(() => expect(getSidebarThreadButton("새 스레드")).toBeTruthy());
+
+  const oldReceive = receiveUpdate;
+  await userEvent.click(getSidebarThreadButton(other.title));
+  await screen.findByRole("heading", { name: other.title });
+  oldReceive({ kind: "patch", thread: renamed, turnUpdates: [], errors: [] });
+  expect(screen.getByRole("heading", { name: other.title })).toBeTruthy();
+});
+
 it("groups threads by folder, collapses projects and creates within the selected folder", async () => {
   vi.stubGlobal(
     "matchMedia",

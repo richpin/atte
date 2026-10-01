@@ -15,6 +15,19 @@ fn send(output: &mut impl Write, message: Value) -> io::Result<()> {
     output.flush()
 }
 
+fn send_title_updates(output: &mut impl Write, key: &str, session: &Value) -> io::Result<()> {
+    let Ok(updates) = env::var(key) else {
+        return Ok(());
+    };
+    for update in serde_json::from_str::<Vec<Value>>(&updates)? {
+        send(
+            output,
+            json!({"jsonrpc":"2.0","method":"session/update","params":{"sessionId":session,"update":update}}),
+        )?;
+    }
+    Ok(())
+}
+
 fn auth_status() -> Value {
     if env::var_os("AUTH_FILE").is_some_and(|path| std::path::Path::new(&path).exists()) {
         json!({
@@ -289,6 +302,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             "session/resume" => {
                 assert_eq!(mode, "resume-only");
                 assert_eq!(request["params"]["sessionId"], "remote-1");
+                send_title_updates(
+                    &mut output,
+                    "TITLE_UPDATES_RESTORE",
+                    &request["params"]["sessionId"],
+                )?;
                 let mut response = json!({});
                 if supports_configuration {
                     response["configOptions"] = configuration();
@@ -298,6 +316,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             "session/load" => {
                 assert_ne!(mode, "resume-only");
                 assert_eq!(request["params"]["sessionId"], "remote-1");
+                send_title_updates(
+                    &mut output,
+                    "TITLE_UPDATES_RESTORE",
+                    &request["params"]["sessionId"],
+                )?;
                 if mode == "replay-chunks" {
                     for (kind, id, text) in [
                         ("user_message_chunk", "a", "Same"),
@@ -410,6 +433,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     fs::write(path, serde_json::to_vec(&history)?)?;
                 }
                 assert_eq!(request["params"]["sessionId"], "remote-1");
+                if prompts == 1 {
+                    send_title_updates(
+                        &mut output,
+                        "TITLE_UPDATES_RUNNING",
+                        &request["params"]["sessionId"],
+                    )?;
+                    send_title_updates(&mut output, "TITLE_UPDATES_FOREIGN", &json!("foreign"))?;
+                }
                 if env::var_os("CONFIGURATION_UPDATE_DURING_PROMPT").is_some() {
                     let mut foreign = configuration();
                     foreign[2]["currentValue"] = json!(true);
@@ -574,7 +605,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         } else {
             response["result"] = result;
         }
+        let new_session = response["result"]["sessionId"].clone();
         send(&mut output, response)?;
+        if method == "session/new" {
+            send_title_updates(&mut output, "TITLE_UPDATES_NEW", &new_session)?;
+        }
+        if method == "session/prompt" && prompts == 1 {
+            send_title_updates(
+                &mut output,
+                "TITLE_UPDATES_IDLE",
+                &request["params"]["sessionId"],
+            )?;
+        }
         if (method == "initialize"
             || method == "authenticate"
             || method == "logout"

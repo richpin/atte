@@ -148,6 +148,169 @@ async fn persist_remote_session(
 }
 
 #[tokio::test]
+async fn session_titles_update_running_and_idle_subscriptions_and_survive_restart() {
+    use serde_json::json;
+    let folder = tempfile::tempdir().unwrap();
+    let mut agent = mock_agent();
+    let prompt_gate = folder.path().join("finish-prompt");
+    agent
+        .env
+        .insert("PROMPT_GATE".into(), prompt_gate.to_string_lossy().into());
+    let long_title = "에이전트가 생성한 긴 제목 ".repeat(10);
+    agent.env.insert("TITLE_UPDATES_RUNNING".into(), json!([
+        {"sessionUpdate":"session_info_update","title":long_title},
+        {"sessionUpdate":"session_info_update","updatedAt":"2099-01-01T00:00:00Z","_meta":{"custom":true}}
+    ]).to_string());
+    agent.env.insert(
+        "TITLE_UPDATES_FOREIGN".into(),
+        json!([
+            {"sessionUpdate":"session_info_update","title":"Wrong session"}
+        ])
+        .to_string(),
+    );
+    agent.env.insert(
+        "TITLE_UPDATES_IDLE".into(),
+        json!([
+            {"sessionUpdate":"session_info_update","title":"Final title"}
+        ])
+        .to_string(),
+    );
+    let store = std::sync::Arc::new(
+        atte_lib::storage::Store::open(&folder.path().join("atte.sqlite")).unwrap(),
+    );
+    let threads = Threads::with_store(vec![agent.clone()], store.clone()).unwrap();
+    let draft = threads.create(folder.path()).unwrap();
+    threads.connect(draft.id).unwrap();
+    settle(&threads, draft.id).await;
+    let mut stream = subscribe(&threads, draft.id);
+    let mut list = threads.subscribe_list().unwrap();
+    threads
+        .send_message(draft.id, "First input".into())
+        .unwrap();
+    let prompt_at = threads.get(draft.id).unwrap().last_prompt_at;
+    tokio::time::timeout(Duration::from_secs(5), async {
+        let mut saw_running_title = false;
+        loop {
+            let thread = stream.recv().await.unwrap();
+            assert!(
+                thread.title == draft.title
+                    || thread.title == "First input"
+                    || thread.title == long_title
+                    || thread.title == "Final title",
+                "metadata-only and foreign updates must not replace the title: {}",
+                thread.title
+            );
+            if thread.title == long_title && !saw_running_title {
+                saw_running_title = true;
+                assert_eq!(thread.status, ThreadStatus::Running);
+                assert_eq!(thread.last_prompt_at, prompt_at);
+                std::fs::write(&prompt_gate, []).unwrap();
+            }
+            if thread.title == "Final title" && thread.status == ThreadStatus::SessionReady {
+                assert!(saw_running_title);
+                assert_eq!(thread.last_prompt_at, prompt_at);
+                assert_eq!(thread.turns[0].message, "First input");
+                assert_eq!(thread.turns[0].response, "Hello world");
+                break;
+            }
+        }
+        loop {
+            if list.recv().await.unwrap()[0].title == "Final title" {
+                break;
+            }
+        }
+    })
+    .await
+    .unwrap();
+    threads.shutdown().await;
+    drop(threads);
+    drop(store);
+    agent.env.remove("TITLE_UPDATES_RUNNING");
+    agent.env.remove("TITLE_UPDATES_IDLE");
+    let store = std::sync::Arc::new(
+        atte_lib::storage::Store::open(&folder.path().join("atte.sqlite")).unwrap(),
+    );
+    let restored = Threads::with_store(vec![agent], store).unwrap();
+    assert_eq!(restored.get(draft.id).unwrap().title, "Final title");
+    restored.connect(draft.id).unwrap();
+    assert_eq!(settle(&restored, draft.id).await.title, "Final title");
+    restored.send_message(draft.id, "Follow-up".into()).unwrap();
+    assert_eq!(settle(&restored, draft.id).await.title, "Final title");
+    restored.shutdown().await;
+}
+
+#[tokio::test]
+async fn session_titles_update_during_load_and_resume_without_being_overwritten() {
+    use serde_json::json;
+    for mode in ["normal", "resume-only"] {
+        for title in [json!("새 스레드"), json!(null)] {
+            let folder = tempfile::tempdir().unwrap();
+            let mut agent = mock_agent();
+            agent.env.insert("FIXTURE_MODE".into(), mode.into());
+            let (store, id) = persist_remote_session(folder.path(), &agent).await;
+            agent.env.insert(
+                "TITLE_UPDATES_RESTORE".into(),
+                json!([
+                    {"sessionUpdate":"session_info_update","title":title},
+                    {"sessionUpdate":"session_info_update","updatedAt":null}
+                ])
+                .to_string(),
+            );
+            let threads = Threads::with_store(vec![agent], store).unwrap();
+            threads.connect(id).unwrap();
+            let expected = title.as_str().unwrap_or_default();
+            assert_eq!(settle(&threads, id).await.title, expected);
+            threads.send_message(id, "Do not rename".into()).unwrap();
+            assert_eq!(settle(&threads, id).await.title, expected);
+            threads.shutdown().await;
+        }
+    }
+}
+
+#[tokio::test]
+async fn session_titles_received_before_first_input_disable_the_provisional_title() {
+    use serde_json::json;
+    for title in [json!("새 스레드"), json!(null)] {
+        let folder = tempfile::tempdir().unwrap();
+        let mut agent = mock_agent();
+        agent.env.insert("TITLE_UPDATES_NEW".into(), json!([
+            {"sessionUpdate":"session_info_update","title":title},
+            {"sessionUpdate":"config_option_update","configOptions":[
+                {"id":"title-barrier","name":"Title processed","type":"boolean","currentValue":true}
+            ]}
+        ]).to_string());
+        let threads = Threads::new(vec![agent]);
+        let draft = threads.create(folder.path()).unwrap();
+        let mut stream = subscribe(&threads, draft.id);
+        threads.connect(draft.id).unwrap();
+        settle(&threads, draft.id).await;
+        // The following config notification is a barrier even when the title is unchanged.
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                let thread = stream.recv().await.unwrap();
+                if thread
+                    .configuration
+                    .iter()
+                    .any(|config| config.id == "title-barrier")
+                {
+                    break;
+                }
+            }
+        })
+        .await
+        .unwrap();
+        threads
+            .send_message(draft.id, "First input".into())
+            .unwrap();
+        assert_eq!(
+            settle(&threads, draft.id).await.title,
+            title.as_str().unwrap_or_default()
+        );
+        threads.shutdown().await;
+    }
+}
+
+#[tokio::test]
 async fn list_subscription_tracks_background_thread_status() {
     let folder = tempfile::tempdir().unwrap();
     let threads = Threads::new(vec![mock_agent()]);

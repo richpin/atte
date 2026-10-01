@@ -669,6 +669,7 @@ impl Threads {
                 Entry {
                     state: Arc::new(Mutex::new(ThreadState {
                         list: list.clone(),
+                        use_prompt_title: false,
                         published_failure: thread.failure.clone(),
                         pending_errors: Vec::new(),
                         thread,
@@ -1158,6 +1159,7 @@ impl Threads {
             Entry {
                 state: Arc::new(Mutex::new(ThreadState {
                     list: self.list.clone(),
+                    use_prompt_title: true,
                     thread: draft.clone(),
                     published_failure: None,
                     pending_errors: Vec::new(),
@@ -1536,7 +1538,8 @@ impl Threads {
         current.thread.last_prompt_at = next_prompt_at();
         current.thread.failure = None;
         current.thread.interrupted = false;
-        if current.thread.title == "새 스레드" {
+        if current.use_prompt_title {
+            current.use_prompt_title = false;
             current.thread.title = input.body.trim().chars().take(60).collect::<String>();
             if current.thread.title.is_empty() {
                 current.thread.title = input
@@ -2045,6 +2048,8 @@ struct ThreadState {
     store: Option<Arc<Store>>,
     media_store: Option<Arc<MediaStore>>,
     thread: Thread,
+    // Only a new draft may derive a provisional title from its first input.
+    use_prompt_title: bool,
     confirmed_configuration: Vec<ThreadConfiguration>,
     desired_configuration: HashMap<String, DesiredConfiguration>,
     generation: u64,
@@ -2449,6 +2454,22 @@ pub(crate) struct RuntimeUpdates {
 }
 
 impl RuntimeUpdates {
+    pub fn title_updated(&self, title: Option<String>) {
+        let Ok(mut state) = self.state.lock() else {
+            return;
+        };
+        if state.generation != self.generation {
+            return;
+        }
+        state.use_prompt_title = false;
+        let title = title.unwrap_or_default();
+        if state.thread.title == title {
+            return;
+        }
+        state.thread.title = title;
+        state.publish();
+    }
+
     pub(crate) fn generation(&self) -> u64 {
         self.generation
     }
@@ -2869,5 +2890,106 @@ impl RuntimeUpdates {
             state.clear_permissions();
         }
         state.publish();
+    }
+}
+
+#[cfg(test)]
+mod title_tests {
+    use super::*;
+
+    fn updates_for(threads: &Threads, id: Uuid) -> RuntimeUpdates {
+        let entries = threads.lock().unwrap();
+        let state = entries.entries[&id].state.clone();
+        let generation = state.lock().unwrap().generation;
+        RuntimeUpdates {
+            authentication: threads.authentication.clone(),
+            state,
+            generation,
+        }
+    }
+
+    #[test]
+    fn title_updates_preserve_state_and_skip_duplicate_publications() {
+        let folder = tempfile::tempdir().unwrap();
+        let threads = Threads::default();
+        let draft = threads.create(folder.path()).unwrap();
+        let other = threads.create(folder.path()).unwrap();
+        let updates = updates_for(&threads, draft.id);
+        let mut stream = threads.subscribe(draft.id).unwrap();
+        let mut list = threads.subscribe_list().unwrap();
+        stream.try_recv().unwrap();
+        list.try_recv().unwrap();
+
+        // An explicit title equal to the default still disables the provisional title.
+        updates.title_updated(Some(draft.title.clone()));
+        assert!(!updates.state.lock().unwrap().use_prompt_title);
+        assert!(stream.try_recv().is_err());
+        assert!(list.try_recv().is_err());
+
+        for status in [
+            ThreadStatus::SessionReady,
+            ThreadStatus::Running,
+            ThreadStatus::Cancelling,
+        ] {
+            updates.state.lock().unwrap().thread.status = status;
+            let before = threads.get(draft.id).unwrap();
+            updates.title_updated(Some(format!("Title for {:?}", before.status)));
+            let changed = threads.get(draft.id).unwrap();
+            assert_eq!(changed.status, before.status);
+            assert_eq!(changed.last_prompt_at, before.last_prompt_at);
+            assert_eq!(changed.turns, before.turns);
+            assert_eq!(changed.queued_messages, before.queued_messages);
+            stream.try_recv().unwrap();
+            list.try_recv().unwrap();
+            updates.title_updated(Some(changed.title.clone()));
+            assert!(stream.try_recv().is_err());
+            assert!(list.try_recv().is_err());
+        }
+        updates.title_updated(None);
+        assert_eq!(threads.get(draft.id).unwrap().title, "");
+        stream.try_recv().unwrap();
+        list.try_recv().unwrap();
+        updates.title_updated(Some(String::new()));
+        assert!(stream.try_recv().is_err());
+        assert!(list.try_recv().is_err());
+        assert_eq!(threads.get(other.id).unwrap().title, other.title);
+    }
+
+    #[test]
+    fn replaced_runtime_cannot_change_title_or_its_provisional_policy() {
+        let folder = tempfile::tempdir().unwrap();
+        let threads = Threads::default();
+        let draft = threads.create(folder.path()).unwrap();
+        let updates = updates_for(&threads, draft.id);
+        updates.state.lock().unwrap().generation += 1;
+        updates.title_updated(Some("Obsolete title".into()));
+        updates.title_updated(None);
+        assert_eq!(threads.get(draft.id).unwrap().title, draft.title);
+        assert!(updates.state.lock().unwrap().use_prompt_title);
+    }
+
+    #[test]
+    fn title_storage_failure_uses_the_existing_error_subscription() {
+        let folder = tempfile::tempdir().unwrap();
+        let database = folder.path().join("atte.sqlite");
+        let store = Arc::new(Store::open(&database).unwrap());
+        let threads = Threads::with_store(vec![prepared_codex()], store).unwrap();
+        let draft = threads.create(folder.path()).unwrap();
+        let updates = updates_for(&threads, draft.id);
+        let mut stream = threads.subscribe(draft.id).unwrap();
+        stream.try_recv().unwrap();
+        rusqlite::Connection::open(database)
+            .unwrap()
+            .execute("DROP TABLE threads", [])
+            .unwrap();
+
+        updates.title_updated(Some("Visible despite storage failure".into()));
+        let ThreadUpdate::Patch { thread, errors, .. } = stream.try_recv().unwrap() else {
+            panic!("expected metadata patch");
+        };
+        assert_eq!(thread.metadata.title, "Visible despite storage failure");
+        assert!(thread.storage_error.is_some());
+        assert_eq!(errors.len(), 1);
+        assert_eq!(threads.get(draft.id).unwrap().status, draft.status);
     }
 }

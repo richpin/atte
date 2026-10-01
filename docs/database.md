@@ -47,10 +47,23 @@ Registry 갱신은 `registry_metadata`만 트랜잭션으로 교체한다. 목�
 | 컬럼 | SQL 타입 | 의미 |
 | --- | --- | --- |
 | `id` | TEXT PRIMARY KEY NOT NULL | Atte가 발급한 스레드 UUID |
-| `metadata` | TEXT NOT NULL | `ThreadMetadata` JSON: 제목, 작업 폴더, 고정 에이전트 ID, 원격 세션 ID, 생성·수정 Unix 초, 단조 증가하는 마지막 프롬프트 Unix 밀리초, 마지막 상태·오류, 중단 여부와 스레드 ID |
-| `queued_messages` | TEXT NOT NULL DEFAULT '[]' | 제출 순서의 `{id, text}` JSON 배열 |
+| `title` | TEXT NOT NULL | 잠정 제목 또는 에이전트가 제공한 제목; 명시적 해제는 빈 문자열 |
+| `working_folder` | TEXT NOT NULL | 작업 폴더의 경로 |
+| `agent_id` | TEXT NOT NULL | 스레드에 고정된 에이전트 ID |
+| `session_id` | TEXT | 에이전트의 원격 세션 ID |
+| `created_at` | INTEGER NOT NULL | 생성 Unix 초 |
+| `updated_at` | INTEGER NOT NULL | 로컬 상태 변경 Unix 초 |
+| `last_prompt_at` | INTEGER NOT NULL | 단조 증가하는 마지막 입력 수락 Unix 밀리초; 목록 정렬 기준 |
+| `status` | TEXT NOT NULL | 마지막 연결·실행 상태 |
+| `failure` | TEXT | 마지막 연결·실행 오류 종류 |
+| `interrupted` | INTEGER NOT NULL | 이전 작업의 중단 여부, 0 또는 1 |
+| `queued_messages` | TEXT NOT NULL DEFAULT '[]' | 제출 순서의 대기 메시지 JSON 배열; 사용자 입력·첨부·상태를 포함 |
 
-메타데이터 저장 interface는 본문을 포함하지 않는 `ThreadMetadata`만 받고 `metadata`만 갱신한다. 큐 저장은 `queued_messages`만 갱신하며, 스레드 행이 아직 없으면 메타데이터와 함께 생성한다. 전송된 메시지 본문·도구 출력·승인 이력·실행 핸들·인증 정보는 이 테이블에 저장하지 않는다. 제목은 첫 메시지의 앞 60자를 사용한다. 스레드 생성과 상태 변경 시 메타데이터를 저장하고, 응답 텍스트 delta는 메모리에만 반영한다. `lastPromptAt`은 생성 시 초기화하고, 이후 즉시 전송하거나 실행 중 대기열에 넣은 사용자 입력을 앱이 정상적으로 수락할 때만 갱신한다. 목록은 이 값을 내림차순으로 정렬한다. 저장 오류는 현재 스레드 상태의 `storageError`로 표시한다.
+메타데이터 저장 interface는 본문을 포함하지 않는 `ThreadMetadata`를 받아 개별 컬럼을 갱신한다. `metadata` JSON 컬럼은 없다. 큐 저장은 `queued_messages`만 갱신하며, 스레드 행이 아직 없으면 메타데이터와 함께 생성한다. 전송된 메시지 본문·도구 출력·승인 이력·실행 핸들·인증 정보는 이 테이블에 저장하지 않는다. 스레드 생성과 상태 변경 시 메타데이터를 저장하고, 응답 텍스트 delta는 메모리에만 반영한다. `lastPromptAt`은 생성 시 초기화하고, 이후 즉시 전송하거나 실행 중 대기열에 넣은 사용자 입력을 앱이 정상적으로 수락할 때만 갱신한다. 목록은 이 값을 내림차순으로 정렬한다. 저장 오류는 현재 스레드 상태의 `storageError`로 표시한다.
+
+새 스레드는 첫 입력 본문의 앞뒤 공백을 제거한 앞 60자를 잠정 제목으로 사용한다. 본문이 없으면 첫 첨부 파일명의 앞 60자를 사용한다. ACP `session_info_update`에서 명시적인 제목을 받으면 전체 문자열을 저장하고 목록과 열린 스레드에 구독으로 반영한다. 제목 필드 생략은 기존 값을 유지하고, `null`은 빈 문자열로 저장하며 화면에는 기본 제목을 표시한다. 동일한 제목은 중복 저장하거나 구독 알림을 보내지 않는다. 명시적인 제목 수신 이후에는 첫 입력·후속 입력이 에이전트 제목을 덮어쓰지 않는다. 첫 입력 제목 적용 여부는 새 draft에만 허용하는 비영속 상태이며, 저장소에서 복원한 스레드에는 다시 적용하지 않는다.
+
+제목 변경은 `lastPromptAt`과 작업 상태에 영향을 주지 않는다. 알림의 `updatedAt`과 `_meta`는 사용하지 않고 Atte의 `updatedAt`은 기존 로컬 상태 변경 시각을 유지한다. 재실행 시 저장된 제목을 복원하고, load/resume 중에도 제목 알림을 처리한다. 에이전트가 재연결 시 최신 제목을 다시 보내지 않으면 저장된 제목을 유지하며, 연결되지 않은 동안의 변경을 별도로 조회하지 않는다.
 
 재실행 시 메타데이터로 목록을 만들고 연결 상태는 `disconnected`로 복원한다. 이전 실행 중·승인 대기·중단 처리 상태는 중단 여부로 남기며 승인 조작이나 prompt를 되살리지 않는다. 사용자가 스레드를 선택하면 `session/load`를 우선 사용하고 전체 replay 성공 후 메모리의 본문을 교체한다. 실패한 부분 replay는 표시하지 않는다. `resume`만 지원하면 본문 없이 기존 맥락을 이어간다는 안내를 표시한다. 에이전트 부재 시 전체 본문을 읽을 수 있는 디스크 사본은 없다.
 

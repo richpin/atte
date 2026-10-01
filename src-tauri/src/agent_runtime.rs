@@ -26,7 +26,7 @@ use agent_client_protocol::{
             SessionConfigSelectOptions, SessionId, SessionNotification, SessionUpdate,
             SetSessionConfigOptionRequest, ToolCallContent, ToolCallUpdate, ToolCallUpdateFields,
         },
-        ProtocolVersion,
+        MaybeUndefined, ProtocolVersion,
     },
     Agent, ByteStreams, Client, ConnectionTo, ErrorCode,
 };
@@ -199,6 +199,11 @@ pub(crate) async fn run(
             if let Ok(mut routes) = notification_routes.lock() {
                 if let Some(route) = routes.get_mut(&notification.session_id.to_string()) {
                     match notification.update {
+                        SessionUpdate::SessionInfoUpdate(update) => match update.title {
+                            MaybeUndefined::Value(title) => route.updates.title_updated(Some(title)),
+                            MaybeUndefined::Null => route.updates.title_updated(None),
+                            MaybeUndefined::Undefined => {},
+                        },
                         SessionUpdate::ConfigOptionUpdate(update) => route
                             .updates
                             .configuration_updated(thread_configuration(update.config_options)),
