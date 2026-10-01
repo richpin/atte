@@ -11,19 +11,18 @@ import {
 } from "shared/ui";
 import { Show } from "solid-js";
 
-type NewChatAgent = {
+type NewThreadAgent = {
   id: string;
   name: string;
 };
 
-export function NewChatPage(props: {
-  agents: NewChatAgent[];
+export function NewThreadPage(props: {
+  agents: NewThreadAgent[];
   selectedAgent: string;
   selectedFolder?: string;
   loading: boolean;
   failed: boolean;
   selecting: boolean;
-  error?: string;
   onSelectAgent: (id: string) => void;
   onSelectFolder: () => void;
   onStart: () => void;
@@ -47,7 +46,7 @@ export function NewChatPage(props: {
         <div class="divide-y divide-line rounded-xl border border-line bg-panel px-4">
           <div class="grid grid-cols-1 @sm:grid-cols-[9.5rem_minmax(0,1fr)] items-center gap-3 py-3">
             <span
-              id="new-chat-folder-label"
+              id="new-thread-folder-label"
               class="flex items-center gap-2 whitespace-nowrap text-sm text-muted"
             >
               <Folder aria-hidden="true" class="size-4 shrink-0" />
@@ -55,7 +54,7 @@ export function NewChatPage(props: {
             </span>
             <button
               type="button"
-              aria-describedby="new-chat-folder-label"
+              aria-describedby="new-thread-folder-label"
               class="flex min-w-0 items-center justify-between gap-2 rounded-md px-2 py-2 text-left text-sm hover:bg-canvas focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent disabled:opacity-50"
               disabled={disabled()}
               onClick={props.onSelectFolder}
@@ -73,7 +72,7 @@ export function NewChatPage(props: {
           </div>
           <div class="grid grid-cols-1 @sm:grid-cols-[9.5rem_minmax(0,1fr)] items-center gap-3 py-3">
             <label
-              for="new-chat-agent"
+              for="new-thread-agent"
               class="flex items-center gap-2 whitespace-nowrap text-sm text-muted"
             >
               <Bot aria-hidden="true" class="size-4 shrink-0" />
@@ -91,7 +90,7 @@ export function NewChatPage(props: {
                 </Button>
               }
             >
-              <Select<NewChatAgent>
+              <Select<NewThreadAgent>
                 class="min-w-0"
                 options={props.agents}
                 optionValue="id"
@@ -117,11 +116,11 @@ export function NewChatPage(props: {
                 )}
               >
                 <SelectTrigger
-                  id="new-chat-agent"
+                  id="new-thread-agent"
                   aria-label={t("thread.newThreadAgent")}
                   class="min-w-0 gap-2 border-0 px-2"
                 >
-                  <SelectValue<NewChatAgent> class="min-w-0">
+                  <SelectValue<NewThreadAgent> class="min-w-0">
                     {(state) => (
                       <Show when={state.selectedOption()}>
                         {(agent) => (
@@ -139,13 +138,6 @@ export function NewChatPage(props: {
             </Show>
           </div>
         </div>
-        <Show when={props.error}>
-          {(error) => (
-            <p role="alert" class="text-base text-danger">
-              {error()}
-            </p>
-          )}
-        </Show>
         <div class="flex justify-end">
           <Button
             class="rounded-xl"
@@ -154,7 +146,7 @@ export function NewChatPage(props: {
             }
             onClick={props.onStart}
           >
-            {t("thread.startChat")}
+            {t("thread.startThread")}
             <ArrowRight aria-hidden="true" />
           </Button>
         </div>

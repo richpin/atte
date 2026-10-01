@@ -56,3 +56,4 @@ export {
 } from "./sidebar";
 
 export { Switch, SwitchControl, SwitchLabel, SwitchThumb } from "./switch";
+export { showErrorToast, ToastHost } from "./toast";

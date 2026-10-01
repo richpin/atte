@@ -279,21 +279,22 @@ pub(crate) async fn run(
                 }
             }
             let (finished, mut completions) = mpsc::unbounded_channel();
+            let mut session_stops = HashMap::<Uuid, oneshot::Sender<()>>::new();
             loop {
                 tokio::select! {
                     _ = connection.incoming_closed() => return Ok(ConnectionFailure::ConnectionClosed),
-                    Some((id, failure)) = completions.recv() => {
+                    Some((id, generation, failure)) = completions.recv() => {
                         let participant = participants.lock().map(|mut all| {
                             let remaining = all.len();
-                            all.contains_key(&id).then(|| {
+                            all.get(&id).is_some_and(|updates| updates.generation() == generation && updates.is_current()).then(|| {
                                 let updates = (remaining > 1).then(|| all.remove(&id)).flatten();
                                 (remaining, updates)
                             })
                         }).unwrap_or_default();
                         let Some((remaining, updates)) = participant else {
-                            if let Ok(mut routes) = routes.lock() { routes.retain(|_, route| route.owner != id); }
                             continue;
                         };
+                        session_stops.remove(&id);
                         // A sole failed session keeps the old reap-before-retry contract.
                         if remaining <= 1 { return Ok(failure); }
                         if let Some(updates) = updates { updates.connection_failed(failure); }
@@ -303,6 +304,10 @@ pub(crate) async fn run(
                         let Some(command) = command else { return Ok(ConnectionFailure::ConnectionClosed); };
                         match command {
                             RuntimeCommand::StartSession(session) => {
+                                if let Some(stop) = session_stops.remove(&session.id) { let _ = stop.send(()); }
+                                if let Ok(mut routes) = routes.lock() { routes.retain(|_, route| route.owner != session.id); }
+                                let (stop, stopped) = oneshot::channel();
+                                session_stops.insert(session.id, stop);
                                 if let Ok(mut all) = participants.lock() { all.insert(session.id, session.updates.clone()); }
                                 let finished = finished.clone();
                                 let connection_task = connection.clone();
@@ -311,12 +316,18 @@ pub(crate) async fn run(
                                 let routes = routes.clone();
                                 connection.spawn(async move {
                                     let id = session.id;
-                                    let failure = run_session(connection_task, capabilities, folder, routes, session).await;
-                                    let _ = finished.send((id, failure));
+                                    let generation = session.updates.generation();
+                                    let failure = tokio::select! {
+                                        biased;
+                                        _ = stopped => ConnectionFailure::ConnectionClosed,
+                                        failure = run_session(connection_task, capabilities, folder, routes, session) => failure,
+                                    };
+                                    let _ = finished.send((id, generation, failure));
                                     Ok(())
                                 })?;
                             }
                             RuntimeCommand::DeleteSession { owner, session_id, inputs_to_close } => {
+                                if let Some(stop) = session_stops.remove(&owner) { let _ = stop.send(()); }
                                 if let Ok(mut all) = participants.lock() { all.remove(&owner); }
                                 if let Ok(mut routes) = routes.lock() { routes.retain(|_, route| route.owner != owner); }
                                 drop(inputs_to_close);
@@ -569,7 +580,10 @@ async fn run_session(
             .send_request(PromptRequest::new(remote.clone(), content))
             .on_receiving_result(async move |result| {
                 if let Ok(mut routes) = turn_routes.lock() {
-                    if let Some(route) = routes.get_mut(&turn_session) {
+                    if let Some(route) = routes
+                        .get_mut(&turn_session)
+                        .filter(|route| route.updates.generation() == turn_updates.generation())
+                    {
                         route.active = None;
                     }
                 }

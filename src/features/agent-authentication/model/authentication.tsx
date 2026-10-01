@@ -18,10 +18,20 @@ export type AgentAuthenticationState =
 
 interface AgentAuthentication {
   state: (agentId: string) => AgentAuthenticationState;
-  discover: (agentId: string) => Promise<void>;
-  login: (agentId: string, methodId: string) => Promise<boolean>;
+  discover: (
+    agentId: string,
+    notifyError?: (message: string) => void,
+  ) => Promise<void>;
+  login: (
+    agentId: string,
+    methodId: string,
+    notifyError?: (message: string) => void,
+  ) => Promise<boolean>;
   cancel: (agentId: string) => Promise<void>;
-  requireAuthentication: (agentId: string) => Promise<void>;
+  requireAuthentication: (
+    agentId: string,
+    notifyError?: (message: string) => void,
+  ) => Promise<void>;
 }
 
 const idle: AgentAuthenticationState = { status: "idle" };
@@ -34,7 +44,10 @@ export function AgentAuthenticationProvider(props: ParentProps) {
   >({});
   const attempts = new Map<string, number>();
 
-  async function discover(agentId: string) {
+  async function discover(
+    agentId: string,
+    notifyError?: (message: string) => void,
+  ) {
     const current = states[agentId];
     if (
       current?.status === "loading" ||
@@ -55,14 +68,17 @@ export function AgentAuthenticationProvider(props: ParentProps) {
       });
     } catch (cause) {
       if (attempts.get(agentId) !== attempt) return;
-      setStates(agentId, {
-        status: "error",
-        message: message(cause, "thread.authentication.discoveryFailed"),
-      });
+      const error = message(cause, "thread.authentication.discoveryFailed");
+      setStates(agentId, { status: "error", message: error });
+      notifyError?.(error);
     }
   }
 
-  async function login(agentId: string, methodId: string) {
+  async function login(
+    agentId: string,
+    methodId: string,
+    notifyError?: (message: string) => void,
+  ) {
     const current = states[agentId];
     if (current?.status !== "ready") return false;
     const method = current.methods.find(
@@ -83,10 +99,9 @@ export function AgentAuthenticationProvider(props: ParentProps) {
       return true;
     } catch (cause) {
       if (attempts.get(agentId) !== attempt) return false;
-      setStates(agentId, {
-        status: "error",
-        message: message(cause, "thread.authentication.loginFailed"),
-      });
+      const error = message(cause, "thread.authentication.loginFailed");
+      setStates(agentId, { status: "error", message: error });
+      notifyError?.(error);
       return false;
     }
   }
@@ -107,12 +122,15 @@ export function AgentAuthenticationProvider(props: ParentProps) {
     }
   }
 
-  async function requireAuthentication(agentId: string) {
+  async function requireAuthentication(
+    agentId: string,
+    notifyError?: (message: string) => void,
+  ) {
     const current = states[agentId];
     if (current?.status !== "authenticated") return;
     attempts.set(agentId, (attempts.get(agentId) ?? 0) + 1);
     setStates(agentId, { status: "idle" });
-    await discover(agentId);
+    await discover(agentId, notifyError);
   }
 
   return (

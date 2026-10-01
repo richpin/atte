@@ -1,13 +1,14 @@
 import { createThreadModel, preparedAgents } from "pages/thread";
 import { useI18n } from "shared/i18n";
+import { showErrorToast } from "shared/ui";
 import { createEffect, createResource, createSignal } from "solid-js";
 
-export type AppView = "new-chat" | "thread" | "general" | "agents";
+export type AppView = "new-thread" | "thread" | "general" | "agents";
 
 export function createAppShellModel() {
   const { t } = useI18n();
-  const threads = createThreadModel();
-  const [view, setView] = createSignal<AppView>("new-chat");
+  const threads = createThreadModel(undefined, showErrorToast);
+  const [view, setView] = createSignal<AppView>("new-thread");
   const [agentsRevision, setAgentsRevision] = createSignal(0);
   const [agentsFailed, setAgentsFailed] = createSignal(false);
   const [selectedAgent, setSelectedAgent] = createSignal("");
@@ -18,6 +19,7 @@ export function createAppShellModel() {
       setAgentsFailed(false);
       return await preparedAgents();
     } catch {
+      showErrorToast(t("thread.error.agents"));
       setAgentsFailed(true);
       return [];
     }
@@ -26,14 +28,14 @@ export function createAppShellModel() {
     agents()?.some((agent) => agent.id === selectedAgent())
       ? selectedAgent()
       : agents()?.[0]?.id || "";
-  const newChatError = () =>
+  const newThreadError = () =>
     threads.error() ?? (agentsFailed() ? t("thread.error.agents") : undefined);
 
-  function showNewChat() {
-    threads.startNewChat();
+  function showNewThread() {
+    threads.startNewThread();
     setSelectedFolder(undefined);
     setPendingFolder(undefined);
-    setView("new-chat");
+    setView("new-thread");
   }
 
   async function openThread(id: string) {
@@ -55,7 +57,7 @@ export function createAppShellModel() {
     if (folder) setSelectedFolder(folder);
   }
 
-  async function startChat() {
+  async function startThread() {
     const folder = selectedFolder();
     if (!folder || agents.loading || agentsFailed()) return;
     await createInProject(folder);
@@ -77,7 +79,7 @@ export function createAppShellModel() {
   async function removeThread(id: string) {
     const selected = threads.selectedThreadId() === id;
     await threads.removeThread(id);
-    if (selected) setView("new-chat");
+    if (selected) setView("new-thread");
   }
 
   function agentsChanged() {
@@ -85,7 +87,8 @@ export function createAppShellModel() {
   }
 
   createEffect(() => {
-    if (view() === "thread" && !threads.selectedThreadId()) setView("new-chat");
+    if (view() === "thread" && !threads.selectedThreadId())
+      setView("new-thread");
   });
 
   createEffect(() => {
@@ -102,14 +105,14 @@ export function createAppShellModel() {
     agentsFailed,
     agentId,
     selectedFolder,
-    newChatError,
+    newThreadError,
     setSelectedAgent,
-    showNewChat,
+    showNewThread,
     openThread,
     showGeneral,
     showAgents,
     selectFolder,
-    startChat,
+    startThread,
     createInProject,
     removeThread,
     agentsChanged,

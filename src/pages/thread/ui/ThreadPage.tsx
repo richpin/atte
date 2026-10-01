@@ -1,10 +1,11 @@
 import { makeResizeObserver } from "@solid-primitives/resize-observer";
 import { useAgentAuthentication } from "features/agent-authentication";
-import { type TranslationKey, useI18n } from "shared/i18n";
+import { useI18n } from "shared/i18n";
+import { showErrorToast } from "shared/ui";
 import { createEffect, createSignal, Show, untrack } from "solid-js";
 import { createStore } from "solid-js/store";
 import type { ThreadModel } from "../model/thread";
-import type { ConnectionFailure, PreparedAgent } from "../model/types";
+import type { PreparedAgent } from "../model/types";
 import { Message } from "./Message";
 import { ThreadComposer } from "./ThreadComposer";
 import { ThreadTimeline } from "./ThreadTimeline";
@@ -18,14 +19,13 @@ export function ThreadPage(props: {
   agents: PreparedAgent[];
   onManage: () => void;
 }) {
-  const { t, content } = useI18n();
+  const { t } = useI18n();
   const authentication = useAgentAuthentication();
   const model = props.model;
   const {
     thread,
     selectedThreadId,
     connecting,
-    connectFailed,
     draft,
     draftAttachments,
     attachmentErrors,
@@ -36,8 +36,6 @@ export function ThreadPage(props: {
     streamingTurnId,
     showStop,
     stopping,
-    subscriptionError,
-    retryExhausted,
     actionsEnabled,
     canSend,
     send,
@@ -51,7 +49,6 @@ export function ThreadPage(props: {
     cancel,
     configure,
     connect,
-    retrySubscription,
     retryQueued,
   } = model;
   const [composerHeight, setComposerHeight] = createSignal(0);
@@ -72,7 +69,11 @@ export function ThreadPage(props: {
   async function authenticateThread(method: string) {
     const origin = thread();
     if (!origin) return;
-    const succeeded = await authentication.login(origin.agentId, method);
+    const succeeded = await authentication.login(
+      origin.agentId,
+      method,
+      showErrorToast,
+    );
     if (!succeeded) return;
     const state = authentication.state(origin.agentId);
     if (state.status !== "authenticated") return;
@@ -128,7 +129,10 @@ export function ThreadPage(props: {
         authenticationReconnect.attemptedByThread[current.id] ===
         state.generation
       ) {
-        void authentication.requireAuthentication(current.agentId);
+        void authentication.requireAuthentication(
+          current.agentId,
+          showErrorToast,
+        );
         return;
       }
       setAuthenticationReconnect(
@@ -139,130 +143,71 @@ export function ThreadPage(props: {
       untrack(() => void connect());
       return;
     }
-    if (state.status === "idle") void authentication.discover(current.agentId);
+    if (state.status === "idle")
+      void authentication.discover(current.agentId, showErrorToast);
   });
+
+  const loading = () =>
+    Boolean(selectedThreadId()) &&
+    (!thread() || connecting() || thread()?.status === "connecting");
 
   return (
     <main class="flex h-full min-h-0 flex-col overflow-hidden bg-canvas text-ink">
-      <Show when={model.error()}>
-        {(message) => (
-          <p
-            role="alert"
-            class="mx-6 mt-4 rounded-lg border border-line bg-panel p-3 text-sm"
-          >
-            {message()}
-          </p>
-        )}
-      </Show>
-      <Show when={subscriptionError()}>
-        <div class="mx-6 mt-4 flex items-center gap-3 rounded-lg border border-line bg-panel p-3 text-sm">
-          <p role="alert">{t("thread.subscriptionFailed")}</p>
-          <Show when={retryExhausted()}>
-            <button
-              type="button"
-              class="focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-accent"
-              onClick={retrySubscription}
-            >
-              {t("thread.reconnect")}
-            </button>
-          </Show>
-        </div>
-      </Show>
-      <Show when={thread()}>
+      <Show when={selectedThreadId()}>
         <div class="relative min-h-0 flex-1">
-          <ThreadTimeline
-            followKey={`${thread()?.id}:${activeTurnId()}`}
-            bottomInset={composerInset()}
-          >
-            <Show when={thread()?.status === "connecting"}>
-              <p role="status">
-                {thread()?.sessionId
-                  ? t("thread.restoring")
-                  : t("thread.connecting")}
-              </p>
-            </Show>
-            <Show when={thread()?.interrupted}>
-              <p role="status">{t("thread.interrupted")}</p>
-            </Show>
-            <Show when={thread()?.storageError}>
-              {(message) => <p role="alert">{content(message())}</p>}
-            </Show>
-            <Show
-              when={
-                !thread()?.turns?.length &&
-                thread()?.status === "sessionReady" &&
-                !thread()?.notice
-              }
+          <div hidden={loading()} class="h-full">
+            <ThreadTimeline
+              followKey={`${thread()?.id}:${activeTurnId()}`}
+              bottomInset={composerInset()}
             >
-              <h2 class="text-lg font-medium">{t("thread.ready")}</h2>
-              <Show when={thread()?.status === "disconnected"}>
-                <p class="text-sm text-muted">{t("thread.notConnected")}</p>
+              <Show
+                when={
+                  thread() &&
+                  (["agentRemoved", "executableNotFound"].includes(
+                    thread()?.failure ?? "",
+                  ) ||
+                    !props.agents.some(
+                      (agent) => agent.id === thread()?.agentId,
+                    ))
+                }
+              >
+                <button
+                  type="button"
+                  class="focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-accent"
+                  onClick={props.onManage}
+                >
+                  {t("thread.openAgentManagement")}
+                </button>
               </Show>
-            </Show>
-            <Show when={thread()?.failure}>
-              {(failure) => (
-                <p role="alert" class="text-sm">
-                  {t(failureKeys[failure()])}
-                </p>
-              )}
-            </Show>
-            <Show
-              when={
-                thread() &&
-                (["agentRemoved", "executableNotFound"].includes(
-                  thread()?.failure ?? "",
-                ) ||
-                  !props.agents.some((agent) => agent.id === thread()?.agentId))
-              }
+              <Message
+                turns={thread()?.turns ?? []}
+                streamingTurnId={streamingTurnId()}
+              />
+            </ThreadTimeline>
+          </div>
+          <Show
+            when={
+              loading() ||
+              (!thread()?.turns?.length && thread()?.status === "sessionReady")
+            }
+          >
+            <div
+              class="pointer-events-none absolute inset-x-0 top-0 flex items-center justify-center px-6"
+              style={{ bottom: `${composerHeight() + composerBottomOffset}px` }}
             >
-              <button
-                type="button"
-                class="focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-accent"
-                onClick={props.onManage}
-              >
-                {t("thread.openAgentManagement")}
-              </button>
-            </Show>
-            <Show
-              when={
-                thread()?.authentication === "unknown" &&
-                thread()?.status === "sessionReady" &&
-                !thread()?.turns?.length
-              }
-            >
-              <p class="text-sm text-muted">
-                {t("thread.authenticationUnknown")}
-              </p>
-            </Show>
-            <Show
-              when={
-                !connecting() &&
-                (connectFailed() ||
-                  (thread()?.status === "failed" &&
-                    thread()?.failure !== "authenticationRequired"))
-              }
-            >
-              <button
-                type="button"
-                class="rounded-lg bg-primary px-4 py-2 text-primary-foreground text-sm focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-accent disabled:opacity-50"
-                disabled={connecting() || thread()?.status === "connecting"}
-                onClick={connect}
-              >
-                {t("thread.reconnect")}
-              </button>
-            </Show>
-            <Message
-              turns={thread()?.turns ?? []}
-              streamingTurnId={streamingTurnId()}
-            />
-            <Show when={thread()?.notice}>
-              {(notice) => (
-                <p role="status" class="text-sm text-muted">
-                  {content(notice())}
-                </p>
-              )}
-            </Show>
-          </ThreadTimeline>
+              <h2 class="text-center text-3xl font-medium tracking-tight text-muted">
+                {loading()
+                  ? t("thread.loading")
+                  : t("thread.waitingForFirstMessage")}
+                <span
+                  aria-hidden="true"
+                  class="inline-block font-mono tracking-normal motion-safe:animate-waiting-ellipsis"
+                >
+                  ...
+                </span>
+              </h2>
+            </div>
+          </Show>
           <div
             ref={(element) => {
               composerOverlay = element;
@@ -287,7 +232,10 @@ export function ThreadPage(props: {
                   canSend={canSend()}
                   authentication={authentication.state(currentThread().agentId)}
                   onRetryAuthentication={() =>
-                    void authentication.discover(currentThread().agentId)
+                    void authentication.discover(
+                      currentThread().agentId,
+                      showErrorToast,
+                    )
                   }
                   onAuthenticate={(method) => void authenticateThread(method)}
                   onCancelAuthentication={() =>
@@ -316,18 +264,3 @@ export function ThreadPage(props: {
     </main>
   );
 }
-
-const failureKeys: Record<ConnectionFailure, TranslationKey> = {
-  executableNotFound: "thread.failure.executableNotFound",
-  launchFailed: "thread.failure.launchFailed",
-  initializationFailed: "thread.failure.initializationFailed",
-  sessionCreationFailed: "thread.failure.sessionCreationFailed",
-  authenticationRequired: "thread.failure.authenticationRequired",
-  processExited: "thread.failure.processExited",
-  connectionClosed: "thread.failure.connectionClosed",
-  promptFailed: "thread.failure.promptFailed",
-  timedOut: "thread.failure.timedOut",
-  agentRemoved: "thread.failure.agentRemoved",
-  resumptionUnsupported: "thread.failure.resumptionUnsupported",
-  sessionRestorationFailed: "thread.failure.sessionRestorationFailed",
-};

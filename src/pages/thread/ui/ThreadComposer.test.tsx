@@ -267,9 +267,7 @@ it("selects files and renders removable duplicate basename chips without paths",
   expect(onSelectFiles).toHaveBeenCalledOnce();
   expect(screen.getAllByText("notes.txt")).toHaveLength(2);
   expect(screen.queryByText(/private/)).toBeNull();
-  await waitFor(() =>
-    expect(screen.getByRole("alert").textContent).toContain("folder"),
-  );
+  expect(screen.queryByRole("alert")).toBeNull();
 
   fireEvent.click(
     screen.getAllByRole("button", { name: "Remove attachment: notes.txt" })[1],

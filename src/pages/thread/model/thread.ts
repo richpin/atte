@@ -3,7 +3,7 @@ import {
   type QueryClient,
   useQueryClient,
 } from "@tanstack/solid-query";
-import { useI18n } from "shared/i18n";
+import { type TranslationKey, useI18n } from "shared/i18n";
 import {
   createEffect,
   createMemo,
@@ -21,6 +21,7 @@ import {
   deleteQueuedMessage,
   deleteThread as deleteThreadCommand,
   listThreads,
+  reconnectThread,
   releaseFiles,
   retryQueuedMessage,
   selectFiles as selectFilesCommand,
@@ -34,6 +35,7 @@ import {
 } from "../api/threads";
 import type {
   Attachment,
+  ConnectionFailure,
   MediaKind,
   Thread,
   ThreadConfigurationValue,
@@ -53,13 +55,22 @@ function sortThreads(entries: ThreadMetadata[]) {
 }
 
 /** Owns synchronization for one thread view; call inside a Solid owner. */
-export function createThreadModel(queryClient?: QueryClient) {
-  const { message: localizedMessage, t } = useI18n();
+export function createThreadModel(
+  queryClient?: QueryClient,
+  notifyError: (message: string) => void = () => {},
+) {
+  const { message: localizedMessage, t, content } = useI18n();
   const client = useQueryClient(queryClient);
   const [state, setState] = createStore<{ thread?: Thread }>({});
   const thread = () => state.thread;
   const [selectedThreadId, setSelectedThreadId] = createSignal<string>();
-  const [error, setError] = createSignal<string>();
+  const [error, setErrorState] = createSignal<string>();
+  function setError(message: string | undefined, notify = true) {
+    setErrorState(message);
+    if (message && notify) notifyError(message);
+  }
+  const observedErrors = new Set<string>();
+  let connectionFailureReported = false;
   const [configurationError, setConfigurationError] = createSignal<{
     configId: string;
     message: string;
@@ -81,8 +92,16 @@ export function createThreadModel(queryClient?: QueryClient) {
   const historyQuery = createQuery(
     () => ({
       queryKey: threadListQueryKey,
-      queryFn: async () =>
-        (await listThreads()).filter((entry) => !deleted.has(entry.id)),
+      queryFn: async () => {
+        try {
+          return (await listThreads()).filter(
+            (entry) => !deleted.has(entry.id),
+          );
+        } catch (cause) {
+          notifyError(localizedMessage(cause, "sidebar.loadFailed"));
+          throw cause;
+        }
+      },
       retry: false,
       staleTime: Number.POSITIVE_INFINITY,
     }),
@@ -111,7 +130,10 @@ export function createThreadModel(queryClient?: QueryClient) {
           replaceThreadList(entries);
           setListSubscriptionError(false);
         },
-        () => setListSubscriptionError(true),
+        () => {
+          if (!listSubscriptionError()) notifyError(t("sidebar.loadFailed"));
+          setListSubscriptionError(true);
+        },
       ),
     );
   });
@@ -189,7 +211,9 @@ export function createThreadModel(queryClient?: QueryClient) {
     );
   }
 
+  let reconnectAfterSubscription = false;
   function subscriptionFailed(cause?: unknown) {
+    const alreadyFailed = subscriptionError();
     setSubscriptionLive(false);
     setSubscriptionError(true);
     if (isNotFound(cause)) {
@@ -201,6 +225,7 @@ export function createThreadModel(queryClient?: QueryClient) {
       setError(localizedMessage(cause, "thread.error.open"));
       return;
     }
+    if (!alreadyFailed) notifyError(t("thread.subscriptionFailed"));
     if (subscriptionRetries >= maximumSubscriptionRetries) {
       setRetryExhausted(true);
       return;
@@ -319,11 +344,13 @@ export function createThreadModel(queryClient?: QueryClient) {
     setSubscriptionError(false);
     setRetryExhausted(false);
     setSubscriptionLive(false);
+    reconnectAfterSubscription = false;
     setState("thread", undefined);
     setSelectedThreadId(id);
   }
 
-  function startNewChat() {
+  function startNewThread() {
+    reconnectAfterSubscription = false;
     if (disposed) return;
     selection++;
     view++;
@@ -349,7 +376,15 @@ export function createThreadModel(queryClient?: QueryClient) {
     if (update.kind === "thread") {
       const firstSnapshot = !thread();
       applyThread(update.thread);
-      if (update.thread.id === selectedThreadId()) subscriptionReady();
+      if (update.thread.id === selectedThreadId()) {
+        subscriptionReady();
+        if (reconnectAfterSubscription) {
+          reconnectAfterSubscription = false;
+          if (["disconnected", "failed"].includes(update.thread.status))
+            void connect();
+          return;
+        }
+      }
       if (
         firstSnapshot &&
         update.thread.id === selectedThreadId() &&
@@ -362,6 +397,16 @@ export function createThreadModel(queryClient?: QueryClient) {
     if (!subscriptionLive() || !current) return;
     if (update.kind === "patch") {
       if (update.thread.id !== current.id) return;
+      for (const error of update.errors ?? []) {
+        if (observedErrors.has(error.id)) continue;
+        observedErrors.add(error.id);
+        if (error.failure) {
+          notifyError(t(failureKeys[error.failure]));
+          if (connecting()) connectionFailureReported = true;
+        } else if (error.message) {
+          notifyError(content(error.message) ?? error.message);
+        }
+      }
       updateThreadInList(update.thread);
       setState(
         "thread",
@@ -484,6 +529,8 @@ export function createThreadModel(queryClient?: QueryClient) {
         ...selection.attachments,
       ]);
       setAttachmentErrors(selection.errors.map(({ name }) => name));
+      for (const { name } of selection.errors)
+        notifyError(t("thread.fileUnavailable", { name }));
     } catch (cause) {
       if (isCurrent(expectedView))
         setError(localizedMessage(cause, "thread.error.selectFiles"));
@@ -669,29 +716,52 @@ export function createThreadModel(queryClient?: QueryClient) {
       if (
         isCurrent(expectedView) &&
         latestConfigurationAttempts.get(configId) === attempt
-      )
-        setConfigurationError({
-          configId,
-          message: localizedMessage(cause, "thread.error.configure"),
-        });
+      ) {
+        const message = localizedMessage(cause, "thread.error.configure");
+        setConfigurationError({ configId, message });
+        notifyError(message);
+      }
     }
   }
 
-  async function connect() {
+  const canReconnect = () =>
+    !connecting() &&
+    (!thread() ||
+      ["sessionReady", "disconnected", "failed"].includes(
+        thread()?.status ?? "",
+      )) &&
+    (retryExhausted() || actionsEnabled());
+
+  async function reconnect() {
+    if (!canReconnect()) return;
+    if (!actionsEnabled()) {
+      reconnectAfterSubscription = true;
+      retrySubscription();
+      return;
+    }
+    await connect(true);
+  }
+
+  async function connect(manual = false) {
     const expectedView = view;
     const current = thread();
     if (!current || !actionsEnabled() || connecting()) return;
+    connectionFailureReported = false;
     setConnectingThreadId(current.id);
     setConnectFailed(false);
     setError(undefined);
     setConfigurationError(undefined);
     latestConfigurationAttempts.clear();
     try {
-      await connectThread(current.id);
+      if (manual) await reconnectThread(current.id);
+      else await connectThread(current.id);
     } catch (cause) {
       if (isCurrent(expectedView)) {
         setConnectFailed(true);
-        setError(localizedMessage(cause, "thread.error.connect"));
+        setError(
+          localizedMessage(cause, "thread.error.connect"),
+          !connectionFailureReported,
+        );
       }
     } finally {
       if (isCurrent(expectedView)) setConnectingThreadId(undefined);
@@ -745,7 +815,16 @@ export function createThreadModel(queryClient?: QueryClient) {
       (previous ?? []).filter((entry) => entry.id !== id),
     );
     if (selectedThreadId() !== id) return;
-    startNewChat();
+    startNewThread();
+  }
+
+  function retrySubscription() {
+    clearSubscriptionRetry();
+    subscriptionRetries = 0;
+    setSubscriptionError(false);
+    setRetryExhausted(false);
+    setSubscriptionLive(false);
+    setSubscriptionAttempt((value) => value + 1);
   }
 
   return {
@@ -773,7 +852,7 @@ export function createThreadModel(queryClient?: QueryClient) {
     retryExhausted,
     actionsEnabled,
     canSend,
-    startNewChat,
+    startNewThread,
     openThread,
     send,
     selectFiles,
@@ -790,15 +869,25 @@ export function createThreadModel(queryClient?: QueryClient) {
     selectFolder,
     createInFolder,
     removeThread,
-    retrySubscription: () => {
-      clearSubscriptionRetry();
-      subscriptionRetries = 0;
-      setSubscriptionError(false);
-      setRetryExhausted(false);
-      setSubscriptionLive(false);
-      setSubscriptionAttempt((value) => value + 1);
-    },
+    retrySubscription,
+    reconnect,
+    canReconnect,
   };
 }
 
 export type ThreadModel = ReturnType<typeof createThreadModel>;
+
+const failureKeys: Record<ConnectionFailure, TranslationKey> = {
+  executableNotFound: "thread.failure.executableNotFound",
+  launchFailed: "thread.failure.launchFailed",
+  initializationFailed: "thread.failure.initializationFailed",
+  sessionCreationFailed: "thread.failure.sessionCreationFailed",
+  authenticationRequired: "thread.failure.authenticationRequired",
+  processExited: "thread.failure.processExited",
+  connectionClosed: "thread.failure.connectionClosed",
+  promptFailed: "thread.failure.promptFailed",
+  timedOut: "thread.failure.timedOut",
+  agentRemoved: "thread.failure.agentRemoved",
+  resumptionUnsupported: "thread.failure.resumptionUnsupported",
+  sessionRestorationFailed: "thread.failure.sessionRestorationFailed",
+};

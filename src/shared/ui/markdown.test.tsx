@@ -127,7 +127,7 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-it("renders chat Markdown with semantic CommonMark and GFM structure", () => {
+it("renders thread Markdown with semantic CommonMark and GFM structure", () => {
   const { container } = render(() => (
     <Markdown
       source={`# Local heading

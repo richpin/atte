@@ -118,15 +118,6 @@ export function ThreadComposer(props: {
                       </For>
                     </div>
                   </Show>
-                  <Show when={(props.attachmentErrors?.length ?? 0) > 0}>
-                    <ul role="alert" class="mb-3 text-xs text-danger">
-                      <For each={props.attachmentErrors}>
-                        {(name) => (
-                          <li>{t("thread.fileUnavailable", { name })}</li>
-                        )}
-                      </For>
-                    </ul>
-                  </Show>
                   <PromptInput
                     value={props.draft}
                     disabled={!props.canSend}
@@ -251,18 +242,13 @@ export function ThreadComposer(props: {
               <p role="status">{t("thread.authentication.loading")}</p>
             </Match>
             <Match when={authenticationState("error")}>
-              {(state) => (
-                <>
-                  <p role="alert">{state().message}</p>
-                  <button
-                    type="button"
-                    class="mt-3 rounded-lg bg-primary px-4 py-2 text-primary-foreground text-sm focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-accent"
-                    onClick={() => props.onRetryAuthentication?.()}
-                  >
-                    {t("common.retry")}
-                  </button>
-                </>
-              )}
+              <button
+                type="button"
+                class="mt-3 rounded-lg bg-primary px-4 py-2 text-primary-foreground text-sm focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-accent"
+                onClick={() => props.onRetryAuthentication?.()}
+              >
+                {t("common.retry")}
+              </button>
             </Match>
             <Match when={authenticationState("ready")}>
               {(state) => (

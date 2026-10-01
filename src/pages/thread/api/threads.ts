@@ -27,6 +27,10 @@ export function connectThread(id: string) {
   return invoke<void>("connect_thread", { id });
 }
 
+export function reconnectThread(id: string) {
+  return invoke<void>("reconnect_thread", { id });
+}
+
 export function deleteThread(id: string) {
   return invoke<void>("delete_thread", { id });
 }

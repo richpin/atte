@@ -1887,8 +1887,50 @@ async fn resume_only_restores_context_with_an_explicit_no_history_notice() {
         .contains("이전 메시지"));
     assert!(ready.turns.is_empty());
     restored.send_message(draft.id, "continue".into()).unwrap();
-    assert!(settle(&restored, draft.id).await.notice.is_some());
+    let continued = settle(&restored, draft.id).await;
+    assert!(continued.notice.is_some());
+    restored.reconnect(draft.id).unwrap();
+    let reconnected = settle(&restored, draft.id).await;
+    assert_eq!(reconnected.turns, continued.turns);
+    assert_eq!(reconnected.session_id, continued.session_id);
     restored.shutdown().await;
+}
+
+#[tokio::test]
+async fn repeated_connection_failures_have_distinct_live_notifications() {
+    use atte_lib::thread::ThreadUpdate;
+
+    let root = tempfile::tempdir().unwrap();
+    let mut agent = mock_agent();
+    agent.command = root.path().join("missing-agent");
+    let threads = Threads::new(vec![agent]);
+    let draft = threads.create(root.path()).unwrap();
+    let mut updates = threads.subscribe(draft.id).unwrap();
+    assert!(matches!(
+        updates.recv().await,
+        Some(ThreadUpdate::Thread { .. })
+    ));
+    let mut notifications = Vec::new();
+    for _ in 0..2 {
+        threads.reconnect(draft.id).unwrap();
+        let failed = settle(&threads, draft.id).await;
+        assert_eq!(failed.status, ThreadStatus::Failed);
+        while let Ok(update) = updates.try_recv() {
+            if let ThreadUpdate::Patch { errors, .. } = update {
+                notifications.extend(errors);
+            }
+        }
+    }
+    assert_eq!(notifications.len(), 2);
+    assert_ne!(notifications[0].id, notifications[1].id);
+    assert_eq!(notifications[0].failure, notifications[1].failure);
+    let mut restored_subscription = threads.subscribe(draft.id).unwrap();
+    assert!(matches!(
+        restored_subscription.recv().await,
+        Some(ThreadUpdate::Thread { .. })
+    ));
+    assert!(restored_subscription.try_recv().is_err());
+    threads.shutdown().await;
 }
 
 #[tokio::test]
@@ -3228,6 +3270,7 @@ async fn publishes_only_the_new_turn_after_the_initial_snapshot() {
     let Some(ThreadUpdate::Patch {
         thread: patch,
         turn_updates,
+        ..
     }) = updates.recv().await
     else {
         panic!("new turns are published as lightweight patches");
@@ -3594,6 +3637,7 @@ impl TranscriptSubscription {
             ThreadUpdate::Patch {
                 thread: patch,
                 turn_updates,
+                ..
             } => {
                 use atte_lib::thread::TurnUpdate;
                 let thread = self
@@ -4830,5 +4874,100 @@ async fn removing_an_agent_clears_pending_permissions_and_rejects_late_decisions
         .is_err());
     assert!(threads.connect(draft.id).is_err());
     assert_eq!(stream.recv().await.unwrap(), removed);
+    threads.shutdown().await;
+}
+
+#[tokio::test]
+async fn manual_reconnect_resumes_the_same_session_and_preserves_history() {
+    let folder = tempfile::tempdir().unwrap();
+    let threads = Threads::new(vec![mock_agent()]);
+    let draft = threads.create(folder.path()).unwrap();
+    threads.connect(draft.id).unwrap();
+    let ready = settle(&threads, draft.id).await;
+    threads
+        .send_message(draft.id, "remember this".into())
+        .unwrap();
+    let completed = settle(&threads, draft.id).await;
+    for _ in 0..3 {
+        let connecting = threads.reconnect(draft.id).unwrap();
+        assert_eq!(connecting.status, ThreadStatus::Connecting);
+        assert_eq!(
+            threads.reconnect(draft.id).unwrap().status,
+            ThreadStatus::Connecting
+        );
+        let restored = settle(&threads, draft.id).await;
+        assert_eq!(restored.status, ThreadStatus::SessionReady);
+        assert_eq!(restored.session_id, ready.session_id);
+        assert_eq!(restored.turns[0].message, completed.turns[0].message);
+        assert_eq!(restored.turns[0].response, completed.turns[0].response);
+    }
+    threads.send_message(draft.id, "continue".into()).unwrap();
+    assert_eq!(settle(&threads, draft.id).await.turns.len(), 2);
+    threads.shutdown().await;
+}
+
+#[tokio::test]
+async fn manual_reconnect_isolates_shared_work_and_rejects_busy_threads() {
+    let folder = tempfile::tempdir().unwrap();
+    let log = folder.path().join("requests.log");
+    let mut agent = mock_agent();
+    agent.env.insert("FIXTURE_MODE".into(), "concurrent".into());
+    agent
+        .env
+        .insert("REQUEST_LOG".into(), log.to_string_lossy().into());
+    let threads = Threads::new(vec![agent]);
+    let first = threads.create(folder.path()).unwrap();
+    let second = threads.create(folder.path()).unwrap();
+    threads.connect(first.id).unwrap();
+    let ready = settle(&threads, first.id).await;
+    threads.connect(second.id).unwrap();
+    settle(&threads, second.id).await;
+    threads.send_message(second.id, "approval".into()).unwrap();
+    let mut stream = subscribe(&threads, second.id);
+    let waiting = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let state = stream.recv().await.unwrap();
+            if state.status == ThreadStatus::WaitingForApproval {
+                break state;
+            }
+        }
+    })
+    .await
+    .unwrap();
+    assert!(threads.reconnect(second.id).is_err());
+    threads.reconnect(first.id).unwrap();
+    let restored = settle(&threads, first.id).await;
+    assert_eq!(restored.session_id, ready.session_id);
+    assert_eq!(restored.status, ThreadStatus::SessionReady);
+    assert_eq!(
+        threads.get(second.id).unwrap().permissions,
+        waiting.permissions
+    );
+    threads
+        .send_message(first.id, "after reconnect".into())
+        .unwrap();
+    assert_eq!(
+        settle(&threads, first.id).await.turns[0].response,
+        "reply:after reconnect"
+    );
+    let requests = std::fs::read_to_string(log).unwrap();
+    assert_eq!(
+        requests
+            .lines()
+            .filter(|line| line.starts_with("initialize "))
+            .count(),
+        1
+    );
+    assert_eq!(
+        requests
+            .lines()
+            .filter(|line| line.starts_with("session/load "))
+            .count(),
+        1
+    );
+    assert!(!requests.contains("session/delete"));
+    threads.cancel_turn(second.id, waiting.turns[0].id).unwrap();
+    assert!(threads.reconnect(second.id).is_err());
+    settle(&threads, second.id).await;
     threads.shutdown().await;
 }

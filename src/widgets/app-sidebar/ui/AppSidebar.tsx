@@ -37,11 +37,12 @@ import {
   SidebarMenuSubButton,
   SidebarMenuSubItem,
   SidebarTrigger,
+  showErrorToast,
   useSidebar,
 } from "shared/ui";
 import { createMemo, createSignal, For, Show } from "solid-js";
 
-type AppView = "new-chat" | "thread" | "general" | "agents";
+type AppView = "new-thread" | "thread" | "general" | "agents";
 
 type SidebarThread = {
   id: string;
@@ -59,7 +60,7 @@ export function AppSidebar(props: {
   failed: boolean;
   creating: boolean;
   onRetry: () => void;
-  onNewChat: () => void;
+  onNewThread: () => void;
   onSelectThread: (id: string) => void;
   onCreateInProject: (folder: string) => void;
   onDeleteThread: (id: string) => Promise<void>;
@@ -73,7 +74,6 @@ export function AppSidebar(props: {
   );
   const [deleteCandidate, setDeleteCandidate] = createSignal<SidebarThread>();
   const [deleting, setDeleting] = createSignal(false);
-  const [deleteError, setDeleteError] = createSignal<string>();
   const expanded = () => isMobile() || state() === "expanded";
 
   const groups = createMemo(() => {
@@ -100,7 +100,6 @@ export function AppSidebar(props: {
   }
 
   function requestDelete(entry: SidebarThread) {
-    setDeleteError(undefined);
     setDeleteCandidate(entry);
   }
 
@@ -108,12 +107,11 @@ export function AppSidebar(props: {
     const candidate = deleteCandidate();
     if (!candidate || deleting()) return;
     setDeleting(true);
-    setDeleteError(undefined);
     try {
       await props.onDeleteThread(candidate.id);
       setDeleteCandidate(undefined);
     } catch (cause) {
-      setDeleteError(message(cause, "sidebar.deleteFailed"));
+      showErrorToast(message(cause, "sidebar.deleteFailed"));
     } finally {
       setDeleting(false);
     }
@@ -144,11 +142,13 @@ export function AppSidebar(props: {
             <SidebarMenu class="px-2">
               <SidebarMenuItem>
                 <SidebarMenuButton
-                  aria-current={props.view === "new-chat" ? "page" : undefined}
-                  onClick={props.onNewChat}
+                  aria-current={
+                    props.view === "new-thread" ? "page" : undefined
+                  }
+                  onClick={props.onNewThread}
                 >
                   <SquarePen aria-hidden="true" />
-                  <span class="truncate">{t("sidebar.newChat")}</span>
+                  <span class="truncate">{t("sidebar.newThread")}</span>
                 </SidebarMenuButton>
               </SidebarMenuItem>
             </SidebarMenu>
@@ -163,9 +163,6 @@ export function AppSidebar(props: {
                 <SidebarGroupContent class="min-h-0 flex-1 overflow-y-auto">
                   <Show when={props.failed}>
                     <div class="space-y-2 px-2 py-1">
-                      <p role="alert" class="text-sm">
-                        {t("sidebar.loadFailed")}
-                      </p>
                       <Button
                         variant="outline"
                         size="sm"
@@ -206,7 +203,7 @@ export function AppSidebar(props: {
                             <span>{group.name}</span>
                           </SidebarMenuButton>
                           <SidebarMenuAction
-                            aria-label={t("sidebar.newChatIn", {
+                            aria-label={t("sidebar.newThreadIn", {
                               name: group.name,
                             })}
                             disabled={props.creating}
@@ -377,13 +374,6 @@ export function AppSidebar(props: {
               {t("sidebar.deleteDescription")}
             </DialogDescription>
           </DialogHeader>
-          <Show when={deleteError()}>
-            {(error) => (
-              <p role="alert" aria-live="assertive" class="text-sm text-danger">
-                {error()}
-              </p>
-            )}
-          </Show>
           <DialogFooter>
             <Button
               aria-label={t("common.cancel")}

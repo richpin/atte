@@ -669,6 +669,8 @@ impl Threads {
                 Entry {
                     state: Arc::new(Mutex::new(ThreadState {
                         list: list.clone(),
+                        published_failure: thread.failure.clone(),
+                        pending_errors: Vec::new(),
                         thread,
                         confirmed_configuration: Vec::new(),
                         desired_configuration: HashMap::new(),
@@ -1157,6 +1159,8 @@ impl Threads {
                 state: Arc::new(Mutex::new(ThreadState {
                     list: self.list.clone(),
                     thread: draft.clone(),
+                    published_failure: None,
+                    pending_errors: Vec::new(),
                     confirmed_configuration: Vec::new(),
                     desired_configuration: HashMap::new(),
                     generation: 0,
@@ -1272,6 +1276,18 @@ impl Threads {
     /// Starts one connection attempt. Concurrent requests return the same state.
     /// Requires a Tokio runtime; failures are observed through `get`.
     pub fn connect(&self, id: Uuid) -> Result<Thread, ThreadError> {
+        self.connect_inner(id, false)
+    }
+
+    /// Replaces an idle connection and resumes the same remote session.
+    ///
+    /// # Errors
+    /// Returns an error if work is active, or connection preparation fails.
+    pub fn reconnect(&self, id: Uuid) -> Result<Thread, ThreadError> {
+        self.connect_inner(id, true)
+    }
+
+    fn connect_inner(&self, id: Uuid, reconnect: bool) -> Result<Thread, ThreadError> {
         let agents = self.agents.lock().map_err(|_| unavailable())?;
         let mut state = self.lock()?;
         if state.closed {
@@ -1297,14 +1313,26 @@ impl Threads {
         let entry = state.entries.get_mut(&id).ok_or_else(not_found)?;
         let mut current = entry.state.lock().map_err(|_| unavailable())?;
         let mut thread = current.thread.clone();
-        if matches!(
-            thread.status,
-            ThreadStatus::Connecting
-                | ThreadStatus::SessionReady
-                | ThreadStatus::Running
-                | ThreadStatus::WaitingForApproval
-                | ThreadStatus::Cancelling
-        ) {
+        if reconnect
+            && matches!(
+                thread.status,
+                ThreadStatus::Running | ThreadStatus::WaitingForApproval | ThreadStatus::Cancelling
+            )
+        {
+            return Err(ThreadError::NotReady(
+                "작업이 진행 중입니다. 완료된 뒤 다시 시도해주세요.".into(),
+            ));
+        }
+        if thread.status == ThreadStatus::Connecting
+            || (!reconnect
+                && matches!(
+                    thread.status,
+                    ThreadStatus::SessionReady
+                        | ThreadStatus::Running
+                        | ThreadStatus::WaitingForApproval
+                        | ThreadStatus::Cancelling
+                ))
+        {
             return Ok(thread);
         }
         if !thread.working_folder.is_dir() {
@@ -2025,6 +2053,8 @@ struct ThreadState {
     draining: bool,
     dispatch_queue_on_ready: bool,
     dispatching_queued: Option<QueuedMessage>,
+    published_failure: Option<ConnectionFailure>,
+    pending_errors: Vec<ThreadErrorNotification>,
     published_turn_count: usize,
     published_last_turn: Option<(Uuid, Option<String>)>,
 }
@@ -2036,6 +2066,15 @@ struct DesiredConfiguration {
 }
 
 impl ThreadState {
+    fn report_notice(&mut self, message: String) {
+        self.thread.notice = Some(message.clone());
+        self.pending_errors.push(ThreadErrorNotification {
+            id: Uuid::new_v4(),
+            failure: None,
+            message: Some(message),
+        });
+    }
+
     fn enqueue(&mut self, input: UserInput) -> Result<(), ThreadError> {
         let mut queue = self.thread.queued_messages.clone();
         queue.push(QueuedMessage {
@@ -2208,7 +2247,7 @@ impl ThreadState {
             queue.insert(0, failed);
         }
         if let Err(error) = self.save_queue(queue) {
-            self.thread.notice = Some(error.to_string());
+            self.report_notice(error.to_string());
         }
         if self
             .thread
@@ -2286,11 +2325,31 @@ impl ThreadState {
 
     fn publish(&mut self) {
         self.thread.updated_at = now();
+        let previous_storage_error = self.thread.storage_error.clone();
         if let Some(store) = &self.store {
             self.thread.storage_error = store
                 .save_thread(&self.thread.metadata())
                 .err()
                 .map(|error| error.to_string());
+        }
+        if self.thread.failure != self.published_failure {
+            if let Some(failure) = &self.thread.failure {
+                self.pending_errors.push(ThreadErrorNotification {
+                    id: Uuid::new_v4(),
+                    failure: Some(failure.clone()),
+                    message: None,
+                });
+            }
+            self.published_failure = self.thread.failure.clone();
+        }
+        if self.thread.storage_error != previous_storage_error {
+            if let Some(message) = &self.thread.storage_error {
+                self.pending_errors.push(ThreadErrorNotification {
+                    id: Uuid::new_v4(),
+                    failure: None,
+                    message: Some(message.clone()),
+                });
+            }
         }
         if let Ok(mut list) = self.list.lock() {
             list.publish(self.thread.metadata());
@@ -2299,6 +2358,7 @@ impl ThreadState {
         let change = ThreadUpdate::Patch {
             thread: Box::new(ThreadPatch::from(&self.thread)),
             turn_updates: turns,
+            errors: std::mem::take(&mut self.pending_errors),
         };
         self.subscribers
             .retain(|sender| sender.send(change.clone()).is_ok());
@@ -2342,6 +2402,7 @@ pub enum ThreadUpdate {
         thread: Box<ThreadPatch>,
         #[serde(rename = "turnUpdates")]
         turn_updates: Vec<TurnUpdate>,
+        errors: Vec<ThreadErrorNotification>,
     },
     TextDelta {
         #[serde(rename = "threadId")]
@@ -2350,6 +2411,15 @@ pub enum ThreadUpdate {
         turn_id: Uuid,
         text: String,
     },
+}
+
+/// A transient failure occurrence, delivered only with live updates, never snapshots.
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ThreadErrorNotification {
+    pub id: Uuid,
+    pub failure: Option<ConnectionFailure>,
+    pub message: Option<String>,
 }
 
 /// A transcript mutation carried with a lightweight thread patch.
@@ -2379,6 +2449,16 @@ pub(crate) struct RuntimeUpdates {
 }
 
 impl RuntimeUpdates {
+    pub(crate) fn generation(&self) -> u64 {
+        self.generation
+    }
+
+    pub(crate) fn is_current(&self) -> bool {
+        self.state
+            .lock()
+            .is_ok_and(|state| state.generation == self.generation)
+    }
+
     pub fn media_bytes(&self, attachment: Uuid) -> Result<Vec<u8>, ThreadError> {
         let state = self.state.lock().map_err(|_| unavailable())?;
         if state.generation != self.generation {
@@ -2417,7 +2497,7 @@ impl RuntimeUpdates {
             },
         );
         if let Err(error) = state.save_queue(queue) {
-            state.thread.notice = Some(error.to_string());
+            state.report_notice(error.to_string());
         }
         state.thread.turns.pop();
         state.publish();
@@ -2448,7 +2528,7 @@ impl RuntimeUpdates {
                 next
             }
             Err(error) => {
-                state.thread.notice = Some(error.to_string());
+                state.report_notice(error.to_string());
                 None
             }
         };
@@ -2544,7 +2624,6 @@ impl RuntimeUpdates {
 
     pub fn context_resumed(&self) {
         self.modify(|thread| {
-            thread.turns.clear();
             thread.notice = Some(
                 "기존 맥락을 재개했습니다. 이 에이전트는 이전 메시지 표시를 지원하지 않습니다."
                     .into(),
@@ -2623,7 +2702,7 @@ impl RuntimeUpdates {
                 queue.remove(index);
             }
             if let Err(error) = state.save_queue(queue) {
-                state.thread.notice = Some(error.to_string());
+                state.report_notice(error.to_string());
                 state.thread.status = ThreadStatus::SessionReady;
                 state.publish();
                 return None;
@@ -2665,7 +2744,7 @@ impl RuntimeUpdates {
             queue.remove(index);
         }
         if let Err(error) = state.save_queue(queue) {
-            state.thread.notice = Some(error.to_string());
+            state.report_notice(error.to_string());
         }
         state.publish();
     }
@@ -2694,6 +2773,13 @@ impl RuntimeUpdates {
             return;
         }
         state.fail_queued_prompt(turn);
+        if failure != ConnectionFailure::AuthenticationRequired {
+            state.pending_errors.push(ThreadErrorNotification {
+                id: Uuid::new_v4(),
+                failure: Some(failure.clone()),
+                message: None,
+            });
+        }
         if failure == ConnectionFailure::AuthenticationRequired {
             state.thread.authentication = AuthenticationStatus::Required;
             state.thread.status = ThreadStatus::Failed;

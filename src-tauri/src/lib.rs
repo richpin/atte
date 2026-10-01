@@ -217,6 +217,11 @@ async fn connect_thread(id: Uuid, threads: State<'_, Threads>) -> Result<(), Thr
 }
 
 #[tauri::command]
+async fn reconnect_thread(id: Uuid, threads: State<'_, Threads>) -> Result<(), ThreadError> {
+    threads.reconnect(id).map(|_| ())
+}
+
+#[tauri::command]
 async fn send_message(
     id: Uuid,
     input: SubmittedInput,
@@ -441,6 +446,7 @@ pub fn run() {
             subscribe_thread_list,
             prepared_agents,
             connect_thread,
+            reconnect_thread,
             send_message,
             release_files,
             cancel_turn,

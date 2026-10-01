@@ -151,7 +151,16 @@ export interface PreparedAgent {
 
 export type ThreadUpdate =
   | { kind: "thread"; thread: Thread }
-  | { kind: "patch"; thread: ThreadPatch; turnUpdates: TurnUpdate[] }
+  | {
+      kind: "patch";
+      thread: ThreadPatch;
+      turnUpdates: TurnUpdate[];
+      errors?: {
+        id: string;
+        failure?: ConnectionFailure | null;
+        message?: string | null;
+      }[];
+    }
   | {
       kind: "textDelta";
       threadId: string;

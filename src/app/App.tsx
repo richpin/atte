@@ -1,20 +1,25 @@
 import { makeResizeObserver } from "@solid-primitives/resize-observer";
 import { QueryClient, QueryClientProvider } from "@tanstack/solid-query";
 import { AgentAuthenticationProvider } from "features/agent-authentication";
-import { Bot, Settings } from "lucide-solid";
+import { Bot, Ellipsis, RotateCcw, Settings } from "lucide-solid";
 import { AgentManagementPage } from "pages/agent-management";
 import { GeneralPage } from "pages/general";
-import { NewChatPage } from "pages/new-chat";
+import { NewThreadPage } from "pages/new-thread";
 import { ThreadPage } from "pages/thread";
 import { I18nProvider, useI18n } from "shared/i18n";
 import { ThemeProvider } from "shared/theme";
 import {
   AgentIcon,
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
   Resizable,
   ResizableHandle,
   ResizablePanel,
   SidebarProvider,
   SidebarTrigger,
+  ToastHost,
   useResizable,
   useSidebar,
 } from "shared/ui";
@@ -39,6 +44,7 @@ export default function App() {
         <QueryClientProvider client={queryClient}>
           <AgentAuthenticationProvider>
             <AppShell />
+            <ToastHost />
           </AgentAuthenticationProvider>
         </QueryClientProvider>
       </I18nProvider>
@@ -183,7 +189,7 @@ function ShellSidebar(props: { shell: AppShellModel }) {
         threads.selecting() || shell.agentsLoading() || shell.agentsFailed()
       }
       onRetry={() => void threads.reloadList()}
-      onNewChat={shell.showNewChat}
+      onNewThread={shell.showNewThread}
       onSelectThread={(id) => void shell.openThread(id)}
       onCreateInProject={(folder) => void shell.createInProject(folder)}
       onDeleteThread={shell.removeThread}
@@ -255,19 +261,37 @@ function ShellContent(props: { shell: AppShellModel }) {
             <span class="truncate">{title()}</span>
           </h1>
         </Show>
+        <Show when={shell.view() === "thread" && threads.selectedThreadId()}>
+          <DropdownMenu placement="bottom-end">
+            <DropdownMenuTrigger
+              aria-label={t("thread.menu")}
+              class="pointer-events-auto relative grid size-7 shrink-0 place-items-center rounded-md text-muted hover:bg-panel hover:text-ink focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
+            >
+              <Ellipsis aria-hidden="true" class="size-4" />
+            </DropdownMenuTrigger>
+            <DropdownMenuContent>
+              <DropdownMenuItem
+                disabled={!threads.canReconnect()}
+                onSelect={() => void threads.reconnect()}
+              >
+                <RotateCcw aria-hidden="true" class="size-4" />
+                {t("thread.reconnect")}
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </Show>
       </header>
-      <div hidden={shell.view() !== "new-chat"} class="min-h-0 flex-1">
-        <NewChatPage
+      <div hidden={shell.view() !== "new-thread"} class="min-h-0 flex-1">
+        <NewThreadPage
           agents={shell.agents()}
           selectedAgent={shell.agentId()}
           selectedFolder={shell.selectedFolder()}
           loading={shell.agentsLoading()}
           failed={shell.agentsFailed()}
           selecting={threads.selecting()}
-          error={shell.newChatError()}
           onSelectAgent={shell.setSelectedAgent}
           onSelectFolder={() => void shell.selectFolder()}
-          onStart={() => void shell.startChat()}
+          onStart={() => void shell.startThread()}
           onManageAgents={shell.showAgents}
         />
       </div>

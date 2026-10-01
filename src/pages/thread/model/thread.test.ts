@@ -66,7 +66,7 @@ function stream(id: string, index = (streams.get(id)?.length ?? 1) - 1) {
   return receive;
 }
 
-function setup() {
+function setup(notifyError?: (message: string) => void) {
   return createRoot((cleanup) => {
     dispose = cleanup;
     const queryClient = new QueryClient({
@@ -74,7 +74,7 @@ function setup() {
     });
     queryClient.mount();
     onCleanup(() => queryClient.unmount());
-    return createThreadModel(queryClient);
+    return createThreadModel(queryClient, notifyError);
   });
 }
 
@@ -395,12 +395,12 @@ it("preserves independent drafts when switching threads", async () => {
   expect(model.draft()).toBe("B draft");
 });
 
-it("starts a new chat without discarding the selected thread draft", async () => {
+it("starts a new thread without discarding the selected thread draft", async () => {
   const model = setup();
   await open(model, "A");
   model.setDraft("A draft");
 
-  model.startNewChat();
+  model.startNewThread();
 
   expect(model.selectedThreadId()).toBeUndefined();
   expect(model.thread()).toBeUndefined();
@@ -676,7 +676,7 @@ it("releases files selected after navigation made the picker result stale", asyn
   const model = setup();
   await open(model, "A");
   const selecting = model.selectFiles();
-  model.startNewChat();
+  model.startNewThread();
 
   selection.resolve({
     attachments: [
@@ -840,4 +840,109 @@ it("unsubscribes late registrations after disposal", async () => {
       subscription: "late",
     }),
   );
+});
+
+it("notifies failure occurrences once without replaying snapshots on navigation", async () => {
+  const notify = vi.fn();
+  const model = setup(notify);
+  const failed = thread("A", { status: "failed", failure: "processExited" });
+  await open(model, "A", failed);
+  expect(notify).not.toHaveBeenCalled();
+  const event: ThreadUpdate = {
+    kind: "patch",
+    thread: failed,
+    turnUpdates: [],
+    errors: [{ id: "error-1", failure: "processExited" }],
+  };
+  stream("A")(event);
+  stream("A")(event);
+  expect(notify).toHaveBeenCalledTimes(1);
+  await open(model, "B");
+  await open(model, "A", failed);
+  expect(notify).toHaveBeenCalledTimes(1);
+  stream("A")({
+    ...event,
+    errors: [{ id: "error-2", failure: "processExited" }],
+  });
+  expect(notify).toHaveBeenCalledTimes(2);
+});
+
+it("reports repeated command failures as separate notifications", async () => {
+  const notify = vi.fn();
+  const model = setup(notify);
+  await open(model, "A");
+  commands.set("delete_queued_message", async () => {
+    throw new Error("same failure");
+  });
+  await model.deleteQueued("queued");
+  await model.deleteQueued("queued");
+  expect(notify.mock.calls.map(([message]) => message)).toEqual([
+    "same failure",
+    "same failure",
+  ]);
+});
+
+it("suppresses the resumption notice but reports storage errors once", async () => {
+  const notify = vi.fn();
+  const model = setup(notify);
+  const resumed = thread("A", {
+    interrupted: true,
+    notice:
+      "기존 맥락을 재개했습니다. 이 에이전트는 이전 메시지 표시를 지원하지 않습니다.",
+  });
+  await open(model, "A", resumed);
+  expect(notify).not.toHaveBeenCalled();
+  const failed = { ...resumed, storageError: "storage failed" };
+  stream("A")({ kind: "thread", thread: failed });
+  expect(notify).not.toHaveBeenCalled();
+  const event: ThreadUpdate = {
+    kind: "patch",
+    thread: failed,
+    turnUpdates: [],
+    errors: [{ id: "storage-1", message: "storage failed" }],
+  };
+  stream("A")(event);
+  stream("A")(event);
+  expect(notify).toHaveBeenCalledExactlyOnceWith("storage failed");
+});
+
+it("manually reconnects an idle thread and preserves its input", async () => {
+  const model = setup();
+  await open(model, "A");
+  model.setDraft("keep this draft");
+  expect(model.canReconnect()).toBe(true);
+  await model.reconnect();
+  expect(invoke).toHaveBeenCalledWith("reconnect_thread", { id: "A" });
+  expect(model.draft()).toBe("keep this draft");
+  stream("A")({ kind: "thread", thread: running("A") });
+  expect(model.canReconnect()).toBe(false);
+});
+
+it("recovers subscription before connecting a failed agent", async () => {
+  vi.useFakeTimers();
+  const notify = vi.fn();
+  const model = setup(notify);
+  await open(model, "A");
+  commands.set("subscribe_thread", async () => {
+    throw new Error("subscription failure");
+  });
+  stream("A")({
+    kind: "textDelta",
+    threadId: "A",
+    turnId: "unknown",
+    text: "invalid",
+  });
+  for (let index = 0; index < 5; index++)
+    await vi.advanceTimersByTimeAsync(5_000);
+  expect(notify).toHaveBeenCalledTimes(1);
+  expect(model.canReconnect()).toBe(true);
+  commands.delete("subscribe_thread");
+  await model.reconnect();
+  await vi.advanceTimersByTimeAsync(0);
+  expect(model.canReconnect()).toBe(false);
+  stream("A")({
+    kind: "thread",
+    thread: thread("A", { status: "failed", failure: "processExited" }),
+  });
+  expect(invoke).toHaveBeenCalledWith("connect_thread", { id: "A" });
 });

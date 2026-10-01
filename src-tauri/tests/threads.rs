@@ -435,6 +435,7 @@ fn serializes_patches_without_the_thread_transcript() {
     let value = serde_json::to_value(ThreadUpdate::Patch {
         thread: Box::new(ThreadPatch::from(&thread)),
         turn_updates: vec![TurnUpdate::Added { turn: turn.clone() }],
+        errors: Vec::new(),
     })
     .unwrap();
     assert_eq!(value["kind"], "patch");

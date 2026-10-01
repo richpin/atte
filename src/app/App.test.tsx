@@ -70,6 +70,23 @@ function getSidebarThreadButton(name: string) {
 
 const receive = (thread: Record<string, unknown>) =>
   receiveUpdate({ kind: "thread", thread });
+function receiveFailure(thread: Record<string, unknown>) {
+  receive(thread);
+  if (thread.failure || thread.notice) {
+    receiveUpdate({
+      kind: "patch",
+      thread,
+      turnUpdates: [],
+      errors: [
+        {
+          id: crypto.randomUUID(),
+          failure: thread.failure,
+          message: thread.notice,
+        },
+      ],
+    });
+  }
+}
 let pendingSnapshots: Map<string, Record<string, unknown>>;
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -228,7 +245,7 @@ beforeEach(() => {
       ].includes(command)
     ) {
       if (result && typeof result === "object" && "id" in result)
-        queueMicrotask(() => receive(result as Record<string, unknown>));
+        queueMicrotask(() => receiveFailure(result as Record<string, unknown>));
       return;
     }
     return result;
@@ -314,7 +331,7 @@ it("opens settings pages from the sidebar menu and keeps language selection ther
   localStorage.removeItem("atte.locale");
 });
 
-it("starts on new chat and preserves a thread draft across that navigation", async () => {
+it("starts on new thread and preserves a thread draft across that navigation", async () => {
   const saved = {
     id: "draft-navigation",
     title: "Draft navigation",
@@ -1116,7 +1133,7 @@ it("keeps the saved list accessible without agents and restores on selection onl
     if (command === "list_threads") return [saved];
     if (command === "connect_thread") {
       queueMicrotask(() =>
-        receive({
+        receiveFailure({
           ...saved,
           status: "failed",
           failure: "agentRemoved",
@@ -1179,7 +1196,7 @@ it("loads selected history once and keeps newer list metadata when an older thre
   await userEvent.click(
     await screen.findByRole("button", { name: "저장된 제목" }),
   );
-  await screen.findByText("이전 스레드를 불러오는 중…");
+  await screen.findByText("불러오는 중");
   expect(screen.getByRole("heading", { name: "저장된 제목" })).toBeTruthy();
   expect(screen.getByRole("button", { name: "전송" })).toHaveProperty(
     "disabled",
@@ -1261,7 +1278,7 @@ it("keeps authentication discovery failures inline and retries on request", asyn
       expect(args).toEqual({ id: saved.id });
       connectAttempts++;
       queueMicrotask(() =>
-        receive({
+        receiveFailure({
           ...saved,
           status: "failed",
           authentication: "required",
@@ -1319,7 +1336,7 @@ it("automatically connects a new thread and disables sending while connecting", 
       getSidebarThreadButton("새 스레드").getAttribute("aria-current"),
     ).toBe("page");
   });
-  expect(screen.getByText("에이전트에 연결 중…")).toBeTruthy();
+  expect(screen.getByText("불러오는 중")).toBeTruthy();
   expect(invoke).toHaveBeenCalledWith("connect_thread", {
     id: "draft-1",
   });
@@ -1361,7 +1378,7 @@ it("shows folder errors and lets the user retry", async () => {
   ).toBe(false);
 });
 
-it("keeps the new chat page when another folder selection is cancelled", async () => {
+it("keeps the new thread page when another folder selection is cancelled", async () => {
   requests
     .mockResolvedValueOnce({
       id: "draft-1",
@@ -1413,7 +1430,7 @@ it("disables folder selection until the native dialog completes", async () => {
   ).toBe(false);
 });
 
-it("connects the fixed agent and displays backend readiness separately from authentication", async () => {
+it("connects the fixed agent and waits for the first message without an authentication status notice", async () => {
   requests.mockImplementation(async (command) => {
     if (command === "create_thread")
       return {
@@ -1445,7 +1462,7 @@ it("connects the fixed agent and displays backend readiness separately from auth
   render(() => <App />);
   await userEvent.click(screen.getByRole("button", { name: "폴더 선택" }));
   await userEvent.click(screen.getByRole("button", { name: "스레드 시작" }));
-  expect(await screen.findByText("에이전트에 연결 중…")).toBeTruthy();
+  expect(await screen.findByText("불러오는 중")).toBeTruthy();
   receive({
     id: "draft-1",
     workingFolder: "/project",
@@ -1454,11 +1471,15 @@ it("connects the fixed agent and displays backend readiness separately from auth
     turns: [],
     authentication: "unknown",
   });
-  expect(await screen.findByText("스레드가 준비되었습니다")).toBeTruthy();
+  expect(
+    await screen.findByRole("heading", {
+      name: "첫 메시지를 기다리고 있어요",
+    }),
+  ).toBeTruthy();
   expect(screen.queryByRole("button", { name: "다시 연결" })).toBeNull();
   expect(
-    screen.getByText("인증 상태는 아직 확인되지 않았습니다."),
-  ).toBeTruthy();
+    screen.queryByText("인증 상태는 아직 확인되지 않았습니다."),
+  ).toBeNull();
   expect(vi.mocked(invoke)).toHaveBeenCalledWith("connect_thread", {
     id: "draft-1",
   });
@@ -2057,7 +2078,7 @@ it("returns to login methods when the authenticated reconnect still requires aut
     ).toHaveLength(1),
   );
   receive({ ...failed, status: "connecting", failure: null });
-  expect(await screen.findByText("에이전트에 연결 중…")).toBeTruthy();
+  expect(await screen.findByText("불러오는 중")).toBeTruthy();
   receive(failed);
 
   expect(
@@ -2092,8 +2113,12 @@ it("shows process exit after readiness without reconnecting automatically", asyn
   render(() => <App />);
   await userEvent.click(screen.getByRole("button", { name: "폴더 선택" }));
   await userEvent.click(screen.getByRole("button", { name: "스레드 시작" }));
-  expect(await screen.findByText("스레드가 준비되었습니다")).toBeTruthy();
-  receive({
+  expect(
+    await screen.findByRole("heading", {
+      name: "첫 메시지를 기다리고 있어요",
+    }),
+  ).toBeTruthy();
+  receiveFailure({
     id: "draft-1",
     workingFolder: "/project",
     agentId: "codex",
@@ -2192,7 +2217,12 @@ it("shows a removed working folder error from the connection command", async () 
   expect((await screen.findByRole("alert")).textContent).toContain(
     "폴더를 다시 선택해주세요",
   );
-  expect(screen.getByRole("button", { name: "다시 연결" })).toBeTruthy();
+  await userEvent.click(screen.getByRole("button", { name: "스레드 메뉴" }));
+  expect(
+    screen
+      .getByRole("menuitem", { name: "다시 연결" })
+      .getAttribute("aria-disabled"),
+  ).not.toBe("true");
   expect(
     requests.mock.calls.filter(([command]) => command === "connect_thread"),
   ).toHaveLength(1);
@@ -2449,7 +2479,7 @@ it("keeps the message on send failure and displays permission cancellation", asy
   expect((screen.getByRole("textbox") as HTMLTextAreaElement).value).toBe(
     "keep this",
   );
-  receive({
+  receiveFailure({
     ...ready,
     notice: "승인 UI가 아직 지원되지 않아 도구 실행 요청을 취소했습니다.",
   });
@@ -2554,7 +2584,13 @@ it("offers manual reconnection only after five automatic retries", async () => {
   expect(screen.queryByRole("button", { name: "다시 연결" })).toBeNull();
   for (let attempt = 0; attempt < 5; attempt++)
     await vi.advanceTimersByTimeAsync(5_000);
-  expect(screen.getByRole("button", { name: "다시 연결" })).toBeTruthy();
+  vi.useRealTimers();
+  await userEvent.click(screen.getByRole("button", { name: "스레드 메뉴" }));
+  expect(
+    screen
+      .getByRole("menuitem", { name: "다시 연결" })
+      .getAttribute("aria-disabled"),
+  ).not.toBe("true");
 });
 
 it("does not disable the new thread when old subscription cleanup fails", async () => {
@@ -3219,7 +3255,7 @@ it("confirms uninstall, supports cancel and retry, and removes the agent from ne
 
 it("keeps thread content after agent removal and offers setup and explicit retry", async () => {
   const draft = {
-    id: "removed-chat",
+    id: "removed-thread",
     workingFolder: "/Users/test/project",
     agentId: "codex",
     status: "disconnected",
@@ -3230,8 +3266,8 @@ it("keeps thread content after agent removal and offers setup and explicit retry
   render(() => <App />);
   await userEvent.click(screen.getByRole("button", { name: "폴더 선택" }));
   await userEvent.click(screen.getByRole("button", { name: "스레드 시작" }));
-  await screen.findByText("에이전트에 연결 중…");
-  receive({
+  await screen.findByText("불러오는 중");
+  receiveFailure({
     ...draft,
     status: "failed",
     failure: "agentRemoved",
@@ -3247,7 +3283,12 @@ it("keeps thread content after agent removal and offers setup and explicit retry
   });
   expect(await screen.findByText("삭제 전 응답")).toBeTruthy();
   expect(screen.getByText(/에이전트를 설치한 뒤/)).toBeTruthy();
-  expect(screen.getByRole("button", { name: "다시 연결" })).toBeTruthy();
+  await userEvent.click(screen.getByRole("button", { name: "스레드 메뉴" }));
+  expect(
+    screen
+      .getByRole("menuitem", { name: "다시 연결" })
+      .getAttribute("aria-disabled"),
+  ).not.toBe("true");
   expect(
     screen.getByRole("button", { name: "설치·인증 관리 열기" }),
   ).toBeTruthy();
@@ -3396,7 +3437,7 @@ it("keeps folder selection local until starting with the currently selected agen
     .mockResolvedValueOnce("/work/프로젝트")
     .mockResolvedValueOnce(null);
   requests.mockResolvedValue({
-    id: "new-chat",
+    id: "new-thread",
     workingFolder: "/work/프로젝트",
     agentId: "fixture",
     status: "disconnected",
@@ -3433,7 +3474,7 @@ it("retains the chosen folder after creation fails and allows retry", async () =
       message: "존재하는 작업 폴더를 선택해주세요.",
     })
     .mockResolvedValue({
-      id: "retry-chat",
+      id: "retry-thread",
       workingFolder: "/project",
       agentId: "codex",
       status: "disconnected",
@@ -3452,4 +3493,95 @@ it("retains the chosen folder after creation fails and allows retry", async () =
   await userEvent.click(screen.getByRole("button", { name: "스레드 시작" }));
   await screen.findByRole("textbox");
   expect(folderSelection).toHaveBeenCalledTimes(1);
+});
+
+it("loads centrally during manual reconnection and restores history and the draft", async () => {
+  const saved = {
+    id: "manual-reconnect",
+    title: "Reconnect preview",
+    agentId: "codex",
+    workingFolder: "/project",
+    status: "sessionReady",
+    sessionId: "remote-1",
+    authentication: "authenticated",
+    turns: [
+      {
+        id: "turn",
+        message: "Previous question",
+        response: "Previous answer",
+        stopReason: "end_turn",
+      },
+    ],
+    permissions: [],
+    queuedMessages: [],
+  };
+  const original = vi.mocked(invoke).getMockImplementation();
+  vi.mocked(invoke).mockImplementation((command, args) => {
+    if (command === "list_threads") return Promise.resolve([saved]);
+    if (command === "subscribe_thread") return subscribeWith(args, saved);
+    if (command === "reconnect_thread") {
+      queueMicrotask(() => receive({ ...saved, status: "connecting" }));
+      return Promise.resolve();
+    }
+    return original?.(command, args) ?? Promise.resolve();
+  });
+  render(() => <App />);
+  await userEvent.click(
+    await screen.findByRole("button", { name: saved.title }),
+  );
+  await userEvent.type(screen.getByRole("textbox"), "preserve this draft");
+  const menu = screen.getByRole("button", { name: "스레드 메뉴" });
+  menu.focus();
+  await userEvent.keyboard("{Enter}");
+  await userEvent.click(screen.getByRole("menuitem", { name: "다시 연결" }));
+  expect(
+    await screen.findByRole("heading", { name: "불러오는 중" }),
+  ).toBeTruthy();
+  expect(screen.queryByRole("region", { name: "스레드 타임라인" })).toBeNull();
+  await userEvent.click(menu);
+  expect(
+    screen
+      .getByRole("menuitem", { name: "다시 연결" })
+      .getAttribute("aria-disabled"),
+  ).toBe("true");
+  await userEvent.keyboard("{Escape}");
+  receive({ ...saved, interrupted: true });
+  expect(await screen.findByText("Previous answer")).toBeTruthy();
+  expect(await screen.findByRole("textbox")).toHaveProperty(
+    "value",
+    "preserve this draft",
+  );
+  expect(screen.queryByText(/이전 작업이 중단/)).toBeNull();
+  expect(screen.queryByRole("alert")).toBeNull();
+  expect(invoke).toHaveBeenCalledWith("reconnect_thread", { id: saved.id });
+});
+
+it("shows first-message waiting after a history-free resumption without its notice", async () => {
+  const resumed = {
+    id: "resumed",
+    title: "Resumed thread",
+    agentId: "codex",
+    workingFolder: "/project",
+    status: "sessionReady",
+    sessionId: "remote-1",
+    turns: [],
+    interrupted: true,
+    notice:
+      "기존 맥락을 재개했습니다. 이 에이전트는 이전 메시지 표시를 지원하지 않습니다.",
+  };
+  const original = vi.mocked(invoke).getMockImplementation();
+  vi.mocked(invoke).mockImplementation((command, args) => {
+    if (command === "list_threads") return Promise.resolve([resumed]);
+    if (command === "subscribe_thread") return subscribeWith(args, resumed);
+    return original?.(command, args) ?? Promise.resolve();
+  });
+  render(() => <App />);
+  await userEvent.click(
+    await screen.findByRole("button", { name: resumed.title }),
+  );
+  expect(
+    await screen.findByRole("heading", { name: "첫 메시지를 기다리고 있어요" }),
+  ).toBeTruthy();
+  expect(screen.queryByText(resumed.notice)).toBeNull();
+  expect(screen.queryByRole("alert")).toBeNull();
 });
