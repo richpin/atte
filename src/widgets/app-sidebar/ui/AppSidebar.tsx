@@ -1,4 +1,3 @@
-import { AlertDialog } from "@kobalte/core/alert-dialog";
 import {
   Bot,
   EllipsisVertical,
@@ -13,6 +12,12 @@ import { useI18n } from "shared/i18n";
 import {
   AgentIcon,
   Button,
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
@@ -201,7 +206,7 @@ export function AppSidebar(props: {
                             <span>{group.name}</span>
                           </SidebarMenuButton>
                           <SidebarMenuAction
-                            aria-label={t("sidebar.newThreadIn", {
+                            aria-label={t("sidebar.newChatIn", {
                               name: group.name,
                             })}
                             disabled={props.creating}
@@ -359,51 +364,45 @@ export function AppSidebar(props: {
         </Show>
       </Sidebar>
 
-      <AlertDialog
+      <Dialog
         open={Boolean(deleteCandidate())}
         onOpenChange={(open) => {
           if (!open && !deleting()) setDeleteCandidate(undefined);
         }}
       >
-        <AlertDialog.Portal>
-          <AlertDialog.Overlay class="fixed inset-0 bg-black/40" />
-          <AlertDialog.Content class="fixed top-1/2 left-1/2 w-[min(28rem,90vw)] -translate-x-1/2 -translate-y-1/2 space-y-4 rounded-2xl border border-line bg-panel p-6 text-ink shadow-xl">
-            <AlertDialog.Title class="font-semibold">
-              {t("sidebar.deleteTitle")}
-            </AlertDialog.Title>
-            <AlertDialog.Description class="text-sm text-muted">
+        <DialogContent role="alertdialog">
+          <DialogHeader>
+            <DialogTitle>{t("sidebar.deleteTitle")}</DialogTitle>
+            <DialogDescription>
               {t("sidebar.deleteDescription")}
-            </AlertDialog.Description>
-            <Show when={deleteError()}>
-              {(error) => (
-                <p
-                  role="alert"
-                  aria-live="assertive"
-                  class="text-sm text-danger"
-                >
-                  {error()}
-                </p>
-              )}
-            </Show>
-            <div class="flex justify-end gap-3 text-sm">
-              <AlertDialog.CloseButton
-                aria-label={t("common.cancel")}
-                disabled={deleting()}
-                class="rounded-md border border-input px-4 py-2 font-medium ring-offset-background hover:bg-canvas focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50"
-              >
-                {t("common.cancel")}
-              </AlertDialog.CloseButton>
-              <Button
-                disabled={deleting()}
-                variant="destructive"
-                onClick={() => void confirmDelete()}
-              >
-                {deleting() ? t("common.deleting") : t("common.delete")}
-              </Button>
-            </div>
-          </AlertDialog.Content>
-        </AlertDialog.Portal>
-      </AlertDialog>
+            </DialogDescription>
+          </DialogHeader>
+          <Show when={deleteError()}>
+            {(error) => (
+              <p role="alert" aria-live="assertive" class="text-sm text-danger">
+                {error()}
+              </p>
+            )}
+          </Show>
+          <DialogFooter>
+            <Button
+              aria-label={t("common.cancel")}
+              disabled={deleting()}
+              variant="outline"
+              onClick={() => setDeleteCandidate(undefined)}
+            >
+              {t("common.cancel")}
+            </Button>
+            <Button
+              disabled={deleting()}
+              variant="destructive"
+              onClick={() => void confirmDelete()}
+            >
+              {deleting() ? t("common.deleting") : t("common.delete")}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </>
   );
 }

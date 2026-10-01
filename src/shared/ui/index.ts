@@ -1,6 +1,15 @@
 export { AgentIcon } from "./agent-icon";
 export { Button, type ButtonProps } from "./button";
 export {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from "./dialog";
+export {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
