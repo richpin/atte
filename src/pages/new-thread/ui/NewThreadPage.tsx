@@ -83,7 +83,7 @@ export function NewThreadPage(props: {
               fallback={
                 <Button
                   variant="ghost"
-                  class="justify-start"
+                  class="justify-start px-2 font-normal"
                   onClick={props.onManageAgents}
                 >
                   {t("thread.manageAgents")}
@@ -104,7 +104,7 @@ export function NewThreadPage(props: {
                 disabled={disabled() || !props.agents.length}
                 onChange={(agent) => agent && props.onSelectAgent(agent.id)}
                 itemComponent={(itemProps) => (
-                  <SelectItem item={itemProps.item}>
+                  <SelectItem item={itemProps.item} class="min-h-9">
                     <span class="flex items-center gap-2 [[data-theme=dark]_&_img]:invert">
                       <AgentIcon
                         id={itemProps.item.rawValue.id}
@@ -119,7 +119,7 @@ export function NewThreadPage(props: {
                 <SelectTrigger
                   id="new-thread-agent"
                   aria-label={t("thread.newThreadAgent")}
-                  class="min-w-0 gap-2 border-0 px-2"
+                  class="min-w-0 gap-2 border-0 px-2 text-sm font-normal"
                 >
                   <SelectValue<NewThreadAgent> class="min-w-0">
                     {(state) => (
