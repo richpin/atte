@@ -2110,8 +2110,15 @@ it("shares agent login progress and ignores completion after cancellation", asyn
     await screen.findByText("Continue in browser 로그인 진행 중"),
   ).toBeTruthy();
 
-  const secondTitle = screen.getByText("Second private thread");
-  fireEvent.click(secondTitle.closest("button") as HTMLButtonElement);
+  await userEvent.click(
+    await screen.findByRole("button", { name: "Second private thread" }),
+  );
+  expect(await screen.findByRole("dialog")).toBeTruthy();
+  await userEvent.click(getNewThreadButton());
+  await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  await userEvent.click(
+    screen.getByRole("button", { name: "Second private thread" }),
+  );
   expect(await screen.findByRole("dialog")).toBeTruthy();
   expect(
     await screen.findByText("Continue in browser 로그인 진행 중"),
@@ -2210,13 +2217,13 @@ it("does not reconnect another same-agent authentication failure when login comp
   render(() => <App />);
 
   await screen.findByText("Login origin");
-  fireEvent.click(
+  await userEvent.click(
     screen.getByText("Login origin").closest("button") as HTMLButtonElement,
   );
   await userEvent.click(
     await screen.findByRole("button", { name: "Continue in browser" }),
   );
-  fireEvent.click(
+  await userEvent.click(
     screen
       .getByText("Other private thread")
       .closest("button") as HTMLButtonElement,
@@ -2235,7 +2242,7 @@ it("does not reconnect another same-agent authentication failure when login comp
       .mock.calls.filter(([command]) => command === "connect_thread"),
   ).toHaveLength(0);
 
-  fireEvent.click(
+  await userEvent.click(
     screen.getByText("Login origin").closest("button") as HTMLButtonElement,
   );
   await waitFor(() =>
@@ -2428,7 +2435,7 @@ it("defers reconnect after navigation and reconnects once when the failed thread
     await screen.findByRole("button", { name: "Continue in browser" }),
   );
   const otherTitle = screen.getByText("Other work");
-  fireEvent.click(otherTitle.closest("button") as HTMLButtonElement);
+  await userEvent.click(otherTitle.closest("button") as HTMLButtonElement);
   login.resolve({
     connected: true,
     authenticated: true,
@@ -2442,7 +2449,7 @@ it("defers reconnect after navigation and reconnects once when the failed thread
       .mock.calls.some(([command]) => command === "connect_thread"),
   ).toBe(false);
 
-  fireEvent.click(
+  await userEvent.click(
     screen.getByText("Private work").closest("button") as HTMLButtonElement,
   );
   await waitFor(() =>
@@ -2452,10 +2459,10 @@ it("defers reconnect after navigation and reconnects once when the failed thread
         .mock.calls.filter(([command]) => command === "connect_thread"),
     ).toHaveLength(1),
   );
-  fireEvent.click(
+  await userEvent.click(
     screen.getByText("Other work").closest("button") as HTMLButtonElement,
   );
-  fireEvent.click(
+  await userEvent.click(
     screen.getByText("Private work").closest("button") as HTMLButtonElement,
   );
   expect(

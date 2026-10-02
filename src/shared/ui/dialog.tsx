@@ -8,28 +8,44 @@ import { cn } from "./cn";
 const Dialog = DialogPrimitive.Root;
 const DialogTrigger = DialogPrimitive.Trigger;
 
-const DialogPortal: Component<DialogPrimitive.DialogPortalProps> = (props) => {
-  const [, rest] = splitProps(props, ["children"]);
+const DialogPortal: Component<
+  DialogPrimitive.DialogPortalProps & { contained?: boolean }
+> = (props) => {
+  const [, rest] = splitProps(props, ["children", "contained"]);
   return (
-    <DialogPrimitive.Portal {...rest}>
-      <div class="fixed inset-0 z-50 flex items-start justify-center sm:items-center">
-        {props.children}
-      </div>
-    </DialogPrimitive.Portal>
+    <Show
+      when={props.contained}
+      fallback={
+        <DialogPrimitive.Portal {...rest}>
+          <div class="fixed inset-0 z-50 flex items-start justify-center sm:items-center">
+            {props.children}
+          </div>
+        </DialogPrimitive.Portal>
+      }
+    >
+      {props.children}
+    </Show>
   );
 };
 
 type DialogOverlayProps<T extends ValidComponent = "div"> =
-  DialogPrimitive.DialogOverlayProps<T> & { class?: string | undefined };
+  DialogPrimitive.DialogOverlayProps<T> & {
+    class?: string | undefined;
+    contained?: boolean;
+  };
 
 const DialogOverlay = <T extends ValidComponent = "div">(
   props: PolymorphicProps<T, DialogOverlayProps<T>>,
 ) => {
-  const [, rest] = splitProps(props as DialogOverlayProps, ["class"]);
+  const [, rest] = splitProps(props as DialogOverlayProps, [
+    "class",
+    "contained",
+  ]);
   return (
     <DialogPrimitive.Overlay
       class={cn(
-        "fixed inset-0 z-50 bg-background/80 data-[expanded]:animate-in data-[closed]:animate-out data-[closed]:fade-out-0 data-[expanded]:fade-in-0",
+        "inset-0 bg-background/80 data-[expanded]:animate-in data-[closed]:animate-out data-[closed]:fade-out-0 data-[expanded]:fade-in-0",
+        props.contained ? "absolute" : "fixed z-50",
         props.class,
       )}
       {...rest}
@@ -43,6 +59,7 @@ type DialogContentProps<T extends ValidComponent = "div"> =
     children?: JSX.Element;
     closeLabel?: string;
     showCloseButton?: boolean;
+    contained?: boolean;
   };
 
 const DialogContent = <T extends ValidComponent = "div">(
@@ -53,13 +70,15 @@ const DialogContent = <T extends ValidComponent = "div">(
     "children",
     "closeLabel",
     "showCloseButton",
+    "contained",
   ]);
   return (
-    <DialogPortal>
-      <DialogOverlay />
+    <DialogPortal contained={props.contained}>
+      <DialogOverlay contained={props.contained} />
       <DialogPrimitive.Content
         class={cn(
-          "fixed left-1/2 top-1/2 z-50 grid max-h-screen w-full max-w-lg -translate-x-1/2 -translate-y-1/2 gap-4 overflow-y-auto rounded-2xl border border-line bg-background p-6 shadow-lg duration-200 data-[expanded]:animate-in data-[closed]:animate-out data-[closed]:fade-out-0 data-[expanded]:fade-in-0 data-[closed]:zoom-out-95 data-[expanded]:zoom-in-95 data-[closed]:slide-out-to-left-1/2 data-[closed]:slide-out-to-top-[48%] data-[expanded]:slide-in-from-left-1/2 data-[expanded]:slide-in-from-top-[48%] [&_button]:rounded-xl",
+          "left-1/2 top-1/2 grid max-h-screen w-full max-w-lg -translate-x-1/2 -translate-y-1/2 gap-4 overflow-y-auto rounded-2xl border border-line bg-background p-6 shadow-lg duration-200 data-[expanded]:animate-in data-[closed]:animate-out data-[closed]:fade-out-0 data-[expanded]:fade-in-0 data-[closed]:zoom-out-95 data-[expanded]:zoom-in-95 data-[closed]:slide-out-to-left-1/2 data-[closed]:slide-out-to-top-[48%] data-[expanded]:slide-in-from-left-1/2 data-[expanded]:slide-in-from-top-[48%] [&_button]:rounded-xl",
+          props.contained ? "absolute max-h-[calc(100%-2rem)]" : "fixed z-50",
           props.class,
         )}
         {...rest}

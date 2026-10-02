@@ -36,9 +36,10 @@ export function SignInDialog(props: {
       : undefined;
   };
   return (
-    <Dialog open={props.open}>
+    <Dialog open={props.open} modal={false}>
       <DialogContent
-        class="w-[calc(100%-2rem)] max-w-[420px] max-h-[calc(100dvh-2rem)] bg-canvas p-6 text-ink"
+        class="w-[calc(100%-2rem)] max-w-[420px] bg-canvas p-6 text-ink"
+        contained
         showCloseButton={false}
         onEscapeKeyDown={(event) => event.preventDefault()}
         onInteractOutside={(event) => event.preventDefault()}

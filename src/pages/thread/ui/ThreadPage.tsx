@@ -189,7 +189,125 @@ export function ThreadPage(props: {
     (!thread() || connecting() || thread()?.status === "connecting");
 
   return (
-    <main class="flex h-full min-h-0 flex-col overflow-hidden bg-canvas text-ink">
+    <main class="relative flex h-full min-h-0 flex-col overflow-hidden bg-canvas text-ink">
+      <div inert={signInOpen()} class="flex h-full min-h-0 flex-col">
+        <Show when={selectedThreadId()}>
+          <div class="relative min-h-0 flex-1">
+            <div hidden={loading()} class="h-full">
+              <ThreadTimeline
+                followKey={`${thread()?.id}:${activeTurnId()}`}
+                bottomInset={composerInset()}
+              >
+                <Show
+                  when={
+                    thread() &&
+                    (["agentRemoved", "executableNotFound"].includes(
+                      thread()?.failure ?? "",
+                    ) ||
+                      !props.agents.some(
+                        (agent) => agent.id === thread()?.agentId,
+                      ))
+                  }
+                >
+                  <button
+                    type="button"
+                    class="focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-accent"
+                    onClick={props.onManage}
+                  >
+                    {t("thread.openAgentManagement")}
+                  </button>
+                </Show>
+                <Message
+                  turns={thread()?.turns ?? []}
+                  streamingTurnId={streamingTurnId()}
+                  agentId={thread()?.agentId}
+                  approvalPending={thread()?.status === "waitingForApproval"}
+                  waitingTurnId={
+                    !props.model.subscriptionError() &&
+                    !thread()?.failure &&
+                    !thread()?.requestFailure &&
+                    ["running", "waitingForApproval"].includes(
+                      thread()?.status ?? "",
+                    )
+                      ? activeTurnId()
+                      : undefined
+                  }
+                />
+              </ThreadTimeline>
+            </div>
+            <Show
+              when={
+                loading() ||
+                (!thread()?.turns?.length &&
+                  thread()?.status === "sessionReady")
+              }
+            >
+              <div
+                class="pointer-events-none absolute inset-x-0 top-0 flex items-center justify-center px-6"
+                style={{
+                  bottom: `${composerHeight() + composerBottomOffset}px`,
+                }}
+              >
+                <h2 class="text-center text-3xl font-medium tracking-tight text-muted">
+                  {loading()
+                    ? t("thread.loading")
+                    : t("thread.waitingForFirstMessage")}
+                  <span
+                    aria-hidden="true"
+                    class="inline-block font-mono tracking-normal motion-safe:animate-waiting-ellipsis"
+                  >
+                    ...
+                  </span>
+                </h2>
+              </div>
+            </Show>
+            <div
+              ref={(element) => {
+                composerOverlay = element;
+                observeComposer(element);
+                setComposerHeight(element.getBoundingClientRect().height);
+              }}
+              class="absolute inset-x-0 bottom-4"
+            >
+              <Show when={thread()}>
+                {(currentThread) => (
+                  <ThreadComposer
+                    active={props.active}
+                    thread={currentThread()}
+                    draft={draft()}
+                    draftAttachments={draftAttachments()}
+                    attachmentErrors={attachmentErrors()}
+                    answerPending={answerPending()}
+                    cancelPending={cancelPending()}
+                    showStop={showStop()}
+                    stopping={stopping()}
+                    actionsEnabled={actionsEnabled()}
+                    canSend={canSend()}
+                    signInOpen={signInOpen()}
+                    promptRef={(element) => {
+                      promptInput = element;
+                    }}
+                    onDraftChange={setDraft}
+                    onSelectFiles={() => void selectFiles()}
+                    onSelectMedia={(kind) => void selectMedia(kind)}
+                    onPasteImage={(image) => void pasteImage(image)}
+                    onUnsupportedImagePaste={rejectClipboardImage}
+                    onRemoveAttachment={removeAttachment}
+                    onSend={() => void send()}
+                    onCancel={() => void cancel()}
+                    onAnswer={answer}
+                    onConfigure={(configId, value) =>
+                      void configure(configId, value)
+                    }
+                    onDeleteQueued={deleteQueued}
+                    onRetryQueued={retryQueued}
+                  />
+                )}
+              </Show>
+            </div>
+          </div>
+        </Show>
+      </div>
       <Show when={thread()}>
         {(current) => (
           <SignInDialog
@@ -217,119 +335,6 @@ export function ThreadPage(props: {
             onCancel={() => void authentication.cancel(current().agentId)}
           />
         )}
-      </Show>
-      <Show when={selectedThreadId()}>
-        <div class="relative min-h-0 flex-1">
-          <div hidden={loading()} class="h-full">
-            <ThreadTimeline
-              followKey={`${thread()?.id}:${activeTurnId()}`}
-              bottomInset={composerInset()}
-            >
-              <Show
-                when={
-                  thread() &&
-                  (["agentRemoved", "executableNotFound"].includes(
-                    thread()?.failure ?? "",
-                  ) ||
-                    !props.agents.some(
-                      (agent) => agent.id === thread()?.agentId,
-                    ))
-                }
-              >
-                <button
-                  type="button"
-                  class="focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-accent"
-                  onClick={props.onManage}
-                >
-                  {t("thread.openAgentManagement")}
-                </button>
-              </Show>
-              <Message
-                turns={thread()?.turns ?? []}
-                streamingTurnId={streamingTurnId()}
-                agentId={thread()?.agentId}
-                approvalPending={thread()?.status === "waitingForApproval"}
-                waitingTurnId={
-                  !props.model.subscriptionError() &&
-                  !thread()?.failure &&
-                  !thread()?.requestFailure &&
-                  ["running", "waitingForApproval"].includes(
-                    thread()?.status ?? "",
-                  )
-                    ? activeTurnId()
-                    : undefined
-                }
-              />
-            </ThreadTimeline>
-          </div>
-          <Show
-            when={
-              loading() ||
-              (!thread()?.turns?.length && thread()?.status === "sessionReady")
-            }
-          >
-            <div
-              class="pointer-events-none absolute inset-x-0 top-0 flex items-center justify-center px-6"
-              style={{ bottom: `${composerHeight() + composerBottomOffset}px` }}
-            >
-              <h2 class="text-center text-3xl font-medium tracking-tight text-muted">
-                {loading()
-                  ? t("thread.loading")
-                  : t("thread.waitingForFirstMessage")}
-                <span
-                  aria-hidden="true"
-                  class="inline-block font-mono tracking-normal motion-safe:animate-waiting-ellipsis"
-                >
-                  ...
-                </span>
-              </h2>
-            </div>
-          </Show>
-          <div
-            ref={(element) => {
-              composerOverlay = element;
-              observeComposer(element);
-              setComposerHeight(element.getBoundingClientRect().height);
-            }}
-            class="absolute inset-x-0 bottom-4"
-          >
-            <Show when={thread()}>
-              {(currentThread) => (
-                <ThreadComposer
-                  active={props.active}
-                  thread={currentThread()}
-                  draft={draft()}
-                  draftAttachments={draftAttachments()}
-                  attachmentErrors={attachmentErrors()}
-                  answerPending={answerPending()}
-                  cancelPending={cancelPending()}
-                  showStop={showStop()}
-                  stopping={stopping()}
-                  actionsEnabled={actionsEnabled()}
-                  canSend={canSend()}
-                  signInOpen={signInOpen()}
-                  promptRef={(element) => {
-                    promptInput = element;
-                  }}
-                  onDraftChange={setDraft}
-                  onSelectFiles={() => void selectFiles()}
-                  onSelectMedia={(kind) => void selectMedia(kind)}
-                  onPasteImage={(image) => void pasteImage(image)}
-                  onUnsupportedImagePaste={rejectClipboardImage}
-                  onRemoveAttachment={removeAttachment}
-                  onSend={() => void send()}
-                  onCancel={() => void cancel()}
-                  onAnswer={answer}
-                  onConfigure={(configId, value) =>
-                    void configure(configId, value)
-                  }
-                  onDeleteQueued={deleteQueued}
-                  onRetryQueued={retryQueued}
-                />
-              )}
-            </Show>
-          </div>
-        </div>
       </Show>
     </main>
   );
