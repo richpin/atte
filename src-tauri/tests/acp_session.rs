@@ -148,6 +148,242 @@ async fn persist_remote_session(
 }
 
 #[tokio::test]
+async fn unprompted_failed_session_is_recreated_only_on_the_next_connection() {
+    use atte_lib::thread::ConnectionFailure;
+    let root = tempfile::tempdir().unwrap();
+    let log = root.path().join("requests.log");
+    let mut agent = mock_agent();
+    agent
+        .env
+        .insert("REQUEST_LOG".into(), log.to_string_lossy().into());
+    agent.env.insert("FIXTURE_MODE".into(), "load-error".into());
+    let (store, id) = persist_remote_session(root.path(), &agent).await;
+    let threads = Threads::with_store(vec![agent], store).unwrap();
+    threads.connect(id).unwrap();
+    let failed = settle(&threads, id).await;
+    assert_eq!(
+        failed.failure,
+        Some(ConnectionFailure::SessionRestorationFailed)
+    );
+    assert_eq!(
+        std::fs::read_to_string(&log)
+            .unwrap()
+            .matches("session/new")
+            .count(),
+        1
+    );
+    threads.reconnect(id).unwrap();
+    let ready = settle(&threads, id).await;
+    threads.shutdown().await;
+    assert_eq!(ready.status, ThreadStatus::SessionReady);
+    assert!(serde_json::to_value(ready).unwrap()["lastPromptAt"].is_null());
+    assert_eq!(
+        std::fs::read_to_string(&log)
+            .unwrap()
+            .matches("session/new")
+            .count(),
+        2
+    );
+}
+
+#[tokio::test]
+async fn unprompted_failure_survives_restart_and_recreation_keeps_the_queue() {
+    let root = tempfile::tempdir().unwrap();
+    let log = root.path().join("requests.log");
+    let mut agent = mock_agent();
+    agent
+        .env
+        .insert("REQUEST_LOG".into(), log.to_string_lossy().into());
+    agent.env.insert("FIXTURE_MODE".into(), "load-error".into());
+    let (store, id) = persist_remote_session(root.path(), &agent).await;
+    let threads = Threads::with_store(vec![agent.clone()], store.clone()).unwrap();
+    assert_eq!(threads.get(id).unwrap().last_prompt_at, None);
+    threads.connect(id).unwrap();
+    assert_eq!(settle(&threads, id).await.status, ThreadStatus::Failed);
+    threads.shutdown().await;
+    let queue = serde_json::json!([{"id":uuid::Uuid::new_v4(), "text":"not sent", "attachments":[], "status":"pending"}]);
+    rusqlite::Connection::open(root.path().join("atte.sqlite"))
+        .unwrap()
+        .execute(
+            "UPDATE threads SET queued_messages=?1 WHERE id=?2",
+            rusqlite::params![queue.to_string(), id.to_string()],
+        )
+        .unwrap();
+    let restarted = Threads::with_store(vec![agent], store).unwrap();
+    assert_eq!(restarted.get(id).unwrap().status, ThreadStatus::Failed);
+    restarted.connect(id).unwrap();
+    let ready = settle(&restarted, id).await;
+    restarted.shutdown().await;
+    assert_eq!(
+        (ready.id, ready.status, ready.last_prompt_at),
+        (id, ThreadStatus::SessionReady, None)
+    );
+    assert_eq!(ready.queued_messages[0].input.body, "not sent");
+    assert!(!std::fs::read_to_string(&log)
+        .unwrap()
+        .contains("session/prompt"));
+}
+
+#[tokio::test]
+async fn session_creation_failures_wait_for_another_explicit_connection() {
+    use atte_lib::thread::ConnectionFailure;
+    for (mode, failure) in [
+        ("session-error", ConnectionFailure::SessionCreationFailed),
+        ("auth", ConnectionFailure::AuthenticationRequired),
+    ] {
+        let root = tempfile::tempdir().unwrap();
+        let log = root.path().join("requests.log");
+        let mut agent = mock_agent();
+        agent
+            .env
+            .insert("REQUEST_LOG".into(), log.to_string_lossy().into());
+        agent.env.insert("FIXTURE_MODE".into(), mode.into());
+        let threads = Threads::new(vec![agent]);
+        let draft = threads.create(root.path()).unwrap();
+        for attempt in 1..=2 {
+            threads.connect(draft.id).unwrap();
+            let failed = settle(&threads, draft.id).await;
+            assert_eq!(failed.failure, Some(failure.clone()));
+            assert_eq!(failed.last_prompt_at, None);
+            assert_eq!(
+                std::fs::read_to_string(&log)
+                    .unwrap()
+                    .matches("session/new")
+                    .count(),
+                attempt
+            );
+        }
+        threads.shutdown().await;
+    }
+}
+
+#[tokio::test]
+async fn prompt_timestamp_and_session_are_persisted_before_direct_and_queued_dispatch() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("atte.sqlite");
+    let log = root.path().join("timestamps.jsonl");
+    let gate = root.path().join("release");
+    let store = std::sync::Arc::new(atte_lib::storage::Store::open(&path).unwrap());
+    let mut agent = mock_agent();
+    agent
+        .env
+        .insert("PROMPT_METADATA_DB".into(), path.to_string_lossy().into());
+    agent
+        .env
+        .insert("PROMPT_METADATA_LOG".into(), log.to_string_lossy().into());
+    agent
+        .env
+        .insert("PROMPT_GATE".into(), gate.to_string_lossy().into());
+    let threads = Threads::with_store(vec![agent.clone()], store.clone()).unwrap();
+    let draft = threads.create(root.path()).unwrap();
+    assert_eq!(draft.last_prompt_at, None);
+    threads.connect(draft.id).unwrap();
+    settle(&threads, draft.id).await;
+    threads.send_message(draft.id, "first".into()).unwrap();
+    wait_for_path(&log).await;
+    let first_timestamp = threads.get(draft.id).unwrap().last_prompt_at.unwrap();
+    threads.send_message(draft.id, "second".into()).unwrap();
+    assert_eq!(
+        threads.get(draft.id).unwrap().last_prompt_at,
+        Some(first_timestamp)
+    );
+    std::fs::write(gate, []).unwrap();
+    let completed = settle(&threads, draft.id).await;
+    threads.shutdown().await;
+    let timestamps: Vec<u64> = std::fs::read_to_string(log)
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    assert_eq!(
+        timestamps,
+        [first_timestamp, completed.last_prompt_at.unwrap()]
+    );
+    assert!(timestamps[1] > timestamps[0]);
+    let restarted = Threads::with_store(vec![agent], store).unwrap();
+    assert_eq!(
+        restarted.get(draft.id).unwrap().last_prompt_at,
+        completed.last_prompt_at
+    );
+}
+
+#[tokio::test]
+async fn timestamp_storage_failure_prevents_direct_dispatch() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("atte.sqlite");
+    let log = root.path().join("requests.log");
+    let store = std::sync::Arc::new(atte_lib::storage::Store::open(&path).unwrap());
+    let mut agent = mock_agent();
+    agent
+        .env
+        .insert("REQUEST_LOG".into(), log.to_string_lossy().into());
+    let threads = Threads::with_store(vec![agent], store).unwrap();
+    let draft = threads.create(root.path()).unwrap();
+    threads.connect(draft.id).unwrap();
+    settle(&threads, draft.id).await;
+    let database = rusqlite::Connection::open(path).unwrap();
+    database.execute_batch("CREATE TRIGGER block_prompt BEFORE UPDATE OF last_prompt_at ON threads WHEN NEW.last_prompt_at IS NOT OLD.last_prompt_at BEGIN SELECT RAISE(FAIL, 'blocked prompt timestamp'); END;").unwrap();
+    let error = threads
+        .send_message(draft.id, "keep in composer".into())
+        .unwrap_err();
+    assert!(matches!(
+        error,
+        atte_lib::thread::ThreadError::Unavailable(_)
+    ));
+    assert_eq!(threads.get(draft.id).unwrap().last_prompt_at, None);
+    assert!(threads.get(draft.id).unwrap().turns.is_empty());
+    threads.shutdown().await;
+    assert!(!std::fs::read_to_string(log)
+        .unwrap()
+        .contains("session/prompt"));
+}
+
+#[tokio::test]
+async fn timestamp_storage_failure_keeps_queued_input_retryable() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("atte.sqlite");
+    let log = root.path().join("requests.log");
+    let mut agent = mock_agent();
+    agent
+        .env
+        .insert("REQUEST_LOG".into(), log.to_string_lossy().into());
+    let (store, id) = persist_remote_session(root.path(), &agent).await;
+    let queued_id = uuid::Uuid::new_v4();
+    let queue = serde_json::json!([{"id":queued_id, "text":"retry me", "attachments":[], "status":"failed"}]);
+    let database = rusqlite::Connection::open(path).unwrap();
+    database
+        .execute(
+            "UPDATE threads SET queued_messages=?1 WHERE id=?2",
+            rusqlite::params![queue.to_string(), id.to_string()],
+        )
+        .unwrap();
+    let threads = Threads::with_store(vec![agent], store).unwrap();
+    threads.connect(id).unwrap();
+    settle(&threads, id).await;
+    database.execute_batch("CREATE TRIGGER block_prompt BEFORE UPDATE OF last_prompt_at ON threads WHEN NEW.last_prompt_at IS NOT OLD.last_prompt_at BEGIN SELECT RAISE(FAIL, 'blocked prompt timestamp'); END;").unwrap();
+    threads.retry_queued_message(id, queued_id).unwrap();
+    let blocked = threads.get(id).unwrap();
+    assert_eq!(blocked.last_prompt_at, None);
+    assert_eq!(
+        blocked.queued_messages[0].status,
+        QueuedMessageStatus::Failed
+    );
+    assert_eq!(blocked.queued_messages[0].input.body, "retry me");
+    assert!(!std::fs::read_to_string(&log)
+        .unwrap()
+        .contains("session/prompt"));
+    database
+        .execute_batch("DROP TRIGGER block_prompt;")
+        .unwrap();
+    threads.retry_queued_message(id, queued_id).unwrap();
+    let completed = settle(&threads, id).await;
+    threads.shutdown().await;
+    assert!(completed.last_prompt_at.is_some());
+    assert!(completed.queued_messages.is_empty());
+    assert_eq!(completed.turns[0].message, "retry me");
+}
+
+#[tokio::test]
 async fn session_titles_update_running_and_idle_subscriptions_and_survive_restart() {
     use serde_json::json;
     let folder = tempfile::tempdir().unwrap();
@@ -1957,7 +2193,7 @@ async fn failed_removal_storage_keeps_the_followup_without_dispatching_it() {
     .await
     .unwrap();
     writer.execute_batch("ROLLBACK").unwrap();
-    assert_eq!(completed.turns.len(), 2);
+    assert_eq!(completed.turns.len(), 1);
     assert_eq!(completed.turns[0].stop_reason.as_deref(), Some("end_turn"));
     assert_eq!(completed.queued_messages[0].input.body, "keep");
     assert!(completed.notice.is_some());

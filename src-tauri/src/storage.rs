@@ -94,7 +94,7 @@ impl Store {
                 row.get::<_, Option<String>>(4)?,
                 row.get::<_, i64>(5)?,
                 row.get::<_, i64>(6)?,
-                row.get::<_, i64>(7)?,
+                row.get::<_, Option<i64>>(7)?,
                 row.get::<_, String>(8)?,
                 row.get::<_, Option<String>>(9)?,
                 row.get::<_, bool>(10)?,
@@ -122,7 +122,7 @@ impl Store {
                 session_id,
                 created_at: u64::try_from(created_at)?,
                 updated_at: u64::try_from(updated_at)?,
-                last_prompt_at: u64::try_from(last_prompt_at)?,
+                last_prompt_at: last_prompt_at.map(u64::try_from).transpose()?,
                 status: decode_enum(status)?,
                 failure: failure.map(decode_enum).transpose()?,
                 completed_turn_id: None,
@@ -177,7 +177,7 @@ impl Store {
         let failure = metadata.failure.as_ref().map(encode_enum).transpose()?;
         let created_at = i64::try_from(metadata.created_at)?;
         let updated_at = i64::try_from(metadata.updated_at)?;
-        let last_prompt_at = i64::try_from(metadata.last_prompt_at)?;
+        let last_prompt_at = metadata.last_prompt_at.map(i64::try_from).transpose()?;
         let working_folder = metadata.working_folder.to_str().ok_or(StorageError::Path)?;
         self.connection
             .lock()

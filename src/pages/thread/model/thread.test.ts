@@ -830,6 +830,85 @@ it("keeps subscription metadata newer than the initial list request", async () =
   await vi.waitFor(() => expect(model.history()[0]?.title).toBe("Latest"));
 });
 
+it("sorts unprompted threads by creation time and lets new prompts move ahead", async () => {
+  const model = setup();
+  const entries = [
+    thread("A", { createdAt: 3, lastPromptAt: null }),
+    thread("B", { createdAt: 1, lastPromptAt: null, updatedAt: 999 }),
+    thread("C", { createdAt: 1, lastPromptAt: 2500 }),
+    thread("D", { createdAt: 1, lastPromptAt: 3000 }),
+  ];
+  receiveList(entries);
+  await vi.waitFor(() =>
+    expect(model.history().map((entry) => entry.id)).toEqual([
+      "A",
+      "D",
+      "C",
+      "B",
+    ]),
+  );
+  receiveList(
+    entries.map((entry) =>
+      entry.id === "C" ? { ...entry, lastPromptAt: 4000 } : entry,
+    ),
+  );
+  await vi.waitFor(() =>
+    expect(model.history().map((entry) => entry.id)).toEqual([
+      "C",
+      "A",
+      "D",
+      "B",
+    ]),
+  );
+});
+
+it("keeps failed threads with recorded attempts idle on reentry", async () => {
+  const model = setup();
+  await open(model, "B");
+  await open(
+    model,
+    "A",
+    thread("A", {
+      status: "failed",
+      failure: "sessionRestorationFailed",
+      lastPromptAt: 1,
+    }),
+  );
+  expect(model.thread()?.turns).toEqual([]);
+  expect(model.canSend()).toBe(false);
+  expect(model.canReconnect()).toBe(true);
+  expect(invoke).not.toHaveBeenCalledWith("connect_thread", { id: "A" });
+});
+
+it("connects an unprompted failed thread on entry without retrying live failures", async () => {
+  const model = setup();
+  const failed = thread("A", {
+    status: "failed",
+    failure: "sessionRestorationFailed",
+    lastPromptAt: null,
+  });
+  await open(model, "A", failed);
+  await vi.waitFor(() =>
+    expect(invoke).toHaveBeenCalledWith("connect_thread", { id: "A" }),
+  );
+  stream("A")({ kind: "patch", thread: failed, turnUpdates: [], errors: [] });
+  await Promise.resolve();
+  expect(
+    vi
+      .mocked(invoke)
+      .mock.calls.filter(([command]) => command === "connect_thread"),
+  ).toHaveLength(1);
+  commands.set("connect_thread", async () => {
+    stream("A")({
+      kind: "thread",
+      thread: thread("A", { lastPromptAt: null }),
+    });
+  });
+  await open(model, "B");
+  await open(model, "A", failed);
+  await vi.waitFor(() => expect(model.canSend()).toBe(true));
+});
+
 it("unsubscribes late registrations after disposal", async () => {
   const registration = deferred<string>();
   commands.set("subscribe_thread", () => registration.promise);

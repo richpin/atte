@@ -17,7 +17,7 @@ export interface Thread {
   title: string;
   createdAt: number;
   updatedAt: number;
-  lastPromptAt: number;
+  lastPromptAt: number | null;
   interrupted: boolean;
   storageError: string | null;
   workingFolder: string;

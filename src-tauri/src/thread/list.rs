@@ -11,7 +11,11 @@ impl ThreadList {
         let mut entries: Vec<_> = self.entries.values().cloned().collect();
         entries.sort_by(|a, b| {
             b.last_prompt_at
-                .cmp(&a.last_prompt_at)
+                .unwrap_or_else(|| b.created_at.saturating_mul(1_000))
+                .cmp(
+                    &a.last_prompt_at
+                        .unwrap_or_else(|| a.created_at.saturating_mul(1_000)),
+                )
                 .then_with(|| a.id.cmp(&b.id))
         });
         entries
@@ -58,13 +62,43 @@ mod tests {
             session_id: None,
             created_at: 1,
             updated_at: 1,
-            last_prompt_at,
+            last_prompt_at: Some(last_prompt_at),
             status: ThreadStatus::SessionReady,
             failure: None,
             completed_turn_id: None,
             request_failure: None,
             interrupted: false,
         }
+    }
+
+    #[test]
+    fn sorts_unprompted_threads_by_creation_time_without_pinning_them() {
+        let mut list = ThreadList::default();
+        for (id, created_at, last_prompt_at) in [
+            (1, 3, None),
+            (2, 1, None),
+            (3, 1, Some(2_500)),
+            (4, 1, Some(3_000)),
+        ] {
+            let id = Uuid::from_u128(id);
+            let mut entry = metadata(id, 0);
+            entry.created_at = created_at;
+            entry.updated_at = 999;
+            entry.last_prompt_at = last_prompt_at;
+            list.entries.insert(id, entry);
+        }
+        assert_eq!(
+            list.sorted_entries()
+                .iter()
+                .map(|entry| entry.id.as_u128())
+                .collect::<Vec<_>>(),
+            [1, 4, 3, 2]
+        );
+        list.entries
+            .get_mut(&Uuid::from_u128(3))
+            .unwrap()
+            .last_prompt_at = Some(4_000);
+        assert_eq!(list.sorted_entries()[0].id, Uuid::from_u128(3));
     }
 
     #[test]

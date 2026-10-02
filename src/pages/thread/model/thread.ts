@@ -49,7 +49,9 @@ const maximumSubscriptionRetries = 5;
 function sortThreads(entries: ThreadMetadata[]) {
   return entries.toSorted(
     (left, right) =>
-      right.lastPromptAt - left.lastPromptAt || left.id.localeCompare(right.id),
+      (right.lastPromptAt ?? right.createdAt * 1000) -
+        (left.lastPromptAt ?? left.createdAt * 1000) ||
+      left.id.localeCompare(right.id),
   );
 }
 
@@ -408,7 +410,9 @@ export function createThreadModel(
       if (
         firstSnapshot &&
         update.thread.id === selectedThreadId() &&
-        update.thread.status === "disconnected"
+        (update.thread.status === "disconnected" ||
+          (update.thread.status === "failed" &&
+            update.thread.lastPromptAt === null))
       )
         void connect();
       return;

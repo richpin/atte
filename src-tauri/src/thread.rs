@@ -28,7 +28,8 @@ pub struct Thread {
     pub title: String,
     pub created_at: u64,
     pub updated_at: u64,
-    pub last_prompt_at: u64,
+    /// Last input dispatch attempt in Unix milliseconds; absent until the first attempt.
+    pub last_prompt_at: Option<u64>,
     pub interrupted: bool,
     pub storage_error: Option<String>,
     /// Absolute working directory.
@@ -381,7 +382,7 @@ pub struct ThreadMetadata {
     pub created_at: u64,
     pub updated_at: u64,
     #[serde(default)]
-    pub last_prompt_at: u64,
+    pub last_prompt_at: Option<u64>,
     pub status: ThreadStatus,
     pub failure: Option<ConnectionFailure>,
     #[serde(skip_deserializing)]
@@ -644,12 +645,10 @@ impl Threads {
         let mut entries = HashMap::new();
         let list = Arc::new(Mutex::new(list::ThreadList::default()));
         for saved in store.threads()? {
-            let last_prompt_at = if saved.last_prompt_at == 0 {
-                saved.updated_at.saturating_mul(1_000)
-            } else {
-                saved.last_prompt_at
-            };
-            LAST_PROMPT_AT.fetch_max(last_prompt_at, Ordering::Relaxed);
+            let last_prompt_at = saved.last_prompt_at;
+            if let Some(timestamp) = last_prompt_at {
+                LAST_PROMPT_AT.fetch_max(timestamp, Ordering::Relaxed);
+            }
             let interrupted = saved.interrupted
                 || matches!(
                     saved.status,
@@ -668,7 +667,11 @@ impl Threads {
                 last_prompt_at,
                 interrupted,
                 storage_error: None,
-                status: ThreadStatus::Disconnected,
+                status: if saved.status == ThreadStatus::Failed {
+                    ThreadStatus::Failed
+                } else {
+                    ThreadStatus::Disconnected
+                },
                 authentication: AuthenticationStatus::Unknown,
                 failure: saved.failure,
                 completed_turn_id: None,
@@ -1143,7 +1146,7 @@ impl Threads {
             title: "새 스레드".into(),
             created_at,
             updated_at: created_at,
-            last_prompt_at: next_prompt_at(),
+            last_prompt_at: None,
             interrupted: false,
             storage_error: None,
             working_folder: folder.canonicalize().map_err(|_| {
@@ -1299,7 +1302,7 @@ impl Threads {
         self.connect_inner(id, false)
     }
 
-    /// Replaces an idle connection and resumes the same remote session.
+    /// Replaces an idle connection, recreating failed sessions only before any prompt attempt.
     ///
     /// # Errors
     /// Returns an error if work is active, or connection preparation fails.
@@ -1377,10 +1380,21 @@ impl Threads {
             ));
         };
         let handle = tokio::runtime::Handle::try_current().map_err(|_| unavailable())?;
+        let recreate = thread.status == ThreadStatus::Failed && thread.last_prompt_at.is_none();
+        if recreate {
+            thread.session_id = None;
+        }
         thread.status = ThreadStatus::Connecting;
         thread.authentication = AuthenticationStatus::Unknown;
         thread.failure = None;
         thread.configuration.clear();
+        if recreate {
+            if let Some(store) = &current.store {
+                store
+                    .save_thread(&thread.metadata())
+                    .map_err(|error| ThreadError::Unavailable(error.to_string()))?;
+            }
+        }
         current.generation += 1;
         current.thread = thread;
         current.clear_configuration();
@@ -1519,6 +1533,7 @@ impl Threads {
             ));
         }
         let runtime = entry.runtime.as_ref().ok_or_else(unavailable)?;
+        current.record_prompt_attempt()?;
         let turn = Uuid::new_v4();
         let durable_media = input
             .attachments
@@ -1555,7 +1570,6 @@ impl Threads {
             return Err(unavailable());
         }
         current.thread.status = ThreadStatus::Running;
-        current.thread.last_prompt_at = next_prompt_at();
         current.thread.failure = None;
         current.thread.request_failure = None;
         current.thread.interrupted = false;
@@ -1939,7 +1953,9 @@ impl Threads {
                             | ThreadStatus::WaitingForApproval
                             | ThreadStatus::Cancelling
                     );
-                    current.thread.status = ThreadStatus::Disconnected;
+                    if current.thread.status != ThreadStatus::Failed {
+                        current.thread.status = ThreadStatus::Disconnected;
+                    }
                     current.clear_permissions();
                     if let Some(turn) = current
                         .thread
@@ -2092,6 +2108,20 @@ struct DesiredConfiguration {
 }
 
 impl ThreadState {
+    fn record_prompt_attempt(&mut self) -> Result<(), ThreadError> {
+        let timestamp = next_prompt_at();
+        if let Some(store) = &self.store {
+            let mut metadata = self.thread.metadata();
+            metadata.last_prompt_at = Some(timestamp);
+            store
+                .save_thread(&metadata)
+                .map_err(|error| ThreadError::Unavailable(error.to_string()))?;
+        }
+        // A crash or transport error after this point cannot prove the input was not received.
+        self.thread.last_prompt_at = Some(timestamp);
+        Ok(())
+    }
+
     fn report_notice(&mut self, message: String) {
         self.thread.notice = Some(message.clone());
         self.pending_errors.push(ThreadErrorNotification {
@@ -2109,7 +2139,6 @@ impl ThreadState {
             status: QueuedMessageStatus::Pending,
         });
         self.save_queue(queue)?;
-        self.thread.last_prompt_at = next_prompt_at();
         self.publish();
         Ok(())
     }
@@ -2244,6 +2273,15 @@ impl ThreadState {
             return None;
         }
         let queued = queued.clone();
+        if let Err(error) = self.record_prompt_attempt() {
+            let mut queue = self.thread.queued_messages.clone();
+            queue[0].status = QueuedMessageStatus::Failed;
+            if let Err(storage_error) = self.save_queue(queue) {
+                self.report_notice(storage_error.to_string());
+            }
+            self.report_notice(error.to_string());
+            return None;
+        }
         let turn = Uuid::new_v4();
         self.dispatching_queued = Some(queued.clone());
         self.thread.status = ThreadStatus::Running;

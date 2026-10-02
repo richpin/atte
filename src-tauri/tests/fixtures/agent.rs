@@ -403,6 +403,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
             "session/prompt" => {
                 prompts += 1;
+                if let Some(path) = env::var_os("PROMPT_METADATA_DB") {
+                    let database = rusqlite::Connection::open(path)?;
+                    let timestamp: Option<i64> = database.query_row(
+                        "SELECT last_prompt_at FROM threads WHERE session_id = ?1",
+                        [request["params"]["sessionId"]
+                            .as_str()
+                            .ok_or("missing session ID")?],
+                        |row| row.get(0),
+                    )?;
+                    writeln!(
+                        fs::OpenOptions::new().create(true).append(true).open(
+                            env::var_os("PROMPT_METADATA_LOG").ok_or("missing metadata log")?
+                        )?,
+                        "{}",
+                        serde_json::to_string(&timestamp)?
+                    )?;
+                }
                 if let Some(path) = env::var_os("PROMPT_JSON_LOG") {
                     writeln!(
                         fs::OpenOptions::new()

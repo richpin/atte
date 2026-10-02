@@ -21,7 +21,7 @@ CREATE TABLE threads (
     session_id TEXT,
     created_at INTEGER NOT NULL CHECK (created_at >= 0),
     updated_at INTEGER NOT NULL CHECK (updated_at >= 0),
-    last_prompt_at INTEGER NOT NULL CHECK (last_prompt_at >= 0),
+    last_prompt_at INTEGER CHECK (last_prompt_at >= 0),
     status TEXT NOT NULL CHECK (status IN (
         'disconnected',
         'connecting',
