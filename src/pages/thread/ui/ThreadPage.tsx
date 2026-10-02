@@ -1,7 +1,9 @@
 import { makeResizeObserver } from "@solid-primitives/resize-observer";
-import { useAgentAuthentication } from "features/agent-authentication";
+import {
+  SignInDialog,
+  useAgentAuthentication,
+} from "features/agent-authentication";
 import { useI18n } from "shared/i18n";
-import { showErrorToast } from "shared/ui";
 import { createEffect, createSignal, Show, untrack } from "solid-js";
 import { createStore } from "solid-js/store";
 import type { ThreadModel } from "../model/thread";
@@ -64,24 +66,52 @@ export function ThreadPage(props: {
     blockedByThread: {} as Record<string, number | undefined>,
     completedByAgent: {} as Record<string, number | undefined>,
   });
+  const [signInThread, setSignInThread] = createSignal<string>();
+  let signInButton: HTMLButtonElement | undefined;
+  let promptInput: HTMLTextAreaElement | undefined;
+  let returnToPrompt = false;
+  let dialogOrigin: string | undefined;
+  const signInOpen = () =>
+    props.active &&
+    signInThread() === selectedThreadId() &&
+    Boolean(signInThread());
+
+  function closeSignIn() {
+    const current = thread();
+    if (current) void authentication.cancel(current.agentId);
+    setSignInThread(undefined);
+  }
+
+  createEffect(() => {
+    if (!props.active || signInThread() !== selectedThreadId())
+      setSignInThread(undefined);
+  });
+
+  createEffect(() => {
+    const current = thread();
+    if (
+      !signInOpen() ||
+      !current ||
+      current.status !== "sessionReady" ||
+      current.failure
+    )
+      return;
+    if (authentication.state(current.agentId).status !== "authenticated")
+      return;
+    returnToPrompt = true;
+    setSignInThread(undefined);
+  });
+
+  const reconnectingThreads = new Set<string>();
   let previousSelectedThreadId: string | undefined;
 
   async function authenticateThread(method: string) {
     const origin = thread();
     if (!origin) return;
-    const succeeded = await authentication.login(
-      origin.agentId,
-      method,
-      showErrorToast,
-    );
+    const succeeded = await authentication.login(origin.agentId, method);
     if (!succeeded) return;
     const state = authentication.state(origin.agentId);
     if (state.status !== "authenticated") return;
-    setAuthenticationReconnect(
-      "completedByAgent",
-      origin.agentId,
-      state.generation,
-    );
     const selected = untrack(thread);
     if (
       selected?.agentId === origin.agentId &&
@@ -94,6 +124,11 @@ export function ThreadPage(props: {
         state.generation,
       );
     }
+    setAuthenticationReconnect(
+      "completedByAgent",
+      origin.agentId,
+      state.generation,
+    );
   }
 
   createEffect(() => {
@@ -115,6 +150,11 @@ export function ThreadPage(props: {
 
   createEffect(() => {
     const current = thread();
+    if (
+      current?.status === "connecting" &&
+      authenticationReconnect.attemptedByThread[current.id] !== undefined
+    )
+      reconnectingThreads.add(current.id);
     if (current?.failure !== "authenticationRequired") return;
     const state = authentication.state(current.agentId);
     if (state.status === "authenticated") {
@@ -129,12 +169,11 @@ export function ThreadPage(props: {
         authenticationReconnect.attemptedByThread[current.id] ===
         state.generation
       ) {
-        void authentication.requireAuthentication(
-          current.agentId,
-          showErrorToast,
-        );
+        if (!connecting() && reconnectingThreads.has(current.id))
+          void authentication.requireAuthentication(current.agentId);
         return;
       }
+      reconnectingThreads.delete(current.id);
       setAuthenticationReconnect(
         "attemptedByThread",
         current.id,
@@ -143,8 +182,7 @@ export function ThreadPage(props: {
       untrack(() => void connect());
       return;
     }
-    if (state.status === "idle")
-      void authentication.discover(current.agentId, showErrorToast);
+    if (state.status === "idle") void authentication.discover(current.agentId);
   });
 
   const loading = () =>
@@ -153,6 +191,32 @@ export function ThreadPage(props: {
 
   return (
     <main class="flex h-full min-h-0 flex-col overflow-hidden bg-canvas text-ink">
+      <Show when={thread()}>
+        {(current) => (
+          <SignInDialog
+            open={signInOpen()}
+            agentName={
+              props.agents.find((agent) => agent.id === current().agentId)
+                ?.name ?? current().agentId
+            }
+            state={authentication.state(current().agentId)}
+            reconnectFailed={
+              !connecting() &&
+              (props.model.connectFailed() ||
+                (current().status === "failed" &&
+                  current().failure !== "authenticationRequired"))
+            }
+            onClose={closeSignIn}
+            onClosed={() => {
+              if (!props.active || selectedThreadId() !== dialogOrigin) return;
+              (returnToPrompt ? promptInput : signInButton)?.focus();
+            }}
+            onRetry={() => void authentication.discover(current().agentId)}
+            onSelect={(method) => void authenticateThread(method)}
+            onCancel={() => void authentication.cancel(current().agentId)}
+          />
+        )}
+      </Show>
       <Show when={selectedThreadId()}>
         <div class="relative min-h-0 flex-1">
           <div hidden={loading()} class="h-full">
@@ -242,17 +306,23 @@ export function ThreadPage(props: {
                   stopping={stopping()}
                   actionsEnabled={actionsEnabled()}
                   canSend={canSend()}
-                  authentication={authentication.state(currentThread().agentId)}
-                  onRetryAuthentication={() =>
-                    void authentication.discover(
-                      currentThread().agentId,
-                      showErrorToast,
+                  signInOpen={signInOpen()}
+                  signInRef={(element) => {
+                    signInButton = element;
+                  }}
+                  promptRef={(element) => {
+                    promptInput = element;
+                  }}
+                  onSignIn={() => {
+                    returnToPrompt = false;
+                    dialogOrigin = currentThread().id;
+                    setSignInThread(currentThread().id);
+                    if (
+                      authentication.state(currentThread().agentId).status ===
+                      "idle"
                     )
-                  }
-                  onAuthenticate={(method) => void authenticateThread(method)}
-                  onCancelAuthentication={() =>
-                    void authentication.cancel(currentThread().agentId)
-                  }
+                      void authentication.discover(currentThread().agentId);
+                  }}
                   onDraftChange={setDraft}
                   onSelectFiles={() => void selectFiles()}
                   onSelectMedia={(kind) => void selectMedia(kind)}

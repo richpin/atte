@@ -41,6 +41,7 @@ type DialogContentProps<T extends ValidComponent = "div"> =
   DialogPrimitive.DialogContentProps<T> & {
     class?: string | undefined;
     children?: JSX.Element;
+    closeLabel?: string;
   };
 
 const DialogContent = <T extends ValidComponent = "div">(
@@ -49,6 +50,7 @@ const DialogContent = <T extends ValidComponent = "div">(
   const [, rest] = splitProps(props as DialogContentProps, [
     "class",
     "children",
+    "closeLabel",
   ]);
   return (
     <DialogPortal>
@@ -61,7 +63,10 @@ const DialogContent = <T extends ValidComponent = "div">(
         {...rest}
       >
         {props.children}
-        <DialogPrimitive.CloseButton class="absolute right-4 top-4 rounded-xl opacity-70 ring-offset-background transition-opacity hover:opacity-100 focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 disabled:pointer-events-none data-[expanded]:bg-accent data-[expanded]:text-muted-foreground">
+        <DialogPrimitive.CloseButton
+          aria-label={props.closeLabel ?? "Close"}
+          class="absolute right-4 top-4 rounded-xl opacity-70 ring-offset-background transition-opacity hover:opacity-100 focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 disabled:pointer-events-none data-[expanded]:bg-accent data-[expanded]:text-muted-foreground"
+        >
           <svg
             aria-hidden="true"
             xmlns="http://www.w3.org/2000/svg"
@@ -76,7 +81,7 @@ const DialogContent = <T extends ValidComponent = "div">(
             <path d="M18 6l-12 12" />
             <path d="M6 6l12 12" />
           </svg>
-          <span class="sr-only">Close</span>
+          <span class="sr-only">{props.closeLabel ?? "Close"}</span>
         </DialogPrimitive.CloseButton>
       </DialogPrimitive.Content>
     </DialogPortal>

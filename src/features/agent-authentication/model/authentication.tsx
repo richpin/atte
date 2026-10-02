@@ -14,6 +14,7 @@ export type AgentAuthenticationState =
   | { status: "error"; message: string }
   | { status: "ready"; methods: LoginMethod[] }
   | { status: "authenticating"; method: LoginMethod; methods: LoginMethod[] }
+  | { status: "cancelling"; method: LoginMethod; methods: LoginMethod[] }
   | { status: "authenticated"; generation: number };
 
 interface AgentAuthentication {
@@ -53,6 +54,7 @@ export function AgentAuthenticationProvider(props: ParentProps) {
       current?.status === "loading" ||
       current?.status === "ready" ||
       current?.status === "authenticating" ||
+      current?.status === "cancelling" ||
       current?.status === "authenticated"
     )
       return;
@@ -111,6 +113,11 @@ export function AgentAuthenticationProvider(props: ParentProps) {
     if (current?.status !== "authenticating") return;
     const attempt = (attempts.get(agentId) ?? 0) + 1;
     attempts.set(agentId, attempt);
+    setStates(agentId, {
+      status: "cancelling",
+      method: current.method,
+      methods: current.methods,
+    });
     try {
       await cancelAuthentication(agentId);
     } catch {

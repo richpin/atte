@@ -1453,6 +1453,7 @@ it("keeps authentication discovery failures inline and retries on request", asyn
   await userEvent.click(
     await screen.findByRole("button", { name: "인증이 필요한 작업" }),
   );
+  await userEvent.click(await screen.findByRole("button", { name: "Sign in" }));
   expect(await screen.findByText("temporary failure")).toBeTruthy();
   expect(connectAttempts).toBe(1);
   expect(discoveryAttempts).toBe(1);
@@ -1461,7 +1462,10 @@ it("keeps authentication discovery failures inline and retries on request", asyn
   );
   expect(
     screen
-      .getAllByRole("button", { name: new RegExp(`^${saved.title}`) })
+      .getAllByRole("button", {
+        name: new RegExp(`^${saved.title}`),
+        hidden: true,
+      })
       .some((button) => button.getAttribute("aria-current") === "page"),
   ).toBe(true);
   expect(
@@ -1698,12 +1702,13 @@ it("keeps the authentication explanation without duplicate timeline actions", as
   ).toHaveLength(1);
   expect(screen.queryByRole("button", { name: "다시 연결" })).toBeNull();
   expect(screen.queryByRole("button", { name: "로그인 안내 열기" })).toBeNull();
+  await userEvent.click(await screen.findByRole("button", { name: "Sign in" }));
   expect(
     await screen.findByRole("button", { name: "Continue in browser" }),
   ).toBeTruthy();
 });
 
-it("replaces the composer with the agent's supported login methods", async () => {
+it("keeps an editable composer and opens supported login methods explicitly", async () => {
   const authentication = deferred<Record<string, unknown>>();
   const failed = {
     id: "auth-thread",
@@ -1737,8 +1742,21 @@ it("replaces the composer with the agent's supported login methods", async () =>
   const threadButton = title.closest("button");
   if (!threadButton) throw new Error("thread title must belong to its button");
   await userEvent.click(threadButton);
+  expect(screen.queryByRole("dialog")).toBeNull();
+  const input = await screen.findByRole("textbox");
+  await userEvent.type(input, "draft before login{Enter}");
+  expect(input).toHaveProperty("value", "draft before login");
+  expect(screen.getByRole("button", { name: "전송" })).toHaveProperty(
+    "disabled",
+    true,
+  );
+  expect(
+    vi
+      .mocked(invoke)
+      .mock.calls.some(([command]) => command === "send_message"),
+  ).toBe(false);
+  await userEvent.click(screen.getByRole("button", { name: "Sign in" }));
   expect(await screen.findByText("로그인 방법을 불러오는 중…")).toBeTruthy();
-  expect(screen.queryByRole("textbox")).toBeNull();
   expect(invoke).toHaveBeenCalledWith("authenticate_agent", {
     id: "codex",
     method: null,
@@ -1775,13 +1793,259 @@ it("replaces the composer with the agent's supported login methods", async () =>
 
   const buttons = await screen.findAllByRole("button", { name: /Continue/ });
   expect(buttons.map((button) => button.textContent)).toEqual([
-    "Continue in browser",
-    "Continue in Terminal",
+    "Continue in browser Use your existing account",
+    "Continue in Terminal ",
   ]);
   expect(screen.getByText("Use your existing account")).toBeTruthy();
   expect(screen.queryByRole("button", { name: "Future protocol" })).toBeNull();
   expect(screen.queryByRole("button", { name: "다시 연결" })).toBeNull();
   expect(screen.queryByRole("button", { name: "로그인 안내 열기" })).toBeNull();
+  await userEvent.keyboard("{Escape}");
+  await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  await waitFor(() =>
+    expect(document.activeElement).toBe(
+      screen.getByRole("button", { name: "Sign in" }),
+    ),
+  );
+  expect(input).toHaveProperty("value", "draft before login");
+  await userEvent.keyboard("{Enter}");
+  expect(
+    await screen.findByRole("dialog", { name: "Codex 로그인" }),
+  ).toBeTruthy();
+  await userEvent.click(screen.getByRole("button", { name: "로그인 창 닫기" }));
+  await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+});
+
+function mockSignInThread() {
+  const failed = {
+    id: "dialog-thread",
+    title: "Dialog work",
+    agentId: "codex",
+    workingFolder: "/project",
+    status: "failed",
+    authentication: "required",
+    failure: "authenticationRequired",
+    sessionId: null,
+    createdAt: 1,
+    updatedAt: 1,
+    lastPromptAt: 1,
+    interrupted: false,
+    storageError: null,
+    turns: [],
+    permissions: [],
+    queuedMessages: [],
+  };
+  const login = deferred<Record<string, unknown>>();
+  const cancellation = deferred<void>();
+  let methods = [
+    {
+      id: "terminal",
+      name: "Terminal account",
+      description: "Use your agent account",
+      terminal: true,
+      supported: true,
+    },
+  ];
+  const original = vi.mocked(invoke).getMockImplementation();
+  vi.mocked(invoke).mockImplementation((command, args) => {
+    if (command === "list_threads") return Promise.resolve([failed]);
+    if (command === "subscribe_thread") return subscribeWith(args, failed);
+    if (command === "authenticate_agent")
+      return (args as { method: string | null }).method
+        ? login.promise
+        : Promise.resolve({ methods });
+    if (command === "cancel_agent_authentication") return cancellation.promise;
+    if (command === "connect_thread") return Promise.resolve();
+    return original?.(command, args) ?? Promise.resolve();
+  });
+  return {
+    failed,
+    login,
+    cancellation,
+    emptyMethods: () => {
+      methods = [];
+    },
+  };
+}
+
+it.each(["escape", "close", "outside"] as const)(
+  "cancels active sign-in on %s dismissal and preserves the editable draft",
+  async (dismissal) => {
+    const { login, cancellation } = mockSignInThread();
+    render(() => <App />);
+    await userEvent.click(
+      await screen.findByRole("button", { name: "Dialog work" }),
+    );
+    await userEvent.type(
+      await screen.findByRole("textbox"),
+      "keep after cancel",
+    );
+    const entry = screen.getByRole("button", { name: "Sign in" });
+    await userEvent.click(entry);
+    const method = await screen.findByRole("button", {
+      name: "Terminal account Use your agent account",
+    });
+    method.focus();
+    await userEvent.keyboard("{Enter}");
+    expect(
+      await screen.findByText("터미널에서 로그인을 완료하세요."),
+    ).toBeTruthy();
+    if (dismissal === "escape") await userEvent.keyboard("{Escape}");
+    else if (dismissal === "close")
+      await userEvent.click(
+        screen.getByRole("button", { name: "로그인 창 닫기" }),
+      );
+    else {
+      fireEvent.pointerDown(document.body);
+      fireEvent.pointerUp(document.body);
+      fireEvent.click(document.body);
+    }
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(invoke).toHaveBeenCalledWith("cancel_agent_authentication", {
+      id: "codex",
+    });
+    await waitFor(() => expect(document.activeElement).toBe(entry));
+    expect(await screen.findByRole("textbox")).toHaveProperty(
+      "value",
+      "keep after cancel",
+    );
+    await userEvent.click(entry);
+    expect(await screen.findByText("로그인을 취소하는 중…")).toBeTruthy();
+    expect(
+      screen.queryByRole("button", { name: /Terminal account/ }),
+    ).toBeNull();
+    cancellation.resolve();
+    expect(
+      await screen.findByRole("button", {
+        name: "Terminal account Use your agent account",
+      }),
+    ).toBeTruthy();
+    login.resolve({ authenticated: true });
+    await Promise.resolve();
+    expect(
+      vi
+        .mocked(invoke)
+        .mock.calls.some(
+          ([command]) =>
+            command === "connect_thread" || command === "send_message",
+        ),
+    ).toBe(false);
+  },
+);
+
+it("shows login failure once in the dialog and retries discovery into an empty supported list", async () => {
+  const { login, emptyMethods } = mockSignInThread();
+  render(() => <App />);
+  await userEvent.click(
+    await screen.findByRole("button", { name: "Dialog work" }),
+  );
+  await userEvent.type(
+    await screen.findByRole("textbox"),
+    "keep after failure",
+  );
+  await userEvent.click(screen.getByRole("button", { name: "Sign in" }));
+  await userEvent.click(
+    await screen.findByRole("button", {
+      name: "Terminal account Use your agent account",
+    }),
+  );
+  login.reject("Sign-in service unavailable");
+  expect(await screen.findByRole("alert")).toHaveProperty(
+    "textContent",
+    "Sign-in service unavailable",
+  );
+  expect(screen.getAllByText("Sign-in service unavailable")).toHaveLength(1);
+  emptyMethods();
+  await userEvent.click(screen.getByRole("button", { name: "다시 시도" }));
+  expect(
+    await screen.findByText("지원되는 로그인 방법이 없습니다."),
+  ).toBeTruthy();
+  await userEvent.keyboard("{Escape}");
+  expect(await screen.findByRole("textbox")).toHaveProperty(
+    "value",
+    "keep after failure",
+  );
+});
+
+it("keeps successful login distinct from reconnect failure and retains recovery and the draft", async () => {
+  const { failed, login } = mockSignInThread();
+  render(() => <App />);
+  await userEvent.click(
+    await screen.findByRole("button", { name: "Dialog work" }),
+  );
+  await userEvent.type(
+    await screen.findByRole("textbox"),
+    "recover this draft",
+  );
+  await userEvent.click(screen.getByRole("button", { name: "Sign in" }));
+  await userEvent.click(
+    await screen.findByRole("button", {
+      name: "Terminal account Use your agent account",
+    }),
+  );
+  login.resolve({ authenticated: true });
+  expect(
+    await screen.findByText("로그인 완료. 스레드를 다시 연결하는 중…"),
+  ).toBeTruthy();
+  receive({ ...failed, status: "connecting", failure: null });
+  receive({
+    ...failed,
+    failure: "processExited",
+    authentication: "authenticated",
+  });
+  expect(
+    await screen.findByText(
+      "로그인 완료. 다시 연결 동작으로 스레드를 복구하세요.",
+    ),
+  ).toBeTruthy();
+  expect(screen.queryByRole("button", { name: "다시 시도" })).toBeNull();
+  await userEvent.keyboard("{Escape}");
+  expect(await screen.findByRole("textbox")).toHaveProperty(
+    "value",
+    "recover this draft",
+  );
+  await userEvent.click(screen.getByRole("button", { name: "스레드 메뉴" }));
+  expect(
+    (await screen.findByRole("menuitem", { name: "다시 연결" })).getAttribute(
+      "aria-disabled",
+    ),
+  ).toBe("false");
+});
+
+it("shows reconnect command failure without turning successful sign-in into a login failure", async () => {
+  const { login } = mockSignInThread();
+  const original = vi.mocked(invoke).getMockImplementation();
+  vi.mocked(invoke).mockImplementation((command, args) =>
+    command === "connect_thread"
+      ? Promise.reject("Reconnect command unavailable")
+      : (original?.(command, args) ?? Promise.resolve()),
+  );
+  render(() => <App />);
+  await userEvent.click(
+    await screen.findByRole("button", { name: "Dialog work" }),
+  );
+  await userEvent.type(
+    await screen.findByRole("textbox"),
+    "keep after command failure",
+  );
+  await userEvent.click(screen.getByRole("button", { name: "Sign in" }));
+  await userEvent.click(
+    await screen.findByRole("button", {
+      name: "Terminal account Use your agent account",
+    }),
+  );
+  login.resolve({ authenticated: true });
+  expect(
+    await screen.findByText(
+      "로그인 완료. 다시 연결 동작으로 스레드를 복구하세요.",
+    ),
+  ).toBeTruthy();
+  expect(screen.queryByRole("button", { name: "다시 시도" })).toBeNull();
+  await userEvent.keyboard("{Escape}");
+  expect(await screen.findByRole("textbox")).toHaveProperty(
+    "value",
+    "keep after command failure",
+  );
 });
 
 it("shares agent login progress and ignores completion after cancellation", async () => {
@@ -1839,6 +2103,7 @@ it("shares agent login progress and ignores completion after cancellation", asyn
 
   const firstTitle = await screen.findByText("First private thread");
   await userEvent.click(firstTitle.closest("button") as HTMLButtonElement);
+  await userEvent.click(await screen.findByRole("button", { name: "Sign in" }));
   await userEvent.click(
     await screen.findByRole("button", { name: "Continue in browser" }),
   );
@@ -1847,7 +2112,9 @@ it("shares agent login progress and ignores completion after cancellation", asyn
   ).toBeTruthy();
 
   const secondTitle = screen.getByText("Second private thread");
-  await userEvent.click(secondTitle.closest("button") as HTMLButtonElement);
+  fireEvent.click(secondTitle.closest("button") as HTMLButtonElement);
+  expect(screen.queryByRole("dialog")).toBeNull();
+  await userEvent.click(await screen.findByRole("button", { name: "Sign in" }));
   expect(
     await screen.findByText("Continue in browser 로그인 진행 중"),
   ).toBeTruthy();
@@ -1865,7 +2132,7 @@ it("shares agent login progress and ignores completion after cancellation", asyn
   expect(invoke).toHaveBeenCalledWith("cancel_agent_authentication", {
     id: "codex",
   });
-  expect(screen.getByText("Continue in browser 로그인 진행 중")).toBeTruthy();
+  expect(screen.getByText("로그인을 취소하는 중…")).toBeTruthy();
   expect(
     screen.queryByRole("button", { name: "Continue in browser" }),
   ).toBeNull();
@@ -1948,10 +2215,11 @@ it("does not reconnect another same-agent authentication failure when login comp
   await userEvent.click(
     screen.getByText("Login origin").closest("button") as HTMLButtonElement,
   );
+  await userEvent.click(await screen.findByRole("button", { name: "Sign in" }));
   await userEvent.click(
     await screen.findByRole("button", { name: "Continue in browser" }),
   );
-  await userEvent.click(
+  fireEvent.click(
     screen
       .getByText("Other private thread")
       .closest("button") as HTMLButtonElement,
@@ -2031,6 +2299,18 @@ it("reconnects the still-selected origin once without sending preserved input", 
         ],
       });
     }
+    if (command === "select_files")
+      return Promise.resolve({
+        attachments: [
+          {
+            id: "kept-file",
+            kind: "linked",
+            name: "notes.txt",
+            path: "/project/notes.txt",
+          },
+        ],
+        errors: [],
+      });
     if (command === "connect_thread") return Promise.resolve();
     return original?.(command, args) ?? Promise.resolve();
   });
@@ -2039,8 +2319,12 @@ it("reconnects the still-selected origin once without sending preserved input", 
   const title = await screen.findByText("Private work");
   await userEvent.click(title.closest("button") as HTMLButtonElement);
   await userEvent.type(await screen.findByRole("textbox"), "keep this draft");
+  await userEvent.click(screen.getByRole("button", { name: "첨부 추가" }));
+  await userEvent.click(await screen.findByRole("menuitem", { name: "파일" }));
+  expect(await screen.findByText("notes.txt")).toBeTruthy();
   receive(failed);
   expect(await screen.findByText("wait for me")).toBeTruthy();
+  await userEvent.click(await screen.findByRole("button", { name: "Sign in" }));
   await userEvent.click(
     await screen.findByRole("button", { name: "Continue in browser" }),
   );
@@ -2058,12 +2342,21 @@ it("reconnects the still-selected origin once without sending preserved input", 
         .mock.calls.filter(([command]) => command === "connect_thread"),
     ).toHaveLength(1),
   );
+  expect(
+    await screen.findByText("로그인 완료. 스레드를 다시 연결하는 중…"),
+  ).toBeTruthy();
+  expect(screen.getByRole("dialog")).toBeTruthy();
   receive({ ...ready, queuedMessages: failed.queuedMessages });
+  await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
   expect(await screen.findByRole("textbox")).toHaveProperty(
     "value",
     "keep this draft",
   );
   expect(screen.getByText("wait for me")).toBeTruthy();
+  expect(screen.getByText("notes.txt")).toBeTruthy();
+  await waitFor(() =>
+    expect(document.activeElement).toBe(screen.getByRole("textbox")),
+  );
   expect(
     vi
       .mocked(invoke)
@@ -2135,11 +2428,12 @@ it("defers reconnect after navigation and reconnects once when the failed thread
   const privateRow = screen.getByText("Private work").closest("button");
   if (!privateRow) throw new Error("thread title must belong to its button");
   await userEvent.click(privateRow);
+  await userEvent.click(await screen.findByRole("button", { name: "Sign in" }));
   await userEvent.click(
     await screen.findByRole("button", { name: "Continue in browser" }),
   );
   const otherTitle = screen.getByText("Other work");
-  await userEvent.click(otherTitle.closest("button") as HTMLButtonElement);
+  fireEvent.click(otherTitle.closest("button") as HTMLButtonElement);
   login.resolve({
     connected: true,
     authenticated: true,
@@ -2227,6 +2521,7 @@ it("returns to login methods when the authenticated reconnect still requires aut
 
   const title = await screen.findByText("Private work");
   await userEvent.click(title.closest("button") as HTMLButtonElement);
+  await userEvent.click(await screen.findByRole("button", { name: "Sign in" }));
   await userEvent.click(
     await screen.findByRole("button", { name: "Continue in browser" }),
   );
@@ -3364,6 +3659,7 @@ it("keeps an existing thread after logout and follows a later authentication-req
     failure: "authenticationRequired",
   });
 
+  await userEvent.click(await screen.findByRole("button", { name: "Sign in" }));
   expect(await screen.findByRole("button", { name: "ChatGPT" })).toBeTruthy();
   expect(screen.getByText("Preserved response")).toBeTruthy();
 });

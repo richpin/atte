@@ -214,6 +214,7 @@ export function createThreadModel(
       thread()?.status ?? "",
     ) &&
     !sending() &&
+    thread()?.failure !== "authenticationRequired" &&
     actionsEnabled();
 
   function isNotFound(cause: unknown) {
