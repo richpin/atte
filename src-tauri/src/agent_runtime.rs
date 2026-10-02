@@ -24,7 +24,7 @@ use agent_client_protocol::{
             SelectedPermissionOutcome, SessionConfigKind, SessionConfigOption,
             SessionConfigOptionValue, SessionConfigOptionsCapabilities, SessionConfigSelectOption,
             SessionConfigSelectOptions, SessionId, SessionNotification, SessionUpdate,
-            SetSessionConfigOptionRequest, ToolCallContent, ToolCallUpdate, ToolCallUpdateFields,
+            SetSessionConfigOptionRequest, ToolCallContent,
         },
         MaybeUndefined, ProtocolVersion,
     },
@@ -169,7 +169,7 @@ pub(crate) async fn run(
                 let active = route.active.as_mut()?;
                 let turn = active.turn;
                 let tool_id = request.tool_call.tool_call_id.to_string();
-                let fields = active.update_tool(request.tool_call);
+                let fields = route.updates.update_tool(turn, request.tool_call)?;
                 let details = [
                     fields.raw_input.as_ref().and_then(|value| serde_json::to_string_pretty(value).ok()),
                     fields.content.as_ref().and_then(|content| {
@@ -179,7 +179,7 @@ pub(crate) async fn run(
                     fields.locations.as_ref().filter(|locations| !locations.is_empty()).and_then(|value| serde_json::to_string_pretty(value).ok()),
                 ].into_iter().flatten().collect::<Vec<_>>().join("\n");
                 route.updates.request_permission(turn, PermissionRequest {
-                    id: Uuid::new_v4(), title: fields.title.clone().unwrap_or(tool_id), details,
+                    id: Uuid::new_v4(), tool_call_id: tool_id.clone(), title: fields.title.clone().unwrap_or(tool_id), details,
                     options: request.options.into_iter().map(|option| PermissionOption { id: option.option_id.to_string(), name: option.name }).collect(),
                 })
             });
@@ -216,8 +216,8 @@ pub(crate) async fn run(
                             if let Some(active) = &mut route.active {
                                 match update {
                                     SessionUpdate::AgentMessageChunk(chunk) => if let ContentBlock::Text(text) = chunk.content { route.updates.append_text(active.turn, text.text); },
-                                    SessionUpdate::ToolCall(tool) => { active.update_tool(tool.into()); },
-                                    SessionUpdate::ToolCallUpdate(tool) => { active.update_tool(tool); },
+                                    SessionUpdate::ToolCall(tool) => { route.updates.update_tool(active.turn, tool.into()); },
+                                    SessionUpdate::ToolCallUpdate(tool) => { route.updates.update_tool(active.turn, tool); },
                                     _ => {},
                                 }
                             }
@@ -555,10 +555,7 @@ async fn run_session(
         };
         if let Ok(mut routes) = routes.lock() {
             if let Some(route) = routes.get_mut(&remote.to_string()) {
-                route.active = Some(ActiveTurn {
-                    turn: prompt.turn,
-                    tools: HashMap::new(),
-                });
+                route.active = Some(ActiveTurn { turn: prompt.turn });
             }
         }
         let (finished, mut completion) = oneshot::channel();
@@ -885,33 +882,8 @@ fn thread_configuration_choice(choice: SessionConfigSelectOption) -> ThreadConfi
     }
 }
 
-// Tool permission requests are partial updates; context may arrive beforehand.
 struct ActiveTurn {
     turn: Uuid,
-    tools: HashMap<String, ToolCallUpdateFields>,
-}
-
-impl ActiveTurn {
-    fn update_tool(&mut self, update: ToolCallUpdate) -> &ToolCallUpdateFields {
-        let fields = self
-            .tools
-            .entry(update.tool_call_id.to_string())
-            .or_default();
-        let incoming = update.fields;
-        if incoming.title.is_some() {
-            fields.title = incoming.title;
-        }
-        if incoming.raw_input.is_some() {
-            fields.raw_input = incoming.raw_input;
-        }
-        if incoming.content.is_some() {
-            fields.content = incoming.content;
-        }
-        if incoming.locations.is_some() {
-            fields.locations = incoming.locations;
-        }
-        fields
-    }
 }
 
 fn classify(error: agent_client_protocol::Error, fallback: ConnectionFailure) -> ConnectionFailure {

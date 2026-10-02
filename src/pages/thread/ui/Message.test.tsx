@@ -43,7 +43,7 @@ function turn(message: string): Turn {
   return {
     id: "turn-1",
     message,
-    response: "",
+    responseParts: [],
     stopReason: null,
   };
 }
@@ -71,7 +71,9 @@ function setMessageHeight(message: string, height: number) {
 
 it("renders user and agent message bodies through distinct Markdown variants", () => {
   const markdownTurn = turn("**User** prompt");
-  markdownTurn.response = "**Agent** response";
+  markdownTurn.responseParts = [
+    { kind: "text", id: "text-1", text: "**Agent** response" },
+  ];
   markdownTurn.stopReason = "end_turn";
   render(() => (
     <I18nProvider>
@@ -147,13 +149,17 @@ it("updates only the actively streaming message body", () => {
     {
       id: "turn-1",
       message: "First prompt",
-      response: "Completed response",
+      responseParts: [
+        { kind: "text", id: "text-1", text: "Completed response" },
+      ],
       stopReason: "end_turn",
     },
     {
       id: "turn-2",
       message: "Second prompt",
-      response: "Streaming response",
+      responseParts: [
+        { kind: "text", id: "text-1", text: "Streaming response" },
+      ],
       stopReason: null,
     },
   ]);
@@ -168,7 +174,10 @@ it("updates only the actively streaming message body", () => {
   )[0];
   const completedParagraph = completedBody?.querySelector("p");
 
-  setTurns(1, "response", "Streaming response grows");
+  setTurns(1, "responseParts", 0, (part) => ({
+    ...part,
+    text: "Streaming response grows",
+  }));
   expect(animationFrames.size).toBe(1);
   for (const frame of animationFrames.values()) frame(performance.now());
   animationFrames.clear();
@@ -228,4 +237,36 @@ it("updates folding when wrapping changes the rendered line count", () => {
   });
   resize();
   expect(screen.queryByRole("button", { name: "Show more" })).toBeNull();
+});
+
+it("renders tools between text parts and stops waiting on a tool-only response", () => {
+  const current: Turn = {
+    ...turn("Inspect"),
+    responseParts: [
+      { kind: "text", id: "before", text: "Before tool" },
+      {
+        kind: "tool",
+        id: "call",
+        tool: { title: "Read file", status: "in_progress" },
+      },
+      { kind: "text", id: "after", text: "After tool" },
+    ],
+  };
+  const { container } = render(() => (
+    <I18nProvider>
+      <Message
+        turns={[current]}
+        streamingTurnId={current.id}
+        waitingTurnId={current.id}
+        permissionToolIds={["call"]}
+      />
+    </I18nProvider>
+  ));
+  const text = container.textContent ?? "";
+  expect(text.indexOf("Before tool")).toBeLessThan(text.indexOf("Read file"));
+  expect(text.indexOf("Read file")).toBeLessThan(text.indexOf("After tool"));
+  expect(screen.getByText("Approval required")).toBeTruthy();
+  expect(
+    screen.queryByRole("status", { name: "Waiting for first response" }),
+  ).toBeNull();
 });

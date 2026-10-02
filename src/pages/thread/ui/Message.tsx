@@ -1,9 +1,19 @@
 import { ChevronDown } from "lucide-solid";
 import { type TranslationKey, useI18n } from "shared/i18n";
-import { Markdown } from "shared/ui";
-import { createSignal, For, Index, onCleanup, onMount, Show } from "solid-js";
-import type { Attachment, Turn } from "../model/types";
+import { AgentIcon, Markdown } from "shared/ui";
+import {
+  createSignal,
+  For,
+  Index,
+  Match,
+  onCleanup,
+  onMount,
+  Show,
+  Switch,
+} from "solid-js";
+import type { Attachment, ResponsePart, Turn } from "../model/types";
 import { AttachmentChip } from "./AttachmentChip";
+import { ToolCall } from "./ToolCall";
 
 const collapsedLines = 20;
 
@@ -85,7 +95,15 @@ function UserMessage(props: { message: string; attachments: Attachment[] }) {
   );
 }
 
-export function Message(props: { turns: Turn[]; streamingTurnId?: string }) {
+export function Message(props: {
+  turns: Turn[];
+  streamingTurnId?: string;
+  waitingTurnId?: string;
+  agentId?: string;
+  approvalPending?: boolean;
+  permissionToolIds?: string[];
+  interrupted?: boolean;
+}) {
   const { t } = useI18n();
   return (
     <ol aria-label={t("thread.messages")} class="flex flex-col gap-8">
@@ -96,19 +114,79 @@ export function Message(props: { turns: Turn[]; streamingTurnId?: string }) {
               message={turn().message}
               attachments={turn().attachments ?? []}
             />
-            <Show when={turn().response}>
+            <Show
+              when={
+                turn().id === props.waitingTurnId &&
+                !turn().responseParts.length
+              }
+            >
               <div
-                data-message-participant="agent"
-                class="w-full min-w-0 text-left text-sm"
+                role="status"
+                aria-label={t("thread.firstResponseWaiting")}
+                title={t("thread.firstResponseWaiting")}
+                class="grid size-6 place-items-center"
               >
-                <Markdown
-                  source={turn().response}
-                  variant="agent"
-                  streaming={turn().id === props.streamingTurnId}
-                  generation={turn().id}
-                />
+                <span
+                  class="inline-flex size-6 items-center justify-center"
+                  classList={{
+                    "animate-agent-waiting motion-reduce:animate-none":
+                      !props.approvalPending,
+                  }}
+                >
+                  <AgentIcon id={props.agentId ?? ""} src={null} waiting />
+                </span>
               </div>
             </Show>
+            <Index each={turn().responseParts}>
+              {(part, index) => (
+                <Switch>
+                  <Match
+                    when={
+                      part().kind === "tool" &&
+                      (part() as Extract<ResponsePart, { kind: "tool" }>)
+                    }
+                  >
+                    {(tool) => (
+                      <ToolCall
+                        tool={tool().tool}
+                        active={turn().id === props.streamingTurnId}
+                        interrupted={
+                          turn().stopReason === "cancelled" ||
+                          (turn().id === props.turns.at(-1)?.id &&
+                            props.interrupted)
+                        }
+                        approvalPending={
+                          props.permissionToolIds?.includes(tool().id) ?? false
+                        }
+                      />
+                    )}
+                  </Match>
+                  <Match
+                    when={
+                      part().kind === "text" &&
+                      (part() as Extract<ResponsePart, { kind: "text" }>)
+                    }
+                  >
+                    {(text) => (
+                      <div
+                        data-message-participant="agent"
+                        class="w-full min-w-0 text-left text-sm"
+                      >
+                        <Markdown
+                          source={text().text}
+                          variant="agent"
+                          streaming={
+                            turn().id === props.streamingTurnId &&
+                            index === turn().responseParts.length - 1
+                          }
+                          generation={text().id}
+                        />
+                      </div>
+                    )}
+                  </Match>
+                </Switch>
+              )}
+            </Index>
             <Show when={turn().stopReason}>
               {(reason) => (
                 <p class="text-xs text-muted">

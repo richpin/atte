@@ -564,7 +564,7 @@ it("groups threads by folder, collapses projects and creates within the selected
   ]);
   expect(
     await screen.findByRole("button", {
-      name: /^First project task.*승인 대기$/,
+      name: /^First project task.*승인 요청$/,
     }),
   ).toBeTruthy();
   const resizeHandle = screen.getByRole("separator", {
@@ -930,7 +930,7 @@ it("keeps cancellation and permission responses usable during configuration reco
       {
         id: "turn-1",
         message: "work",
-        response: "working",
+        responseParts: [{ kind: "text", id: "text-1", text: "working" }],
         stopReason: null,
       },
     ],
@@ -1016,6 +1016,7 @@ it("keeps cancellation and permission responses usable during configuration reco
     permissions: [
       {
         id: "permission-1",
+        toolCallId: "tool-1",
         title: "Write file",
         details: "fixture.txt",
         options: [{ id: "allow", name: "Allow once" }],
@@ -1370,7 +1371,7 @@ it("loads selected history once and keeps newer list metadata when an older thre
       {
         id: "old-turn",
         message: "과거 질문",
-        response: "과거 답변",
+        responseParts: [{ kind: "text", id: "text-1", text: "과거 답변" }],
         stopReason: null,
       },
     ],
@@ -2529,7 +2530,7 @@ it("sends once, renders streaming text and completion, and admits the next messa
   const turn = {
     id: "turn-1",
     message: "hello",
-    response: "Hi",
+    responseParts: [{ kind: "text", id: "text-1", text: "Hi" }],
     stopReason: null,
   };
   receive({ ...ready, status: "running", turns: [turn] });
@@ -2540,7 +2541,13 @@ it("sends once, renders streaming text and completion, and admits the next messa
   expect((button as HTMLButtonElement).disabled).toBe(false);
   receive({
     ...ready,
-    turns: [{ ...turn, response: "Hi there", stopReason: "end_turn" }],
+    turns: [
+      {
+        ...turn,
+        responseParts: [{ kind: "text", id: "text-1", text: "Hi there" }],
+        stopReason: "end_turn",
+      },
+    ],
   });
   expect(await screen.findByText("Hi there")).toBeTruthy();
   expect(screen.getByText("완료")).toBeTruthy();
@@ -2556,7 +2563,12 @@ it("queues input above the composer and preserves it after stopping until delete
     agentId: "codex",
     status: "running",
     turns: [
-      { id: "turn", message: "first", response: "Working", stopReason: null },
+      {
+        id: "turn",
+        message: "first",
+        responseParts: [{ kind: "text", id: "text-1", text: "Working" }],
+        stopReason: null,
+      },
     ],
     permissions: [],
     queuedMessages: [],
@@ -2690,7 +2702,9 @@ it("appends ordered text deltas and rejects updates for another thread", async (
     workingFolder: "/project",
     agentId: "codex",
     status: "running",
-    turns: [{ id: "turn-1", message: "hello", response: "", stopReason: null }],
+    turns: [
+      { id: "turn-1", message: "hello", responseParts: [], stopReason: null },
+    ],
   };
   requests.mockResolvedValue(ready);
   render(() => <App />);
@@ -2698,6 +2712,7 @@ it("appends ordered text deltas and rejects updates for another thread", async (
   await startNewThreadWithAgent();
   const delta = {
     kind: "textDelta",
+    partId: "text-1",
     threadId: "draft-1",
     turnId: "turn-1",
     text: "Hello",
@@ -2736,6 +2751,7 @@ it("offers manual reconnection only after five automatic retries", async () => {
 
   receiveUpdate({
     kind: "textDelta",
+    partId: "text-1",
     threadId: "draft-1",
     turnId: "unknown",
     text: "ignored",
@@ -2919,7 +2935,12 @@ it("keeps streaming and the fixed thread while management is open", async () => 
     agentId: "codex",
     status: "running",
     turns: [
-      { id: "turn-1", message: "hello", response: "Hi", stopReason: null },
+      {
+        id: "turn-1",
+        message: "hello",
+        responseParts: [{ kind: "text", id: "text-1", text: "Hi" }],
+        stopReason: null,
+      },
     ],
   };
   const original = vi.mocked(invoke).getMockImplementation();
@@ -2935,13 +2956,12 @@ it("keeps streaming and the fixed thread while management is open", async () => 
   await openAgentManagement();
   receiveUpdate({
     kind: "textDelta",
+    partId: "text-1",
     threadId: "draft-1",
     turnId: "turn-1",
     text: " there",
   });
-  await userEvent.click(
-    screen.getByRole("button", { name: /^새 스레드.*실행 중$/ }),
-  );
+  await userEvent.click(getSidebarThreadButton("새 스레드"));
   expect(await screen.findByText("Hi there")).toBeTruthy();
   expect(invoke).not.toHaveBeenCalledWith(
     "unsubscribe_thread",
@@ -3292,7 +3312,9 @@ it("keeps an existing thread after logout and follows a later authentication-req
       {
         id: "turn-1",
         message: "Question",
-        response: "Preserved response",
+        responseParts: [
+          { kind: "text", id: "text-1", text: "Preserved response" },
+        ],
         stopReason: "end_turn",
       },
     ],
@@ -3446,7 +3468,7 @@ it("keeps thread content after agent removal and offers setup and explicit retry
       {
         id: "turn",
         message: "기존 질문",
-        response: "삭제 전 응답",
+        responseParts: [{ kind: "text", id: "text-1", text: "삭제 전 응답" }],
         stopReason: "cancelled",
       },
     ],
@@ -3482,11 +3504,12 @@ it("replaces the composer with agent choices and restores the draft after one de
   const turn = {
     id: "turn-1",
     message: "start",
-    response: "",
+    responseParts: [],
     stopReason: null,
   };
   const permission = {
     id: "permission-1",
+    toolCallId: "tool-1",
     title: "Write fixture.txt",
     details: "Only fixture.txt",
     options: [
@@ -3538,7 +3561,7 @@ it.each(["running", "waitingForApproval"])(
     const turn = {
       id: "turn-1",
       message: "start",
-      response: "",
+      responseParts: [],
       stopReason: null,
     };
     const waiting = {
@@ -3678,7 +3701,9 @@ it("loads centrally during manual reconnection and restores history and the draf
       {
         id: "turn",
         message: "Previous question",
-        response: "Previous answer",
+        responseParts: [
+          { kind: "text", id: "text-1", text: "Previous answer" },
+        ],
         stopReason: "end_turn",
       },
     ],
@@ -3754,4 +3779,319 @@ it("shows first-message waiting after a history-free resumption without its noti
   ).toBeTruthy();
   expect(screen.queryByText(resumed.notice)).toBeNull();
   expect(screen.queryByRole("alert")).toBeNull();
+});
+
+it("shows first response waiting, approval and running until protocol completion", async () => {
+  const ready = {
+    id: "status",
+    title: "Status thread",
+    workingFolder: "/project",
+    agentId: "codex",
+    sessionId: "remote",
+    createdAt: 1,
+    updatedAt: 1,
+    lastPromptAt: 1,
+    interrupted: false,
+    authentication: "authenticated",
+    failure: null,
+    requestFailure: null,
+    completedTurnId: null,
+    permissions: [],
+    queuedMessages: [],
+    configuration: [],
+    status: "sessionReady",
+    turns: [],
+  };
+  requests.mockImplementation(async (command) => {
+    if (command === "subscription_snapshot") return ready;
+  });
+  vi.mocked(invoke).mockImplementation(async (command, args) => {
+    if (command === "list_threads") return [ready];
+    if (command === "prepared_agents") return [{ id: "codex", name: "Codex" }];
+    if (command === "subscribe_thread") return subscribeWith(args, ready);
+    return "subscription";
+  });
+  render(() => <App />);
+  await userEvent.click(
+    await screen.findByRole("button", { name: ready.title }),
+  );
+  const active = {
+    ...ready,
+    status: "running",
+    turns: [
+      { id: "turn", message: "hello", responseParts: [], stopReason: null },
+    ],
+  };
+  receive(active);
+  expect(
+    await screen.findByRole("status", { name: "첫 응답 대기" }),
+  ).toBeDefined();
+  expect(await screen.findByRole("status", { name: "실행 중" })).toBeDefined();
+  receive({ ...active, status: "waitingForApproval" });
+  expect(await screen.findByText("승인 요청")).toBeDefined();
+  expect(screen.getByRole("status", { name: "첫 응답 대기" })).toBeDefined();
+  receive(active);
+  receiveUpdate({
+    kind: "textDelta",
+    partId: "text-1",
+    threadId: ready.id,
+    turnId: "turn",
+    text: "Hi",
+  });
+  await waitFor(() =>
+    expect(screen.queryByRole("status", { name: "첫 응답 대기" })).toBeNull(),
+  );
+  expect(await screen.findByRole("status", { name: "실행 중" })).toBeDefined();
+  const menu = threadMenu(ready.title);
+  menu.focus();
+  expect(document.activeElement).toBe(menu);
+  await userEvent.keyboard("{Enter}");
+  expect(await screen.findByRole("menuitem", { name: "삭제" })).toBeDefined();
+  receive({ ...active, status: "cancelling" });
+  expect(screen.getByRole("menuitem", { name: "삭제" })).toBeDefined();
+  await userEvent.keyboard("{Escape}");
+  expect(await screen.findByRole("status", { name: "중단 중" })).toBeDefined();
+  expect(getSidebarThreadButton(ready.title).title).toBe("중단 중");
+  expect(screen.queryByRole("status", { name: "첫 응답 대기" })).toBeNull();
+  receive({ ...active, status: "sessionReady", interrupted: true });
+  await waitFor(() =>
+    expect(screen.queryByRole("status", { name: "중단 중" })).toBeNull(),
+  );
+  receive({
+    ...active,
+    turns: [
+      { id: "followup", message: "again", responseParts: [], stopReason: null },
+    ],
+  });
+  expect(
+    await screen.findByRole("status", { name: "첫 응답 대기" }),
+  ).toBeDefined();
+  fireEvent.contextMenu(getSidebarThreadButton(ready.title));
+  expect(await screen.findByRole("menuitem", { name: "삭제" })).toBeDefined();
+  await userEvent.keyboard("{Escape}");
+  receive({ ...active, status: "sessionReady", completedTurnId: "followup" });
+  await waitFor(() =>
+    expect(screen.queryByRole("status", { name: "미확인 완료" })).toBeNull(),
+  );
+});
+
+function responseThread(id: string) {
+  return {
+    id,
+    title: `Response ${id}`,
+    workingFolder: "/project",
+    agentId: "codex",
+    sessionId: "remote",
+    createdAt: 1,
+    updatedAt: 1,
+    lastPromptAt: 1,
+    interrupted: false,
+    authentication: "authenticated",
+    failure: null,
+    requestFailure: null,
+    completedTurnId: null as string | null,
+    permissions: [],
+    queuedMessages: [],
+    configuration: [],
+    status: "sessionReady",
+    turns: [],
+  };
+}
+
+it("confirms completion only on the visible thread page and preserves it through cancellation and duplicate updates", async () => {
+  const first = { ...responseThread("first"), completedTurnId: "first-turn" };
+  const second = responseThread("second");
+  let listUpdate!: (entries: Record<string, unknown>[]) => void;
+  const channels = new Map<string, (update: Record<string, unknown>) => void>();
+  vi.mocked(invoke).mockImplementation(async (command, args) => {
+    if (command === "list_threads") return [first, second];
+    if (command === "prepared_agents") return [{ id: "codex", name: "Codex" }];
+    if (command === "subscribe_thread_list") {
+      listUpdate = (args as { channel: { onmessage: typeof listUpdate } })
+        .channel.onmessage;
+    }
+    if (command === "subscribe_thread") {
+      const id = (args as { id: string }).id;
+      const update = (args as { channel: { onmessage: typeof receiveUpdate } })
+        .channel.onmessage;
+      channels.set(id, update);
+      queueMicrotask(() =>
+        update({ kind: "thread", thread: id === first.id ? first : second }),
+      );
+    }
+    if (command === "agent_catalog" || command === "refresh_agent_catalog")
+      return [];
+    return "subscription";
+  });
+  render(() => <App />);
+  expect(
+    await screen.findByRole("status", { name: "미확인 완료" }),
+  ).toBeDefined();
+  await userEvent.click(getSidebarThreadButton(first.title));
+  await waitFor(() =>
+    expect(screen.queryByRole("status", { name: "미확인 완료" })).toBeNull(),
+  );
+  await userEvent.click(getSidebarThreadButton(second.title));
+  channels.get(first.id)?.({
+    kind: "thread",
+    thread: { ...first, completedTurnId: "late-first" },
+  });
+  listUpdate([{ ...first, completedTurnId: "late-first" }, second]);
+  expect(
+    await screen.findByRole("status", { name: "미확인 완료" }),
+  ).toBeDefined();
+  expect(
+    getSidebarThreadButton(second.title).getAttribute("aria-current"),
+  ).toBe("page");
+  listUpdate([
+    { ...first, completedTurnId: "late-first", status: "running" },
+    second,
+  ]);
+  expect(await screen.findByRole("status", { name: "실행 중" })).toBeDefined();
+  expect(screen.queryByRole("status", { name: "미확인 완료" })).toBeNull();
+  listUpdate([
+    { ...first, completedTurnId: "late-first", interrupted: true },
+    second,
+  ]);
+  expect(
+    await screen.findByRole("status", { name: "미확인 완료" }),
+  ).toBeDefined();
+  await userEvent.click(getSidebarThreadButton(first.title));
+  await waitFor(() =>
+    expect(screen.queryByRole("status", { name: "미확인 완료" })).toBeNull(),
+  );
+  await openAgentManagement();
+  const newest = { ...first, completedTurnId: "while-settings" };
+  listUpdate([newest, second]);
+  channels.get(first.id)?.({ kind: "thread", thread: newest });
+  expect(
+    await screen.findByRole("status", { name: "미확인 완료" }),
+  ).toBeDefined();
+  await userEvent.click(getSidebarThreadButton(first.title));
+  await waitFor(() =>
+    expect(screen.queryByRole("status", { name: "미확인 완료" })).toBeNull(),
+  );
+  listUpdate([newest, second]);
+  await waitFor(() =>
+    expect(screen.queryByRole("status", { name: "미확인 완료" })).toBeNull(),
+  );
+  await userEvent.click(threadMenu(first.title));
+  await userEvent.click(await screen.findByRole("menuitem", { name: "삭제" }));
+  await userEvent.click(await screen.findByRole("button", { name: "삭제" }));
+  await waitFor(() =>
+    expect(screen.queryByRole("button", { name: first.title })).toBeNull(),
+  );
+  listUpdate([newest, second]);
+  expect(screen.queryByRole("button", { name: first.title })).toBeNull();
+});
+
+it("keeps actual errors after list recovery and prioritizes subscription failure over progress", async () => {
+  const first = {
+    ...responseThread("errors"),
+    requestFailure: "promptFailed",
+    completedTurnId: "old",
+  };
+  let listUpdate!: (entries: Record<string, unknown>[]) => void;
+  vi.mocked(invoke).mockImplementation(async (command, args) => {
+    if (command === "list_threads") return [first];
+    if (command === "prepared_agents") return [{ id: "codex", name: "Codex" }];
+    if (command === "subscribe_thread_list") {
+      listUpdate = (args as { channel: { onmessage: typeof listUpdate } })
+        .channel.onmessage;
+      throw new Error("list unavailable");
+    }
+    if (command === "subscribe_thread") return subscribeWith(args, first);
+    if (command === "agent_catalog" || command === "refresh_agent_catalog")
+      return [];
+    return "subscription";
+  });
+  render(() => <App />);
+  expect(
+    await screen.findByRole("status", {
+      name: "스레드 상태를 확인할 수 없습니다",
+    }),
+  ).toBeDefined();
+  listUpdate([first]);
+  expect(
+    await screen.findByRole("status", { name: "요청 실패" }),
+  ).toBeDefined();
+  await userEvent.click(getSidebarThreadButton(first.title));
+  expect(
+    await screen.findByRole("status", { name: "요청 실패" }),
+  ).toBeDefined();
+  const recovered = {
+    ...first,
+    requestFailure: null,
+    status: "running",
+    turns: [
+      { id: "next", message: "try again", responseParts: [], stopReason: null },
+    ],
+  };
+  await waitFor(() => expect(typeof receiveUpdate).toBe("function"));
+  receive(recovered);
+  expect(await screen.findByRole("status", { name: "실행 중" })).toBeDefined();
+  receiveUpdate({
+    kind: "textDelta",
+    partId: "text-1",
+    threadId: first.id,
+    turnId: "wrong-turn",
+    text: "bad",
+  });
+  expect(
+    await screen.findByRole("status", {
+      name: "스레드 상태를 확인할 수 없습니다",
+    }),
+  ).toBeDefined();
+  expect(screen.queryByRole("status", { name: "첫 응답 대기" })).toBeNull();
+  receive({
+    ...recovered,
+    status: "waitingForApproval",
+    failure: "connectionClosed",
+  });
+  expect(
+    await screen.findByRole("status", { name: "연결 오류" }),
+  ).toBeDefined();
+  expect(screen.queryByText("승인 요청")).toBeNull();
+  await userEvent.click(threadMenu(first.title));
+  expect(await screen.findByRole("menuitem", { name: "삭제" })).toBeDefined();
+});
+
+it("retries the failed list subscription and keeps rows and request errors during recovery", async () => {
+  const first = {
+    ...responseThread("retry-list"),
+    requestFailure: "promptFailed",
+  };
+  let attempts = 0;
+  let deliver!: () => void;
+  vi.mocked(invoke).mockImplementation(async (command, args) => {
+    if (command === "list_threads") return [first];
+    if (command === "prepared_agents") return [];
+    if (command === "subscribe_thread_list") {
+      attempts++;
+      if (attempts === 1) throw new Error("registration failed");
+      deliver = () =>
+        (
+          args as { channel: { onmessage: (entries: unknown[]) => void } }
+        ).channel.onmessage([first]);
+    }
+    return "subscription";
+  });
+  render(() => <App />);
+  expect(
+    await screen.findByRole("status", {
+      name: "스레드 상태를 확인할 수 없습니다",
+    }),
+  ).toBeDefined();
+  await userEvent.click(
+    screen.getByRole("button", { name: "목록 다시 불러오기" }),
+  );
+  await waitFor(() => expect(attempts).toBe(2));
+  expect(getSidebarThreadButton(first.title)).toBeDefined();
+  expect(
+    screen.getByRole("status", { name: "스레드 상태를 확인할 수 없습니다" }),
+  ).toBeDefined();
+  deliver();
+  expect(
+    await screen.findByRole("status", { name: "요청 실패" }),
+  ).toBeDefined();
 });

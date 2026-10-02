@@ -429,7 +429,7 @@ fn serializes_patches_without_the_thread_transcript() {
         id: uuid::Uuid::new_v4(),
         message: "hello".into(),
         attachments: Vec::new(),
-        response: String::new(),
+        response_parts: Vec::new(),
         stop_reason: None,
     };
     let value = serde_json::to_value(ThreadUpdate::Patch {
@@ -449,6 +449,7 @@ fn serializes_text_deltas_with_a_thread_id() {
     let thread_id = uuid::Uuid::new_v4();
     let turn_id = uuid::Uuid::new_v4();
     let value = serde_json::to_value(ThreadUpdate::TextDelta {
+        part_id: "text-1".into(),
         thread_id,
         turn_id,
         text: "delta".into(),

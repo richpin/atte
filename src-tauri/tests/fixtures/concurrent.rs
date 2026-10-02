@@ -46,13 +46,18 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                 if text == "exit" {
                     process::exit(14);
                 }
-                send(
-                    &mut output,
-                    json!({"jsonrpc":"2.0","method":"session/update","params":{"sessionId":session,"update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":format!("reply:{text}")}}}}),
-                )?;
-                if text == "hold" || text == "approval" {
+                if !matches!(text, "no-text-hold" | "no-text-approval") {
+                    send(
+                        &mut output,
+                        json!({"jsonrpc":"2.0","method":"session/update","params":{"sessionId":session,"update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":format!("reply:{text}")}}}}),
+                    )?;
+                }
+                if matches!(
+                    text,
+                    "hold" | "approval" | "no-text-hold" | "no-text-approval"
+                ) {
                     active.insert(session.into(), request["id"].clone());
-                    if text == "approval" {
+                    if matches!(text, "approval" | "no-text-approval") {
                         send(
                             &mut output,
                             json!({"jsonrpc":"2.0","id":format!("permission:{session}"),"method":"session/request_permission","params":{"sessionId":session,"toolCall":{"toolCallId":"write","title":"Write fixture"},"options":[{"optionId":"allow","name":"Allow once","kind":"allow_once"}]}}),

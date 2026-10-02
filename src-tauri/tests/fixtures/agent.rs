@@ -403,6 +403,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
             "session/prompt" => {
                 prompts += 1;
+                if let Some(path) = env::var_os("PROMPT_METADATA_DB") {
+                    let database = rusqlite::Connection::open(path)?;
+                    let timestamp: Option<i64> = database.query_row(
+                        "SELECT last_prompt_at FROM threads WHERE session_id = ?1",
+                        [request["params"]["sessionId"]
+                            .as_str()
+                            .ok_or("missing session ID")?],
+                        |row| row.get(0),
+                    )?;
+                    writeln!(
+                        fs::OpenOptions::new().create(true).append(true).open(
+                            env::var_os("PROMPT_METADATA_LOG").ok_or("missing metadata log")?
+                        )?,
+                        "{}",
+                        serde_json::to_string(&timestamp)?
+                    )?;
+                }
                 if let Some(path) = env::var_os("PROMPT_JSON_LOG") {
                     writeln!(
                         fs::OpenOptions::new()
@@ -428,9 +445,42 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 for content in request["params"]["prompt"].as_array().into_iter().flatten() {
                     history.push(json!({"sessionUpdate":"user_message_chunk","content":content}));
                 }
+                if mode == "tool-stream" {
+                    let updates = [
+                        json!({"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"Before"}}),
+                        json!({"sessionUpdate":"tool_call","toolCallId":"read-1","title":"Read file","kind":"read","status":"pending","rawInput":{"path":"fixture.txt"}}),
+                        json!({"sessionUpdate":"tool_call_update","toolCallId":"execute-1","title":"Run tests","kind":"execute","status":"in_progress"}),
+                        json!({"sessionUpdate":"tool_call_update","toolCallId":"read-1","status":"in_progress"}),
+                        json!({"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"After"}}),
+                        json!({"sessionUpdate":"tool_call_update","toolCallId":"execute-1","status":"failed","rawOutput":"Test failure"}),
+                        json!({"sessionUpdate":"tool_call_update","toolCallId":"read-1","status":"completed","content":[{"type":"content","content":{"type":"text","text":"File contents"}}],"locations":[{"path":"/fixture.txt","line":2}]}),
+                    ];
+                    for update in updates {
+                        send(
+                            &mut output,
+                            json!({"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"remote-1","update":update}}),
+                        )?;
+                        history.push(update);
+                    }
+                    if let Some(path) = env::var_os("SESSION_FILE") {
+                        fs::write(path, serde_json::to_vec(&history)?)?;
+                    }
+                    send(
+                        &mut output,
+                        json!({"jsonrpc":"2.0","id":request["id"],"result":{"stopReason":"end_turn"}}),
+                    )?;
+                    continue;
+                }
                 history.push(json!({"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"Hello world"}}));
                 if let Some(path) = env::var_os("SESSION_FILE") {
                     fs::write(path, serde_json::to_vec(&history)?)?;
+                }
+                if mode == "empty-response" {
+                    send(
+                        &mut output,
+                        json!({"jsonrpc":"2.0","id":request["id"],"result":{"stopReason":"end_turn"}}),
+                    )?;
+                    continue;
                 }
                 assert_eq!(request["params"]["sessionId"], "remote-1");
                 if prompts == 1 {
@@ -456,6 +506,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     )?;
                 }
                 if matches!(mode.as_str(), "cancel" | "cancel-race") && prompts == 1 {
+                    if env::var_os("CANCEL_TOOL").is_some() {
+                        send(
+                            &mut output,
+                            json!({"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"remote-1","update":{"sessionUpdate":"tool_call","toolCallId":"cancel-tool","title":"Run command","kind":"execute","status":"in_progress"}}}),
+                        )?;
+                    }
+
                     send(
                         &mut output,
                         json!({"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"remote-1","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"Started"}}}}),
@@ -464,6 +521,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         serde_json::from_str(&input.next().ok_or("missing cancel")??)?;
                     assert_eq!(cancel["method"], "session/cancel");
                     assert_eq!(cancel["params"]["sessionId"], "remote-1");
+                    if env::var_os("CANCEL_TOOL").is_some() {
+                        send(
+                            &mut output,
+                            json!({"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"remote-1","update":{"sessionUpdate":"tool_call_update","toolCallId":"cancel-tool","status":"failed","rawOutput":"Command stopped"}}}),
+                        )?;
+                    }
+
                     send(
                         &mut output,
                         json!({"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"remote-1","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"late cancelled output"}}}}),

@@ -81,6 +81,17 @@ export function createAppShellModel() {
   }
 
   createEffect(() => {
+    if (view() !== "thread") return;
+    const id = threads.selectedThreadId();
+    if (!id) return;
+    const current = threads.thread();
+    const completion =
+      threads.history().find((entry) => entry.id === id)?.completedTurnId ??
+      (current?.id === id ? current.completedTurnId : undefined);
+    if (completion) threads.confirmCompletion(id, completion);
+  });
+
+  createEffect(() => {
     if (view() === "thread" && !threads.selectedThreadId()) showNewThread();
   });
 

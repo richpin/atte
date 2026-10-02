@@ -33,6 +33,8 @@ function readyThread(): Thread {
     sessionId: "session-1",
     authentication: "authenticated",
     failure: null,
+    completedTurnId: null,
+    requestFailure: null,
     turns: [],
     notice: null,
     permissions: [],
@@ -174,6 +176,7 @@ it("switches from PromptInput to PermissionInput when approval is requested", ()
     permissions: [
       {
         id: "permission-1",
+        toolCallId: "tool-1",
         title: "Run command?",
         details: "pnpm test",
         options: [{ id: "allow", name: "Allow" }],
@@ -327,10 +330,13 @@ it("disables every thread mutation while the subscription is unavailable", () =>
   const current = {
     ...readyThread(),
     status: "waitingForApproval" as const,
-    turns: [{ id: "turn", message: "hello", response: "", stopReason: null }],
+    turns: [
+      { id: "turn", message: "hello", responseParts: [], stopReason: null },
+    ],
     permissions: [
       {
         id: "permission",
+        toolCallId: "tool-1",
         title: "Run command?",
         details: "pnpm test",
         options: [{ id: "allow", name: "Allow" }],

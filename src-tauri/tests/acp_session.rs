@@ -148,6 +148,242 @@ async fn persist_remote_session(
 }
 
 #[tokio::test]
+async fn unprompted_failed_session_is_recreated_only_on_the_next_connection() {
+    use atte_lib::thread::ConnectionFailure;
+    let root = tempfile::tempdir().unwrap();
+    let log = root.path().join("requests.log");
+    let mut agent = mock_agent();
+    agent
+        .env
+        .insert("REQUEST_LOG".into(), log.to_string_lossy().into());
+    agent.env.insert("FIXTURE_MODE".into(), "load-error".into());
+    let (store, id) = persist_remote_session(root.path(), &agent).await;
+    let threads = Threads::with_store(vec![agent], store).unwrap();
+    threads.connect(id).unwrap();
+    let failed = settle(&threads, id).await;
+    assert_eq!(
+        failed.failure,
+        Some(ConnectionFailure::SessionRestorationFailed)
+    );
+    assert_eq!(
+        std::fs::read_to_string(&log)
+            .unwrap()
+            .matches("session/new")
+            .count(),
+        1
+    );
+    threads.reconnect(id).unwrap();
+    let ready = settle(&threads, id).await;
+    threads.shutdown().await;
+    assert_eq!(ready.status, ThreadStatus::SessionReady);
+    assert!(serde_json::to_value(ready).unwrap()["lastPromptAt"].is_null());
+    assert_eq!(
+        std::fs::read_to_string(&log)
+            .unwrap()
+            .matches("session/new")
+            .count(),
+        2
+    );
+}
+
+#[tokio::test]
+async fn unprompted_failure_survives_restart_and_recreation_keeps_the_queue() {
+    let root = tempfile::tempdir().unwrap();
+    let log = root.path().join("requests.log");
+    let mut agent = mock_agent();
+    agent
+        .env
+        .insert("REQUEST_LOG".into(), log.to_string_lossy().into());
+    agent.env.insert("FIXTURE_MODE".into(), "load-error".into());
+    let (store, id) = persist_remote_session(root.path(), &agent).await;
+    let threads = Threads::with_store(vec![agent.clone()], store.clone()).unwrap();
+    assert_eq!(threads.get(id).unwrap().last_prompt_at, None);
+    threads.connect(id).unwrap();
+    assert_eq!(settle(&threads, id).await.status, ThreadStatus::Failed);
+    threads.shutdown().await;
+    let queue = serde_json::json!([{"id":uuid::Uuid::new_v4(), "text":"not sent", "attachments":[], "status":"pending"}]);
+    rusqlite::Connection::open(root.path().join("atte.sqlite"))
+        .unwrap()
+        .execute(
+            "UPDATE threads SET queued_messages=?1 WHERE id=?2",
+            rusqlite::params![queue.to_string(), id.to_string()],
+        )
+        .unwrap();
+    let restarted = Threads::with_store(vec![agent], store).unwrap();
+    assert_eq!(restarted.get(id).unwrap().status, ThreadStatus::Failed);
+    restarted.connect(id).unwrap();
+    let ready = settle(&restarted, id).await;
+    restarted.shutdown().await;
+    assert_eq!(
+        (ready.id, ready.status, ready.last_prompt_at),
+        (id, ThreadStatus::SessionReady, None)
+    );
+    assert_eq!(ready.queued_messages[0].input.body, "not sent");
+    assert!(!std::fs::read_to_string(&log)
+        .unwrap()
+        .contains("session/prompt"));
+}
+
+#[tokio::test]
+async fn session_creation_failures_wait_for_another_explicit_connection() {
+    use atte_lib::thread::ConnectionFailure;
+    for (mode, failure) in [
+        ("session-error", ConnectionFailure::SessionCreationFailed),
+        ("auth", ConnectionFailure::AuthenticationRequired),
+    ] {
+        let root = tempfile::tempdir().unwrap();
+        let log = root.path().join("requests.log");
+        let mut agent = mock_agent();
+        agent
+            .env
+            .insert("REQUEST_LOG".into(), log.to_string_lossy().into());
+        agent.env.insert("FIXTURE_MODE".into(), mode.into());
+        let threads = Threads::new(vec![agent]);
+        let draft = threads.create(root.path()).unwrap();
+        for attempt in 1..=2 {
+            threads.connect(draft.id).unwrap();
+            let failed = settle(&threads, draft.id).await;
+            assert_eq!(failed.failure, Some(failure.clone()));
+            assert_eq!(failed.last_prompt_at, None);
+            assert_eq!(
+                std::fs::read_to_string(&log)
+                    .unwrap()
+                    .matches("session/new")
+                    .count(),
+                attempt
+            );
+        }
+        threads.shutdown().await;
+    }
+}
+
+#[tokio::test]
+async fn prompt_timestamp_and_session_are_persisted_before_direct_and_queued_dispatch() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("atte.sqlite");
+    let log = root.path().join("timestamps.jsonl");
+    let gate = root.path().join("release");
+    let store = std::sync::Arc::new(atte_lib::storage::Store::open(&path).unwrap());
+    let mut agent = mock_agent();
+    agent
+        .env
+        .insert("PROMPT_METADATA_DB".into(), path.to_string_lossy().into());
+    agent
+        .env
+        .insert("PROMPT_METADATA_LOG".into(), log.to_string_lossy().into());
+    agent
+        .env
+        .insert("PROMPT_GATE".into(), gate.to_string_lossy().into());
+    let threads = Threads::with_store(vec![agent.clone()], store.clone()).unwrap();
+    let draft = threads.create(root.path()).unwrap();
+    assert_eq!(draft.last_prompt_at, None);
+    threads.connect(draft.id).unwrap();
+    settle(&threads, draft.id).await;
+    threads.send_message(draft.id, "first".into()).unwrap();
+    wait_for_path(&log).await;
+    let first_timestamp = threads.get(draft.id).unwrap().last_prompt_at.unwrap();
+    threads.send_message(draft.id, "second".into()).unwrap();
+    assert_eq!(
+        threads.get(draft.id).unwrap().last_prompt_at,
+        Some(first_timestamp)
+    );
+    std::fs::write(gate, []).unwrap();
+    let completed = settle(&threads, draft.id).await;
+    threads.shutdown().await;
+    let timestamps: Vec<u64> = std::fs::read_to_string(log)
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    assert_eq!(
+        timestamps,
+        [first_timestamp, completed.last_prompt_at.unwrap()]
+    );
+    assert!(timestamps[1] > timestamps[0]);
+    let restarted = Threads::with_store(vec![agent], store).unwrap();
+    assert_eq!(
+        restarted.get(draft.id).unwrap().last_prompt_at,
+        completed.last_prompt_at
+    );
+}
+
+#[tokio::test]
+async fn timestamp_storage_failure_prevents_direct_dispatch() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("atte.sqlite");
+    let log = root.path().join("requests.log");
+    let store = std::sync::Arc::new(atte_lib::storage::Store::open(&path).unwrap());
+    let mut agent = mock_agent();
+    agent
+        .env
+        .insert("REQUEST_LOG".into(), log.to_string_lossy().into());
+    let threads = Threads::with_store(vec![agent], store).unwrap();
+    let draft = threads.create(root.path()).unwrap();
+    threads.connect(draft.id).unwrap();
+    settle(&threads, draft.id).await;
+    let database = rusqlite::Connection::open(path).unwrap();
+    database.execute_batch("CREATE TRIGGER block_prompt BEFORE UPDATE OF last_prompt_at ON threads WHEN NEW.last_prompt_at IS NOT OLD.last_prompt_at BEGIN SELECT RAISE(FAIL, 'blocked prompt timestamp'); END;").unwrap();
+    let error = threads
+        .send_message(draft.id, "keep in composer".into())
+        .unwrap_err();
+    assert!(matches!(
+        error,
+        atte_lib::thread::ThreadError::Unavailable(_)
+    ));
+    assert_eq!(threads.get(draft.id).unwrap().last_prompt_at, None);
+    assert!(threads.get(draft.id).unwrap().turns.is_empty());
+    threads.shutdown().await;
+    assert!(!std::fs::read_to_string(log)
+        .unwrap()
+        .contains("session/prompt"));
+}
+
+#[tokio::test]
+async fn timestamp_storage_failure_keeps_queued_input_retryable() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("atte.sqlite");
+    let log = root.path().join("requests.log");
+    let mut agent = mock_agent();
+    agent
+        .env
+        .insert("REQUEST_LOG".into(), log.to_string_lossy().into());
+    let (store, id) = persist_remote_session(root.path(), &agent).await;
+    let queued_id = uuid::Uuid::new_v4();
+    let queue = serde_json::json!([{"id":queued_id, "text":"retry me", "attachments":[], "status":"failed"}]);
+    let database = rusqlite::Connection::open(path).unwrap();
+    database
+        .execute(
+            "UPDATE threads SET queued_messages=?1 WHERE id=?2",
+            rusqlite::params![queue.to_string(), id.to_string()],
+        )
+        .unwrap();
+    let threads = Threads::with_store(vec![agent], store).unwrap();
+    threads.connect(id).unwrap();
+    settle(&threads, id).await;
+    database.execute_batch("CREATE TRIGGER block_prompt BEFORE UPDATE OF last_prompt_at ON threads WHEN NEW.last_prompt_at IS NOT OLD.last_prompt_at BEGIN SELECT RAISE(FAIL, 'blocked prompt timestamp'); END;").unwrap();
+    threads.retry_queued_message(id, queued_id).unwrap();
+    let blocked = threads.get(id).unwrap();
+    assert_eq!(blocked.last_prompt_at, None);
+    assert_eq!(
+        blocked.queued_messages[0].status,
+        QueuedMessageStatus::Failed
+    );
+    assert_eq!(blocked.queued_messages[0].input.body, "retry me");
+    assert!(!std::fs::read_to_string(&log)
+        .unwrap()
+        .contains("session/prompt"));
+    database
+        .execute_batch("DROP TRIGGER block_prompt;")
+        .unwrap();
+    threads.retry_queued_message(id, queued_id).unwrap();
+    let completed = settle(&threads, id).await;
+    threads.shutdown().await;
+    assert!(completed.last_prompt_at.is_some());
+    assert!(completed.queued_messages.is_empty());
+    assert_eq!(completed.turns[0].message, "retry me");
+}
+
+#[tokio::test]
 async fn session_titles_update_running_and_idle_subscriptions_and_survive_restart() {
     use serde_json::json;
     let folder = tempfile::tempdir().unwrap();
@@ -210,7 +446,7 @@ async fn session_titles_update_running_and_idle_subscriptions_and_survive_restar
                 assert!(saw_running_title);
                 assert_eq!(thread.last_prompt_at, prompt_at);
                 assert_eq!(thread.turns[0].message, "First input");
-                assert_eq!(thread.turns[0].response, "Hello world");
+                assert_eq!(thread.turns[0].response_text(), "Hello world");
                 break;
             }
         }
@@ -353,7 +589,7 @@ async fn shutdown_stops_all_work_and_restores_queues_without_dispatch() {
         tokio::time::timeout(Duration::from_secs(5), async {
             loop {
                 let next = stream.recv().await.unwrap();
-                if (message == "hold" && !next.turns[0].response.is_empty())
+                if (message == "hold" && !next.turns[0].response_text().is_empty())
                     || next.status == ThreadStatus::WaitingForApproval
                 {
                     break;
@@ -450,7 +686,7 @@ async fn shared_connection_isolates_sessions_permissions_and_cancellation() {
         .send_message(second.id, "independent".into())
         .unwrap();
     assert_eq!(
-        settle(&threads, second.id).await.turns[0].response,
+        settle(&threads, second.id).await.turns[0].response_text(),
         "reply:independent"
     );
     threads.send_message(second.id, "hold".into()).unwrap();
@@ -507,7 +743,7 @@ async fn deleting_an_active_session_is_detached_and_keeps_shared_sessions_usable
         .send_message(remaining.id, "independent".into())
         .unwrap();
     assert_eq!(
-        settle(&threads, remaining.id).await.turns[0].response,
+        settle(&threads, remaining.id).await.turns[0].response_text(),
         "reply:independent"
     );
     let requests = std::fs::read_to_string(log).unwrap();
@@ -539,7 +775,7 @@ async fn deleting_without_remote_capability_skips_the_request_and_keeps_shared_s
         .unwrap();
 
     assert_eq!(
-        settle(&threads, remaining.id).await.turns[0].response,
+        settle(&threads, remaining.id).await.turns[0].response_text(),
         "reply:still connected"
     );
     assert!(!std::fs::read_to_string(log)
@@ -971,7 +1207,7 @@ async fn real_codex_concurrent_sessions_keep_approval_and_queue_isolated() {
     .await
     .unwrap();
     assert_eq!(finished.status, ThreadStatus::SessionReady, "{finished:?}");
-    assert!(finished.turns[0].response.contains("ATTE-07-SECOND"));
+    assert!(finished.turns[0].response_text().contains("ATTE-07-SECOND"));
     assert_eq!(
         threads.get(first.id).unwrap().status,
         ThreadStatus::WaitingForApproval
@@ -1002,6 +1238,8 @@ async fn queues_followups_and_dispatches_them_in_fifo_order_after_completion() {
     }
     let queued = threads.get(draft.id).unwrap();
     assert_eq!(queued.turns.len(), 1);
+    let mut stream = subscribe(&threads, draft.id);
+    let mut list = threads.subscribe_list().unwrap();
     std::fs::write(gate, "continue").unwrap();
     let finished = settle(&threads, draft.id).await;
     assert_eq!(
@@ -1012,6 +1250,23 @@ async fn queues_followups_and_dispatches_them_in_fifo_order_after_completion() {
             .collect::<Vec<_>>(),
         ["first", "second", "third"]
     );
+    let expected: Vec<_> = finished.turns.iter().map(|turn| turn.id).collect();
+    tokio::time::timeout(Duration::from_secs(5), async {
+        for expected_id in &expected {
+            loop {
+                if stream.recv().await.unwrap().completed_turn_id == Some(*expected_id) {
+                    break;
+                }
+            }
+            loop {
+                if list.recv().await.unwrap()[0].completed_turn_id == Some(*expected_id) {
+                    break;
+                }
+            }
+        }
+    })
+    .await
+    .unwrap();
     assert!(finished
         .turns
         .iter()
@@ -1705,6 +1960,15 @@ async fn failed_queued_input_blocks_fifo_until_the_user_retries_the_same_input()
     })
     .await
     .unwrap();
+    assert_eq!(
+        failed.request_failure,
+        Some(atte_lib::thread::ConnectionFailure::PromptFailed)
+    );
+    assert_eq!(failed.completed_turn_id, Some(failed.turns[0].id));
+    assert_eq!(
+        threads.list().unwrap()[0].request_failure,
+        failed.request_failure
+    );
     assert_eq!(failed.queued_messages.len(), 2);
     assert_eq!(failed.queued_messages[0].input.body, "retry me");
     assert_eq!(failed.queued_messages[1].input.body, "after me");
@@ -1726,6 +1990,11 @@ async fn failed_queued_input_blocks_fifo_until_the_user_retries_the_same_input()
         .unwrap();
     let completed = settle(&threads, draft.id).await;
 
+    assert_eq!(completed.request_failure, None);
+    assert_eq!(
+        completed.completed_turn_id,
+        completed.turns.last().map(|turn| turn.id)
+    );
     assert!(completed.queued_messages.is_empty());
     assert_eq!(
         completed
@@ -1849,6 +2118,8 @@ async fn cancellation_intent_prevents_queue_dispatch_even_when_completion_wins_o
     threads.cancel_turn(draft.id, turn).unwrap();
     let stopped = settle(&threads, draft.id).await;
     assert!(stopped.interrupted);
+    assert_eq!(stopped.completed_turn_id, None);
+    assert_eq!(stopped.turns[0].stop_reason.as_deref(), Some("cancelled"));
     assert_eq!(stopped.turns.len(), 1);
     assert_eq!(stopped.queued_messages[0].input.body, "keep");
     threads.shutdown().await;
@@ -1868,7 +2139,10 @@ async fn failed_queue_storage_does_not_acknowledge_or_send_input() {
     threads.send_message(draft.id, "first".into()).unwrap();
     let mut updates = subscribe(&threads, draft.id);
     tokio::time::timeout(Duration::from_secs(5), async {
-        while updates.recv().await.unwrap().turns[0].response.is_empty() {}
+        while updates.recv().await.unwrap().turns[0]
+            .response_text()
+            .is_empty()
+        {}
     })
     .await
     .unwrap();
@@ -1904,7 +2178,7 @@ async fn failed_removal_storage_keeps_the_followup_without_dispatching_it() {
     threads.send_message(draft.id, "keep".into()).unwrap();
     let mut updates = subscribe(&threads, draft.id);
     tokio::time::timeout(Duration::from_secs(5), async {
-        while updates.recv().await.unwrap().turns[0].response != "Hello" {}
+        while updates.recv().await.unwrap().turns[0].response_text() != "Hello" {}
     })
     .await
     .unwrap();
@@ -1922,7 +2196,7 @@ async fn failed_removal_storage_keeps_the_followup_without_dispatching_it() {
     .await
     .unwrap();
     writer.execute_batch("ROLLBACK").unwrap();
-    assert_eq!(completed.turns.len(), 2);
+    assert_eq!(completed.turns.len(), 1);
     assert_eq!(completed.turns[0].stop_reason.as_deref(), Some("end_turn"));
     assert_eq!(completed.queued_messages[0].input.body, "keep");
     assert!(completed.notice.is_some());
@@ -2011,7 +2285,7 @@ async fn restores_agent_history_after_restart_without_persisting_a_transcript() 
     assert_eq!(loaded.status, ThreadStatus::SessionReady);
     assert_eq!(loaded.turns.len(), 1);
     assert_eq!(loaded.turns[0].message, "Remember my marker");
-    assert_eq!(loaded.turns[0].response, "Hello world");
+    assert_eq!(loaded.turns[0].response_text(), "Hello world");
     restored.connect(draft.id).unwrap();
     assert_eq!(restored.get(draft.id).unwrap().turns.len(), 1);
     restored.send_message(draft.id, "Follow up".into()).unwrap();
@@ -2125,6 +2399,13 @@ async fn failed_restoration_keeps_the_reference_and_never_exposes_partial_replay
         let restored = Threads::with_store(vec![agent.clone()], store).unwrap();
         restored.connect(draft.id).unwrap();
         let failed = settle(&restored, draft.id).await;
+        assert_eq!(failed.completed_turn_id, None);
+        if mode == "prompt-error" {
+            assert_eq!(
+                failed.request_failure,
+                Some(ConnectionFailure::PromptFailed)
+            );
+        }
         assert_eq!(failed.failure, Some(failure), "{mode}");
         assert_eq!(failed.session_id.as_deref(), Some("remote-1"));
         assert!(failed.turns.is_empty());
@@ -2253,7 +2534,7 @@ async fn replay_keeps_distinct_message_ids_even_when_the_text_is_identical() {
             .collect::<Vec<_>>(),
         ["Same question", "Same question"]
     );
-    assert_eq!(loaded.turns[1].response, "Answer");
+    assert_eq!(loaded.turns[1].response_text(), "Answer");
     restored.shutdown().await;
     assert_eq!(
         std::fs::read_to_string(log).unwrap(),
@@ -2339,7 +2620,7 @@ async fn real_codex_restores_history_and_context_after_process_and_core_restart(
     .await
     .unwrap();
     assert_eq!(original.status, ThreadStatus::SessionReady, "{original:?}");
-    assert!(original.turns[0].response.contains(&marker));
+    assert!(original.turns[0].response_text().contains(&marker));
     first.shutdown().await;
     drop(first);
     let restored = Threads::with_store(vec![atte_lib::agent::prepared_codex()], store).unwrap();
@@ -2351,7 +2632,7 @@ async fn real_codex_restores_history_and_context_after_process_and_core_restart(
     assert!(loaded
         .turns
         .iter()
-        .any(|turn| turn.response.contains(&marker)));
+        .any(|turn| turn.response_text().contains(&marker)));
     restored.send_message(draft.id, "Without tools or file access, what marker did I ask you to remember? Reply with the marker only.".into()).unwrap();
     let answer = tokio::time::timeout(Duration::from_secs(120), async {
         let mut updates = subscribe(&restored, draft.id);
@@ -2366,7 +2647,12 @@ async fn real_codex_restores_history_and_context_after_process_and_core_restart(
     .await
     .unwrap();
     assert_eq!(answer.status, ThreadStatus::SessionReady, "{answer:?}");
-    assert!(answer.turns.last().unwrap().response.contains(&marker));
+    assert!(answer
+        .turns
+        .last()
+        .unwrap()
+        .response_text()
+        .contains(&marker));
     restored.shutdown().await;
 }
 
@@ -2387,7 +2673,7 @@ async fn cancels_only_the_active_turn_and_continues_the_same_session() {
             if thread
                 .turns
                 .last()
-                .is_some_and(|turn| turn.response == "Started")
+                .is_some_and(|turn| turn.response_text() == "Started")
             {
                 break thread;
             }
@@ -2401,14 +2687,14 @@ async fn cancels_only_the_active_turn_and_continues_the_same_session() {
     let cancelled = settle(&threads, draft.id).await;
     assert_eq!(cancelled.status, ThreadStatus::SessionReady);
     assert_eq!(cancelled.turns[0].stop_reason.as_deref(), Some("cancelled"));
-    assert_eq!(cancelled.turns[0].response, "Started");
+    assert_eq!(cancelled.turns[0].response_text(), "Started");
     assert!(cancelled.interrupted);
     threads.send_message(draft.id, "continue".into()).unwrap();
     assert!(threads.cancel_turn(draft.id, turn).is_err());
     let completed = settle(&threads, draft.id).await;
     assert_eq!(completed.session_id, active.session_id);
     assert_eq!(completed.turns.len(), 2);
-    assert_eq!(completed.turns[1].response, "Hello world");
+    assert_eq!(completed.turns[1].response_text(), "Hello world");
     threads.shutdown().await;
 }
 
@@ -2785,7 +3071,7 @@ async fn configuration_failure_rolls_back_without_interrupting_turn_or_queue() {
     tokio::time::timeout(Duration::from_secs(5), async {
         loop {
             let thread = threads.get(draft.id).unwrap();
-            if thread.turns[0].response == "Started" {
+            if thread.turns[0].response_text() == "Started" {
                 break;
             }
             tokio::time::sleep(Duration::from_millis(10)).await;
@@ -3391,7 +3677,7 @@ async fn streams_ordered_turns_and_sends_followups_in_the_same_session() {
             .await
             .unwrap()
             .unwrap();
-        texts.push(next.turns[0].response.clone());
+        texts.push(next.turns[0].response_text().clone());
         if next.status == ThreadStatus::SessionReady {
             break;
         }
@@ -3406,7 +3692,7 @@ async fn streams_ordered_turns_and_sends_followups_in_the_same_session() {
         if next.status == ThreadStatus::SessionReady {
             assert_eq!(next.session_id.as_deref(), Some("remote-1"));
             assert_eq!(next.turns.len(), 2);
-            assert_eq!(next.turns[1].response, "Hello world");
+            assert_eq!(next.turns[1].response_text(), "Hello world");
             assert_eq!(next.turns[1].stop_reason.as_deref(), Some("end_turn"));
             break;
         }
@@ -3464,7 +3750,7 @@ async fn resubscription_is_coherent_and_detaching_does_not_stop_a_turn() {
     let first = tokio::time::timeout(Duration::from_secs(5), async {
         loop {
             let next = stream.recv().await.unwrap();
-            if next.turns[0].response == "Hello" {
+            if next.turns[0].response_text() == "Hello" {
                 break next;
             }
         }
@@ -3489,7 +3775,7 @@ async fn resubscription_is_coherent_and_detaching_does_not_stop_a_turn() {
     .unwrap();
     let mut resumed = subscribe(&threads, draft.id);
     assert_eq!(resumed.recv().await.unwrap(), completed);
-    assert_eq!(completed.turns[0].response, "Hello world");
+    assert_eq!(completed.turns[0].response_text(), "Hello world");
     threads.shutdown().await;
 }
 
@@ -3564,12 +3850,14 @@ async fn prompt_failures_preserve_partial_output_and_reject_stale_updates() {
         .await
         .unwrap();
         assert_eq!(failed.failure, Some(failure), "{mode}");
-        assert_eq!(failed.turns[0].response, "Hello world");
+        assert_eq!(failed.turns[0].response_text(), "Hello world");
         assert!(threads.send_message(draft.id, "retry".into()).is_err());
         threads.connect(draft.id).unwrap();
         let reconnected = settle(&threads, draft.id).await;
         assert_eq!(reconnected.status, ThreadStatus::SessionReady);
-        assert_eq!(reconnected.turns[0].response, "Hello world");
+        assert_eq!(reconnected.request_failure, None);
+        assert_eq!(reconnected.completed_turn_id, None);
+        assert_eq!(reconnected.turns[0].response_text(), "Hello world");
         threads.shutdown().await;
     }
 }
@@ -3602,6 +3890,11 @@ async fn permission_preserves_agent_choices_and_answers_exactly_once() {
         .unwrap();
         let permission = &waiting.permissions[0];
         assert_eq!(permission.title, "Write fixture.txt");
+        assert_eq!(permission.tool_call_id, "tool-1");
+        let tool = serde_json::to_value(&waiting.turns[0].response_parts).unwrap();
+        assert_eq!(tool[0]["kind"], "tool");
+        assert_eq!(tool[0]["id"], permission.tool_call_id);
+        assert_eq!(tool[0]["tool"]["title"], permission.title);
         assert!(permission.details.contains("fixture.txt"));
         assert_eq!(
             permission
@@ -3625,8 +3918,13 @@ async fn permission_preserves_agent_choices_and_answers_exactly_once() {
             .is_err());
         let completed = settle(&threads, draft.id).await;
         assert!(completed.permissions.is_empty());
+        assert_eq!(completed.completed_turn_id, Some(completed.turns[0].id));
         assert_eq!(
-            completed.turns[0].response,
+            threads.list().unwrap()[0].completed_turn_id,
+            completed.completed_turn_id
+        );
+        assert_eq!(
+            completed.turns[0].response_text(),
             format!("selected:{option}Hello world")
         );
         threads.shutdown().await;
@@ -3728,10 +4026,10 @@ async fn cancelling_permission_resolves_pending_and_late_requests_without_execut
     assert_eq!(cancelled.status, ThreadStatus::SessionReady);
     assert!(cancelled.permissions.is_empty());
     assert_eq!(cancelled.turns[0].stop_reason.as_deref(), Some("cancelled"));
-    assert_eq!(cancelled.turns[0].response, "");
+    assert_eq!(cancelled.turns[0].response_text(), "");
     threads.send_message(draft.id, "follow up".into()).unwrap();
     let completed = settle(&threads, draft.id).await;
-    assert_eq!(completed.turns[1].response, "Hello world");
+    assert_eq!(completed.turns[1].response_text(), "Hello world");
     assert_eq!(completed.session_id, waiting.session_id);
     threads.shutdown().await;
 }
@@ -3761,13 +4059,13 @@ async fn real_codex_streams_and_continues_without_file_changes() {
                 let next = stream.recv().await.unwrap();
                 if next.status == ThreadStatus::Failed { return Err(format!("{next:?}")); }
                 if let Some(turn) = next.turns.last() {
-                    if next.status == ThreadStatus::Running && !turn.response.is_empty() { streamed += 1; }
+                    if next.status == ThreadStatus::Running && !turn.response_text().is_empty() { streamed += 1; }
                     if next.status == ThreadStatus::SessionReady {
                         assert_eq!(next.session_id, session);
                         assert_eq!(turn.stop_reason.as_deref(), Some("end_turn"));
-                        assert!(turn.response.contains("cobalt-73"), "{}", turn.response);
+                        assert!(turn.response_text().contains("cobalt-73"), "{}", turn.response_text());
                         assert!(streamed > 0);
-                        println!("turn {}: {streamed} streamed chunks; response: {}", next.turns.len(), turn.response);
+                        println!("turn {}: {streamed} streamed chunks; response: {}", next.turns.len(), turn.response_text());
                         break;
                     }
                 }
@@ -3830,6 +4128,7 @@ impl TranscriptSubscription {
                 thread_id,
                 turn_id,
                 text,
+                part_id,
             } => {
                 let thread = self
                     .thread
@@ -3838,7 +4137,23 @@ impl TranscriptSubscription {
                 assert_eq!(thread_id, thread.id);
                 let turn = thread.turns.last_mut().unwrap();
                 assert_eq!(turn_id, turn.id);
-                turn.response.push_str(&text);
+                if let Some(atte_lib::thread::ResponsePart::Text { text: previous, .. }) = turn.response_parts.iter_mut().find(|part| matches!(part, atte_lib::thread::ResponsePart::Text { id, .. } if id == &part_id)) { previous.push_str(&text); }
+                else { turn.response_parts.push(atte_lib::thread::ResponsePart::Text { id: part_id, text }); }
+            }
+            ThreadUpdate::ToolUpdate {
+                thread_id,
+                turn_id,
+                part,
+            } => {
+                let thread = self.thread.as_mut().unwrap();
+                assert_eq!(thread_id, thread.id);
+                let turn = thread.turns.last_mut().unwrap();
+                assert_eq!(turn_id, turn.id);
+                let atte_lib::thread::ResponsePart::Tool { id, .. } = &part else {
+                    panic!("tool update");
+                };
+                if let Some(previous) = turn.response_parts.iter_mut().find(|previous| matches!(previous, atte_lib::thread::ResponsePart::Tool { id: existing, .. } if existing == id)) { *previous = part; }
+                else { turn.response_parts.push(part); }
             }
         }
         self.thread.clone()
@@ -3869,7 +4184,7 @@ async fn preserves_authentication_error_when_process_exit_races_with_buffered_ou
             if next
                 .turns
                 .last()
-                .is_some_and(|turn| turn.response == "Hello")
+                .is_some_and(|turn| turn.response_text() == "Hello")
             {
                 break;
             }
@@ -3897,7 +4212,7 @@ async fn preserves_authentication_error_when_process_exit_races_with_buffered_ou
         Some(ConnectionFailure::AuthenticationRequired)
     );
     assert_eq!(failed.authentication, AuthenticationStatus::Required);
-    assert_eq!(failed.turns[0].response, "Hello world");
+    assert_eq!(failed.turns[0].response_text(), "Hello world");
 }
 
 #[tokio::test]
@@ -3916,7 +4231,7 @@ async fn installing_an_agent_preserves_the_existing_connection_and_subscription(
     threads.send_message(draft.id, "hello".into()).unwrap();
     let ready = settle(&threads, draft.id).await;
     assert_eq!(ready.agent_id, "fixture");
-    assert_eq!(ready.turns[0].response, "Hello world");
+    assert_eq!(ready.turns[0].response_text(), "Hello world");
     assert!(updates.recv().await.is_some());
     threads.shutdown().await;
 }
@@ -4040,7 +4355,7 @@ async fn draining_an_agent_waits_for_every_active_turn() {
                 .unwrap()
                 .turns
                 .last()
-                .is_none_or(|turn| turn.response != "Hello")
+                .is_none_or(|turn| turn.response_text() != "Hello")
             {}
         })
         .await
@@ -4087,7 +4402,7 @@ async fn draining_dispatches_a_preserved_message_only_on_the_replacement() {
             .unwrap()
             .turns
             .last()
-            .is_none_or(|turn| turn.response != "Hello")
+            .is_none_or(|turn| turn.response_text() != "Hello")
         {}
     })
     .await
@@ -4192,7 +4507,7 @@ async fn a_new_connection_cannot_start_on_the_old_definition_during_promotion() 
             .unwrap()
             .turns
             .last()
-            .is_none_or(|turn| turn.response != "Hello")
+            .is_none_or(|turn| turn.response_text() != "Hello")
         {}
     })
     .await
@@ -4293,7 +4608,7 @@ async fn a_failed_promotion_retry_resumes_the_preserved_queue() {
             .unwrap()
             .turns
             .last()
-            .is_none_or(|turn| turn.response != "Hello")
+            .is_none_or(|turn| turn.response_text() != "Hello")
         {}
     })
     .await
@@ -4702,7 +5017,7 @@ async fn logout_does_not_cancel_an_active_turn_or_replace_its_runtime() {
             .unwrap()
             .turns
             .last()
-            .is_none_or(|turn| turn.response != "Hello")
+            .is_none_or(|turn| turn.response_text() != "Hello")
         {
             tokio::time::sleep(Duration::from_millis(5)).await;
         }
@@ -4717,7 +5032,7 @@ async fn logout_does_not_cancel_an_active_turn_or_replace_its_runtime() {
     std::fs::write(gate, "continue").unwrap();
     let finished = settle(&threads, draft.id).await;
     assert_eq!(finished.status, ThreadStatus::SessionReady);
-    assert_eq!(finished.turns[0].response, "Hello world");
+    assert_eq!(finished.turns[0].response_text(), "Hello world");
     threads.shutdown().await;
 }
 
@@ -4940,7 +5255,7 @@ async fn removing_one_agent_stops_its_running_turn_and_preserves_other_agents() 
         .send_message(draft.id, "blocked response".into())
         .unwrap();
     tokio::time::timeout(Duration::from_secs(5), async {
-        while threads.get(draft.id).unwrap().turns[0].response != "Hello" {
+        while threads.get(draft.id).unwrap().turns[0].response_text() != "Hello" {
             tokio::time::sleep(Duration::from_millis(5)).await;
         }
     })
@@ -4951,7 +5266,7 @@ async fn removing_one_agent_stops_its_running_turn_and_preserves_other_agents() 
     assert!(kill(pid, None).is_err());
     let removed = threads.get(draft.id).unwrap();
     assert_eq!(removed.failure, Some(ConnectionFailure::AgentRemoved));
-    assert_eq!(removed.turns[0].response, "Hello");
+    assert_eq!(removed.turns[0].response_text(), "Hello");
     assert_eq!(removed.turns[0].stop_reason.as_deref(), Some("cancelled"));
     assert!(threads.connect(draft.id).is_err());
     assert_eq!(threads.prepared_agents()[0].id, "other");
@@ -4959,7 +5274,7 @@ async fn removing_one_agent_stops_its_running_turn_and_preserves_other_agents() 
         .send_message(other.id, "still connected".into())
         .unwrap();
     assert_eq!(
-        settle(&threads, other.id).await.turns[0].response,
+        settle(&threads, other.id).await.turns[0].response_text(),
         "Hello world"
     );
     assert_eq!(threads.get(draft.id).unwrap(), removed);
@@ -5062,7 +5377,10 @@ async fn manual_reconnect_resumes_the_same_session_and_preserves_history() {
         assert_eq!(restored.status, ThreadStatus::SessionReady);
         assert_eq!(restored.session_id, ready.session_id);
         assert_eq!(restored.turns[0].message, completed.turns[0].message);
-        assert_eq!(restored.turns[0].response, completed.turns[0].response);
+        assert_eq!(
+            restored.turns[0].response_text(),
+            completed.turns[0].response_text()
+        );
     }
     threads.send_message(draft.id, "continue".into()).unwrap();
     assert_eq!(settle(&threads, draft.id).await.turns.len(), 2);
@@ -5110,7 +5428,7 @@ async fn manual_reconnect_isolates_shared_work_and_rejects_busy_threads() {
         .send_message(first.id, "after reconnect".into())
         .unwrap();
     assert_eq!(
-        settle(&threads, first.id).await.turns[0].response,
+        settle(&threads, first.id).await.turns[0].response_text(),
         "reply:after reconnect"
     );
     let requests = std::fs::read_to_string(log).unwrap();
@@ -5132,5 +5450,226 @@ async fn manual_reconnect_isolates_shared_work_and_rejects_busy_threads() {
     threads.cancel_turn(second.id, waiting.turns[0].id).unwrap();
     assert!(threads.reconnect(second.id).is_err());
     settle(&threads, second.id).await;
+    threads.shutdown().await;
+}
+
+#[tokio::test]
+async fn response_completion_is_delivered_to_thread_and_list_without_text() {
+    let folder = tempfile::tempdir().unwrap();
+    let mut agent = mock_agent();
+    agent
+        .env
+        .insert("FIXTURE_MODE".into(), "empty-response".into());
+    let threads = Threads::new(vec![agent]);
+    let draft = threads.create(folder.path()).unwrap();
+    threads.connect(draft.id).unwrap();
+    settle(&threads, draft.id).await;
+    let mut stream = subscribe(&threads, draft.id);
+    let mut list = threads.subscribe_list().unwrap();
+    threads.send_message(draft.id, "hello".into()).unwrap();
+    let completed = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let current = stream.recv().await.unwrap();
+            if current.status == ThreadStatus::SessionReady && !current.turns.is_empty() {
+                break current;
+            }
+        }
+    })
+    .await
+    .unwrap();
+    let completed_json = serde_json::to_value(&completed).unwrap();
+    assert_eq!(
+        completed_json["completedTurnId"],
+        completed.turns[0].id.to_string()
+    );
+    assert!(completed.turns[0].response_text().is_empty());
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let entries = list.recv().await.unwrap();
+            if serde_json::to_value(&entries[0]).unwrap()["completedTurnId"]
+                == completed_json["completedTurnId"]
+            {
+                break;
+            }
+        }
+    })
+    .await
+    .unwrap();
+    threads.shutdown().await;
+}
+
+#[tokio::test]
+async fn completion_is_reset_on_restart_without_reconstructing_from_remote_history() {
+    let root = tempfile::tempdir().unwrap();
+    let store = std::sync::Arc::new(
+        atte_lib::storage::Store::open(&root.path().join("atte.sqlite")).unwrap(),
+    );
+    let mut agent = mock_agent();
+    agent.env.insert(
+        "SESSION_FILE".into(),
+        root.path().join("history.json").to_string_lossy().into(),
+    );
+    let threads = Threads::with_store(vec![agent.clone()], store.clone()).unwrap();
+    let draft = threads.create(root.path()).unwrap();
+    threads.connect(draft.id).unwrap();
+    settle(&threads, draft.id).await;
+    threads
+        .send_message(draft.id, "complete before restart".into())
+        .unwrap();
+    let completed = settle(&threads, draft.id).await;
+    assert_eq!(completed.completed_turn_id, Some(completed.turns[0].id));
+    threads.shutdown().await;
+    drop(threads);
+    let restored = Threads::with_store(vec![agent], store).unwrap();
+    assert_eq!(restored.list().unwrap()[0].completed_turn_id, None);
+    assert_eq!(restored.get(draft.id).unwrap().request_failure, None);
+    restored.connect(draft.id).unwrap();
+    let ready = settle(&restored, draft.id).await;
+    assert_eq!(ready.turns[0].response_text(), "Hello world");
+    assert_eq!(ready.completed_turn_id, None);
+    restored.shutdown().await;
+}
+
+#[tokio::test]
+async fn cancellation_preserves_previous_completion_and_empty_approval_completes_normally() {
+    let folder = tempfile::tempdir().unwrap();
+    let mut agent = mock_agent();
+    agent.env.insert("FIXTURE_MODE".into(), "concurrent".into());
+    let threads = Threads::new(vec![agent]);
+    let draft = threads.create(folder.path()).unwrap();
+    threads.connect(draft.id).unwrap();
+    settle(&threads, draft.id).await;
+    threads.send_message(draft.id, "complete".into()).unwrap();
+    let first = settle(&threads, draft.id).await;
+    let mut stream = subscribe(&threads, draft.id);
+    let mut list = threads.subscribe_list().unwrap();
+    threads
+        .send_message(draft.id, "no-text-hold".into())
+        .unwrap();
+    let active = threads.get(draft.id).unwrap();
+    assert_eq!(active.completed_turn_id, first.completed_turn_id);
+    threads.cancel_turn(draft.id, active.turns[1].id).unwrap();
+    let cancelled = settle(&threads, draft.id).await;
+    assert_eq!(cancelled.completed_turn_id, first.completed_turn_id);
+    assert!(cancelled.turns[1].response_text().is_empty());
+    threads
+        .send_message(draft.id, "no-text-approval".into())
+        .unwrap();
+    let waiting = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let current = stream.recv().await.unwrap();
+            if current.status == ThreadStatus::WaitingForApproval {
+                break current;
+            }
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(waiting.completed_turn_id, first.completed_turn_id);
+    assert!(waiting.turns[2].response_text().is_empty());
+    threads
+        .answer_permission(draft.id, waiting.permissions[0].id, "allow".into())
+        .unwrap();
+    let completed = settle(&threads, draft.id).await;
+    assert_eq!(completed.completed_turn_id, Some(completed.turns[2].id));
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            if list.recv().await.unwrap()[0].completed_turn_id == completed.completed_turn_id {
+                break;
+            }
+        }
+    })
+    .await
+    .unwrap();
+    threads.shutdown().await;
+}
+
+#[tokio::test]
+async fn streams_interleaved_tool_updates_and_restores_the_same_results() {
+    use atte_lib::thread::ResponsePart;
+    let folder = tempfile::tempdir().unwrap();
+    let mut agent = mock_agent();
+    agent
+        .env
+        .insert("FIXTURE_MODE".into(), "tool-stream".into());
+    agent.env.insert(
+        "SESSION_FILE".into(),
+        folder.path().join("history.json").to_string_lossy().into(),
+    );
+    let threads = Threads::new(vec![agent]);
+    let draft = threads.create(folder.path()).unwrap();
+    threads.connect(draft.id).unwrap();
+    assert_eq!(
+        settle(&threads, draft.id).await.status,
+        ThreadStatus::SessionReady
+    );
+    let mut stream = subscribe(&threads, draft.id);
+    threads.send_message(draft.id, "Inspect".into()).unwrap();
+    let completed = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let next = stream.recv().await.unwrap();
+            if next.status == ThreadStatus::SessionReady && !next.turns.is_empty() {
+                break next;
+            }
+        }
+    })
+    .await
+    .unwrap();
+    let parts = &completed.turns[0].response_parts;
+    assert_eq!(parts.len(), 4);
+    assert!(matches!(&parts[0], ResponsePart::Text { text, .. } if text == "Before"));
+    assert!(matches!(&parts[3], ResponsePart::Text { text, .. } if text == "After"));
+    let value = serde_json::to_value(parts).unwrap();
+    assert_eq!(value[1]["tool"]["status"], "completed");
+    assert_eq!(value[1]["tool"]["rawInput"]["path"], "fixture.txt");
+    assert_eq!(value[2]["tool"]["status"], "failed");
+    assert_eq!(
+        threads.get(draft.id).unwrap().turns[0].response_parts,
+        *parts
+    );
+    let mut snapshot = threads.subscribe(draft.id).unwrap();
+    let atte_lib::thread::ThreadUpdate::Thread { thread } = snapshot.recv().await.unwrap() else {
+        panic!("snapshot");
+    };
+    assert_eq!(thread.turns[0].response_parts, *parts);
+    threads.reconnect(draft.id).unwrap();
+    let restored = settle(&threads, draft.id).await;
+    assert_eq!(restored.turns[0].response_text(), "BeforeAfter");
+    assert_eq!(restored.turns[0].response_parts[1..3], parts[1..3]);
+    threads.shutdown().await;
+}
+
+#[tokio::test]
+async fn receives_final_tool_results_after_cancellation_without_late_response_text() {
+    let folder = tempfile::tempdir().unwrap();
+    let mut agent = mock_agent();
+    agent.env.insert("FIXTURE_MODE".into(), "cancel".into());
+    agent.env.insert("CANCEL_TOOL".into(), "1".into());
+    let threads = Threads::new(vec![agent]);
+    let draft = threads.create(folder.path()).unwrap();
+    threads.connect(draft.id).unwrap();
+    settle(&threads, draft.id).await;
+    let mut stream = subscribe(&threads, draft.id);
+    threads.send_message(draft.id, "Run".into()).unwrap();
+    let active = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let next = stream.recv().await.unwrap();
+            if next
+                .turns
+                .last()
+                .is_some_and(|turn| turn.response_text() == "Started")
+            {
+                break next;
+            }
+        }
+    })
+    .await
+    .unwrap();
+    threads.cancel_turn(draft.id, active.turns[0].id).unwrap();
+    let cancelled = settle(&threads, draft.id).await;
+    assert_eq!(cancelled.turns[0].response_text(), "Started");
+    let parts = serde_json::to_value(&cancelled.turns[0].response_parts).unwrap();
+    assert_eq!(parts[0]["tool"]["status"], "failed");
+    assert_eq!(parts[0]["tool"]["rawOutput"], "Command stopped");
     threads.shutdown().await;
 }

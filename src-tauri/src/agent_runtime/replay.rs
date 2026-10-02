@@ -30,7 +30,7 @@ impl Replay {
                         id: Uuid::new_v4(),
                         message: String::new(),
                         attachments: Vec::new(),
-                        response: String::new(),
+                        response_parts: Vec::new(),
                         stop_reason: None,
                     });
                 }
@@ -64,19 +64,37 @@ impl Replay {
                         id: Uuid::new_v4(),
                         message: String::new(),
                         attachments: Vec::new(),
-                        response: String::new(),
+                        response_parts: Vec::new(),
                         stop_reason: None,
                     });
                 }
                 if let (Some(turn), ContentBlock::Text(text)) =
                     (self.turns.last_mut(), chunk.content)
                 {
-                    turn.response.push_str(&text.text);
+                    turn.append_response_text(&text.text);
                 }
                 self.user_chunk = false;
             }
+            SessionUpdate::ToolCall(tool) => self.update_tool(tool.into()),
+            SessionUpdate::ToolCallUpdate(tool) => self.update_tool(tool),
             _ => {}
         }
+    }
+
+    fn update_tool(&mut self, tool: agent_client_protocol::schema::v1::ToolCallUpdate) {
+        if self.turns.is_empty() {
+            self.turns.push(Turn {
+                id: Uuid::new_v4(),
+                message: String::new(),
+                attachments: Vec::new(),
+                response_parts: Vec::new(),
+                stop_reason: None,
+            });
+        }
+        if let Some(turn) = self.turns.last_mut() {
+            turn.update_tool(tool);
+        }
+        self.user_chunk = false;
     }
 }
 
@@ -88,4 +106,30 @@ fn attachment_name(
         .and_then(|name| name.as_str())
         .unwrap_or(fallback)
         .to_owned()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn tool_only_replies_separate_identical_user_messages_and_restore_updates() {
+        let mut replay = Replay::new();
+        for update in [
+            json!({"sessionUpdate":"user_message_chunk","content":{"type":"text","text":"Again"}}),
+            json!({"sessionUpdate":"tool_call","toolCallId":"a","title":"Read","status":"in_progress"}),
+            json!({"sessionUpdate":"tool_call_update","toolCallId":"a","status":"completed"}),
+            json!({"sessionUpdate":"user_message_chunk","content":{"type":"text","text":"Again"}}),
+            json!({"sessionUpdate":"tool_call_update","toolCallId":"b","title":"Search","status":"completed"}),
+            json!({"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"Found it"}}),
+        ] {
+            replay.update(serde_json::from_value(update).unwrap());
+        }
+        assert_eq!(replay.turns.len(), 2);
+        let value = serde_json::to_value(&replay.turns).unwrap();
+        assert_eq!(value[0]["responseParts"][0]["tool"]["status"], "completed");
+        assert_eq!(value[1]["responseParts"][0]["id"], "b");
+        assert_eq!(value[1]["responseParts"][1]["text"], "Found it");
+    }
 }

@@ -10,7 +10,6 @@ import {
   createSignal,
   on,
   onCleanup,
-  onMount,
 } from "solid-js";
 import { createStore, reconcile } from "solid-js/store";
 import {
@@ -50,7 +49,9 @@ const maximumSubscriptionRetries = 5;
 function sortThreads(entries: ThreadMetadata[]) {
   return entries.toSorted(
     (left, right) =>
-      right.lastPromptAt - left.lastPromptAt || left.id.localeCompare(right.id),
+      (right.lastPromptAt ?? right.createdAt * 1000) -
+        (left.lastPromptAt ?? left.createdAt * 1000) ||
+      left.id.localeCompare(right.id),
   );
 }
 
@@ -63,6 +64,15 @@ export function createThreadModel(
   const client = useQueryClient(queryClient);
   const [state, setState] = createStore<{ thread?: Thread }>({});
   const thread = () => state.thread;
+  const [confirmedCompletions, setConfirmedCompletions] = createStore<
+    Record<string, string | undefined>
+  >({});
+  const [subscriptionFailures, setSubscriptionFailures] = createStore<
+    Record<string, boolean | undefined>
+  >({});
+  function confirmCompletion(id: string, turnId: string) {
+    if (!deleted.has(id)) setConfirmedCompletions(id, turnId);
+  }
   const [selectedThreadId, setSelectedThreadId] = createSignal<string>();
   const [error, setErrorState] = createSignal<string>();
   function setError(message: string | undefined, notify = true) {
@@ -110,8 +120,10 @@ export function createThreadModel(
   const history = createMemo(() => historyQuery.data ?? []);
   const listLoading = () => historyQuery.isFetching;
   const listError = () => listSubscriptionError() || historyQuery.isError;
+  const [listSubscriptionAttempt, setListSubscriptionAttempt] = createSignal(0);
   const reloadList = () => {
-    setListSubscriptionError(false);
+    if (listSubscriptionError())
+      setListSubscriptionAttempt((attempt) => attempt + 1);
     return historyQuery.refetch();
   };
 
@@ -123,20 +135,22 @@ export function createThreadModel(
     );
   }
 
-  onMount(() => {
-    onCleanup(
-      subscribeThreadList(
-        (entries) => {
-          replaceThreadList(entries);
-          setListSubscriptionError(false);
-        },
-        () => {
-          if (!listSubscriptionError()) notifyError(t("sidebar.loadFailed"));
-          setListSubscriptionError(true);
-        },
-      ),
-    );
-  });
+  createEffect(
+    on(listSubscriptionAttempt, () => {
+      onCleanup(
+        subscribeThreadList(
+          (entries) => {
+            replaceThreadList(entries);
+            setListSubscriptionError(false);
+          },
+          () => {
+            if (!listSubscriptionError()) notifyError(t("sidebar.loadFailed"));
+            setListSubscriptionError(true);
+          },
+        ),
+      );
+    }),
+  );
 
   const [connectingThreadId, setConnectingThreadId] = createSignal<string>();
   const connecting = () =>
@@ -216,6 +230,8 @@ export function createThreadModel(
     const alreadyFailed = subscriptionError();
     setSubscriptionLive(false);
     setSubscriptionError(true);
+    const id = selectedThreadId();
+    if (id) setSubscriptionFailures(id, true);
     if (isNotFound(cause)) {
       clearSubscriptionRetry();
       setSubscriptionError(false);
@@ -245,6 +261,8 @@ export function createThreadModel(
     setSubscriptionError(false);
     setRetryExhausted(false);
     setSubscriptionLive(true);
+    const id = selectedThreadId();
+    if (id) setSubscriptionFailures(id, undefined);
   }
 
   function reconcileThread(updatedThread: Thread) {
@@ -296,6 +314,8 @@ export function createThreadModel(
       updatedAt,
       lastPromptAt,
       failure,
+      completedTurnId,
+      requestFailure,
       interrupted,
     } = updatedThread;
     const metadata = {
@@ -309,6 +329,8 @@ export function createThreadModel(
       updatedAt,
       lastPromptAt,
       failure,
+      completedTurnId,
+      requestFailure,
       interrupted,
     };
     void client.cancelQueries({ queryKey: threadListQueryKey });
@@ -388,7 +410,9 @@ export function createThreadModel(
       if (
         firstSnapshot &&
         update.thread.id === selectedThreadId() &&
-        update.thread.status === "disconnected"
+        (update.thread.status === "disconnected" ||
+          (update.thread.status === "failed" &&
+            update.thread.lastPromptAt === null))
       )
         void connect();
       return;
@@ -458,13 +482,47 @@ export function createThreadModel(
       return;
     }
     const turnIndex = current.turns.length - 1;
-    setState(
-      "thread",
-      "turns",
-      turnIndex,
-      "response",
-      (response) => response + update.text,
+    const parts = current.turns[turnIndex].responseParts;
+    if (update.kind === "toolUpdate") {
+      const index = parts.findIndex(
+        (part) => part.kind === "tool" && part.id === update.part.id,
+      );
+      if (index < 0)
+        setState(
+          "thread",
+          "turns",
+          turnIndex,
+          "responseParts",
+          parts.length,
+          structuredClone(update.part),
+        );
+      else
+        setState(
+          "thread",
+          "turns",
+          turnIndex,
+          "responseParts",
+          index,
+          reconcile(structuredClone(update.part)),
+        );
+      return;
+    }
+    const index = parts.findIndex(
+      (part) => part.kind === "text" && part.id === update.partId,
     );
+    if (index < 0) {
+      setState("thread", "turns", turnIndex, "responseParts", parts.length, {
+        kind: "text",
+        id: update.partId,
+        text: update.text,
+      });
+    } else {
+      setState("thread", "turns", turnIndex, "responseParts", index, (part) =>
+        part.kind === "text"
+          ? { ...part, text: part.text + update.text }
+          : part,
+      );
+    }
   }
 
   createEffect(
@@ -808,6 +866,8 @@ export function createThreadModel(
     if (attachments.length)
       void releaseFiles(attachments).catch(() => undefined);
     deleted.add(id);
+    setConfirmedCompletions(id, undefined);
+    setSubscriptionFailures(id, undefined);
     setThreadDraft(id, "");
     setThreadAttachments(id, []);
     void client.cancelQueries({ queryKey: threadListQueryKey });
@@ -833,6 +893,9 @@ export function createThreadModel(
     error: visibleError,
     selecting,
     history,
+    confirmCompletion,
+    confirmedCompletion: (id: string) => confirmedCompletions[id],
+    subscriptionFailedFor: (id: string) => Boolean(subscriptionFailures[id]),
     listLoading,
     listError,
     reloadList,

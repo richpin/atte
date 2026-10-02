@@ -17,7 +17,7 @@ export interface Thread {
   title: string;
   createdAt: number;
   updatedAt: number;
-  lastPromptAt: number;
+  lastPromptAt: number | null;
   interrupted: boolean;
   storageError: string | null;
   workingFolder: string;
@@ -33,6 +33,8 @@ export interface Thread {
   sessionId: string | null;
   authentication: "unknown" | "required" | "authenticated";
   failure: ConnectionFailure | null;
+  completedTurnId: string | null;
+  requestFailure: ConnectionFailure | null;
   turns: Turn[];
   notice: string | null;
   permissions: PermissionRequest[];
@@ -119,21 +121,52 @@ export type ThreadMetadata = Pick<
   | "updatedAt"
   | "lastPromptAt"
   | "failure"
+  | "completedTurnId"
+  | "requestFailure"
   | "interrupted"
 >;
 
 export interface PermissionRequest {
   id: string;
   title: string;
+  toolCallId: string;
   details: string;
   options: { id: string; name: string }[];
 }
+
+export interface ToolCall {
+  title?: string;
+  kind?: string;
+  status?: "pending" | "in_progress" | "completed" | "failed";
+  rawInput?: unknown;
+  rawOutput?: unknown;
+  locations?: { path: string; line?: number | null }[];
+  content?: ToolContent[];
+}
+
+export type ToolContent =
+  | {
+      type: "content";
+      content: {
+        type: string;
+        text?: string;
+        name?: string;
+        uri?: string;
+        resource?: { uri?: string };
+      };
+    }
+  | { type: "diff"; path: string }
+  | { type: "terminal"; terminalId: string };
+
+export type ResponsePart =
+  | { kind: "text"; id: string; text: string }
+  | { kind: "tool"; id: string; tool: ToolCall };
 
 export interface Turn {
   id: string;
   message: string;
   attachments?: Attachment[];
-  response: string;
+  responseParts: ResponsePart[];
   stopReason: string | null;
 }
 
@@ -165,5 +198,12 @@ export type ThreadUpdate =
       kind: "textDelta";
       threadId: string;
       turnId: string;
+      partId: string;
       text: string;
+    }
+  | {
+      kind: "toolUpdate";
+      threadId: string;
+      turnId: string;
+      part: Extract<ResponsePart, { kind: "tool" }>;
     };

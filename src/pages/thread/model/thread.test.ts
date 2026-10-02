@@ -37,6 +37,8 @@ function thread(id: string, changes: Partial<Thread> = {}): Thread {
     sessionId: id,
     authentication: "authenticated",
     failure: null,
+    completedTurnId: null,
+    requestFailure: null,
     turns: [],
     notice: null,
     permissions: [],
@@ -49,7 +51,9 @@ function thread(id: string, changes: Partial<Thread> = {}): Thread {
 const running = (id: string) =>
   thread(id, {
     status: "running",
-    turns: [{ id: "turn", message: "hello", response: "", stopReason: null }],
+    turns: [
+      { id: "turn", message: "hello", responseParts: [], stopReason: null },
+    ],
   });
 
 let dispose: () => void;
@@ -164,18 +168,31 @@ it("appends a text delta only to the streamed response dependency", async () => 
       statusRuns++;
     });
     createComputed(() => {
-      model.thread()?.turns[0]?.response;
+      model
+        .thread()
+        ?.turns[0]?.responseParts.map((part) =>
+          part.kind === "text" ? part.text : "",
+        )
+        .join("");
       responseRuns++;
     });
     return cleanup;
   });
   stream("A")({
     kind: "textDelta",
+    partId: "text-1",
     threadId: "A",
     turnId: "turn",
     text: "Hello",
   });
-  expect(model.thread()?.turns[0]?.response).toBe("Hello");
+  expect(
+    model
+      .thread()
+      ?.turns[0]?.responseParts.map((part) =>
+        part.kind === "text" ? part.text : "",
+      )
+      .join(""),
+  ).toBe("Hello");
   expect(model.thread()).toBe(initialThread);
   expect(model.thread()?.turns).toBe(initialTurns);
   expect(model.thread()?.turns[0]).toBe(initialTurn);
@@ -214,7 +231,7 @@ it("applies incremental turn additions and completions", async () => {
         turn: {
           id: "turn-2",
           message: "hello",
-          response: "",
+          responseParts: [],
           stopReason: null,
         },
       },
@@ -718,6 +735,7 @@ it("preserves the snapshot and blocks every mutation while retrying", async () =
   await open(model, "A", { ...running("A"), configuration });
   stream("A")({
     kind: "textDelta",
+    partId: "text-1",
     threadId: "A",
     turnId: "wrong-turn",
     text: "ignored",
@@ -828,6 +846,85 @@ it("keeps subscription metadata newer than the initial list request", async () =
   await vi.waitFor(() => expect(model.history()[0]?.title).toBe("Latest"));
 });
 
+it("sorts unprompted threads by creation time and lets new prompts move ahead", async () => {
+  const model = setup();
+  const entries = [
+    thread("A", { createdAt: 3, lastPromptAt: null }),
+    thread("B", { createdAt: 1, lastPromptAt: null, updatedAt: 999 }),
+    thread("C", { createdAt: 1, lastPromptAt: 2500 }),
+    thread("D", { createdAt: 1, lastPromptAt: 3000 }),
+  ];
+  receiveList(entries);
+  await vi.waitFor(() =>
+    expect(model.history().map((entry) => entry.id)).toEqual([
+      "A",
+      "D",
+      "C",
+      "B",
+    ]),
+  );
+  receiveList(
+    entries.map((entry) =>
+      entry.id === "C" ? { ...entry, lastPromptAt: 4000 } : entry,
+    ),
+  );
+  await vi.waitFor(() =>
+    expect(model.history().map((entry) => entry.id)).toEqual([
+      "C",
+      "A",
+      "D",
+      "B",
+    ]),
+  );
+});
+
+it("keeps failed threads with recorded attempts idle on reentry", async () => {
+  const model = setup();
+  await open(model, "B");
+  await open(
+    model,
+    "A",
+    thread("A", {
+      status: "failed",
+      failure: "sessionRestorationFailed",
+      lastPromptAt: 1,
+    }),
+  );
+  expect(model.thread()?.turns).toEqual([]);
+  expect(model.canSend()).toBe(false);
+  expect(model.canReconnect()).toBe(true);
+  expect(invoke).not.toHaveBeenCalledWith("connect_thread", { id: "A" });
+});
+
+it("connects an unprompted failed thread on entry without retrying live failures", async () => {
+  const model = setup();
+  const failed = thread("A", {
+    status: "failed",
+    failure: "sessionRestorationFailed",
+    lastPromptAt: null,
+  });
+  await open(model, "A", failed);
+  await vi.waitFor(() =>
+    expect(invoke).toHaveBeenCalledWith("connect_thread", { id: "A" }),
+  );
+  stream("A")({ kind: "patch", thread: failed, turnUpdates: [], errors: [] });
+  await Promise.resolve();
+  expect(
+    vi
+      .mocked(invoke)
+      .mock.calls.filter(([command]) => command === "connect_thread"),
+  ).toHaveLength(1);
+  commands.set("connect_thread", async () => {
+    stream("A")({
+      kind: "thread",
+      thread: thread("A", { lastPromptAt: null }),
+    });
+  });
+  await open(model, "B");
+  await open(model, "A", failed);
+  await vi.waitFor(() => expect(model.canSend()).toBe(true));
+});
+
 it("unsubscribes late registrations after disposal", async () => {
   const registration = deferred<string>();
   commands.set("subscribe_thread", () => registration.promise);
@@ -928,6 +1025,7 @@ it("recovers subscription before connecting a failed agent", async () => {
   });
   stream("A")({
     kind: "textDelta",
+    partId: "text-1",
     threadId: "A",
     turnId: "unknown",
     text: "invalid",
@@ -945,4 +1043,80 @@ it("recovers subscription before connecting a failed agent", async () => {
     thread: thread("A", { status: "failed", failure: "processExited" }),
   });
   expect(invoke).toHaveBeenCalledWith("connect_thread", { id: "A" });
+});
+
+it("preserves text and tool order while updating only the matching call", async () => {
+  const model = setup();
+  await open(model, "A", running("A"));
+  const receive = stream("A");
+  receive({
+    kind: "textDelta",
+    threadId: "A",
+    turnId: "turn",
+    partId: "before",
+    text: "Before",
+  });
+  receive({
+    kind: "toolUpdate",
+    threadId: "A",
+    turnId: "turn",
+    part: {
+      kind: "tool",
+      id: "tool-a",
+      tool: { title: "Read", status: "in_progress" },
+    },
+  });
+  receive({
+    kind: "toolUpdate",
+    threadId: "A",
+    turnId: "turn",
+    part: {
+      kind: "tool",
+      id: "tool-b",
+      tool: { title: "Test", status: "in_progress" },
+    },
+  });
+  receive({
+    kind: "textDelta",
+    threadId: "A",
+    turnId: "turn",
+    partId: "after",
+    text: "After",
+  });
+  const initialText = model.thread()?.turns[0].responseParts[0];
+  const initialTool = model.thread()?.turns[0].responseParts[1];
+  receive({
+    kind: "toolUpdate",
+    threadId: "A",
+    turnId: "turn",
+    part: {
+      kind: "tool",
+      id: "tool-b",
+      tool: { title: "Test", status: "failed", rawOutput: "Failure" },
+    },
+  });
+  receive({
+    kind: "toolUpdate",
+    threadId: "A",
+    turnId: "turn",
+    part: {
+      kind: "tool",
+      id: "tool-a",
+      tool: { title: "Read", status: "completed" },
+    },
+  });
+  const parts = model.thread()?.turns[0].responseParts;
+  expect(parts?.map((part) => part.id)).toEqual([
+    "before",
+    "tool-a",
+    "tool-b",
+    "after",
+  ]);
+  expect(parts?.[0]).toBe(initialText);
+  expect(parts?.[1]).toBe(initialTool);
+  expect(parts?.[2]).toEqual({
+    kind: "tool",
+    id: "tool-b",
+    tool: { title: "Test", status: "failed", rawOutput: "Failure" },
+  });
 });

@@ -387,7 +387,7 @@ async fn system_npm_uses_a_version_upper_bound_and_allows_lifecycle_scripts() {
     restored.send_message(thread.id, "system".into()).unwrap();
     wait_ready(&restored, thread.id).await;
     assert_eq!(
-        restored.get(thread.id).unwrap().turns[0].response,
+        restored.get(thread.id).unwrap().turns[0].response_text(),
         "Hello world"
     );
     restored.shutdown().await;
@@ -832,7 +832,7 @@ async fn uninstall_stops_live_acp_and_removes_files_before_returning() {
     assert!(threads.connect(draft.id).is_err());
     let state = threads.get(draft.id).unwrap();
     assert_eq!(state.turns.len(), 1);
-    assert_eq!(state.turns[0].response, "Hello world");
+    assert_eq!(state.turns[0].response_text(), "Hello world");
     assert_eq!(
         state.failure,
         Some(atte_lib::thread::ConnectionFailure::AgentRemoved)
