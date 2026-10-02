@@ -22,6 +22,7 @@ import {
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuTrigger,
+  ResponseStatus,
   Sidebar,
   SidebarContent,
   SidebarFooter,
@@ -50,6 +51,11 @@ type SidebarThread = {
   workingFolder: string;
   agentId: string;
   status: string;
+  sessionId?: string | null;
+  failure?: string | null;
+  requestFailure?: string | null;
+  subscriptionFailed?: boolean;
+  unconfirmed?: boolean;
 };
 
 export function AppSidebar(props: {
@@ -182,147 +188,243 @@ export function AppSidebar(props: {
                     </p>
                   </Show>
                   <SidebarMenu>
-                    <For each={groups()}>
-                      {(group) => (
-                        <SidebarMenuItem>
-                          <SidebarMenuButton
-                            aria-label={t("sidebar.project", {
-                              name: group.name,
-                            })}
-                            aria-expanded={
-                              !collapsedProjects().has(group.folder)
-                            }
-                            onClick={() => toggleProject(group.folder)}
-                          >
-                            <Show
-                              when={!collapsedProjects().has(group.folder)}
-                              fallback={<FolderClosed aria-hidden="true" />}
+                    <For each={groups().map((group) => group.folder)}>
+                      {(folder) => {
+                        const group = {
+                          folder,
+                          name:
+                            folder.split("/").filter(Boolean).at(-1) ?? folder,
+                          entries: () =>
+                            groups().find((item) => item.folder === folder)
+                              ?.entries ?? [],
+                        };
+                        return (
+                          <SidebarMenuItem>
+                            <SidebarMenuButton
+                              aria-label={t("sidebar.project", {
+                                name: group.name,
+                              })}
+                              aria-expanded={
+                                !collapsedProjects().has(group.folder)
+                              }
+                              onClick={() => toggleProject(group.folder)}
                             >
-                              <FolderOpen aria-hidden="true" />
-                            </Show>
-                            <span>{group.name}</span>
-                          </SidebarMenuButton>
-                          <SidebarMenuAction
-                            aria-label={t("sidebar.newThreadIn", {
-                              name: group.name,
-                            })}
-                            disabled={props.creating}
-                            onClick={() =>
-                              props.onNewThreadInProject(group.folder)
-                            }
-                          >
-                            <Plus
-                              aria-hidden="true"
-                              class="text-muted"
-                              size={20}
-                            />
-                          </SidebarMenuAction>
-                          <Show when={!collapsedProjects().has(group.folder)}>
-                            <SidebarMenuSub class="mr-0 translate-x-0 pr-0">
-                              <For each={group.entries}>
-                                {(entry) => {
-                                  const [menuOpen, setMenuOpen] =
-                                    createSignal(false);
-                                  const title = () =>
-                                    content(entry.title) ||
-                                    t("common.newThread");
-                                  const selected = () =>
-                                    props.view === "thread" &&
-                                    props.selected === entry.id;
+                              <Show
+                                when={!collapsedProjects().has(group.folder)}
+                                fallback={<FolderClosed aria-hidden="true" />}
+                              >
+                                <FolderOpen aria-hidden="true" />
+                              </Show>
+                              <span>{group.name}</span>
+                            </SidebarMenuButton>
+                            <SidebarMenuAction
+                              aria-label={t("sidebar.newThreadIn", {
+                                name: group.name,
+                              })}
+                              disabled={props.creating}
+                              onClick={() =>
+                                props.onNewThreadInProject(group.folder)
+                              }
+                            >
+                              <Plus
+                                aria-hidden="true"
+                                class="text-muted"
+                                size={20}
+                              />
+                            </SidebarMenuAction>
+                            <Show when={!collapsedProjects().has(group.folder)}>
+                              <SidebarMenuSub class="mr-0 translate-x-0 pr-0">
+                                <For
+                                  each={group
+                                    .entries()
+                                    .map((entry) => entry.id)}
+                                >
+                                  {(id) => {
+                                    const initial = group
+                                      .entries()
+                                      .find((entry) => entry.id === id);
+                                    if (!initial) return null;
+                                    const entry = () =>
+                                      group
+                                        .entries()
+                                        .find((entry) => entry.id === id) ??
+                                      initial;
+                                    const [menuOpen, setMenuOpen] =
+                                      createSignal(false);
+                                    const title = () =>
+                                      content(entry().title) ||
+                                      t("common.newThread");
+                                    const selected = () =>
+                                      props.view === "thread" &&
+                                      props.selected === entry().id;
 
-                                  return (
-                                    <DropdownMenu
-                                      open={menuOpen()}
-                                      onOpenChange={setMenuOpen}
-                                      placement="right-start"
-                                    >
-                                      <SidebarMenuSubItem
-                                        class="group/menu-item relative"
-                                        onContextMenu={(event) => {
-                                          event.preventDefault();
-                                          setMenuOpen(true);
-                                        }}
+                                    const status = () => {
+                                      if (
+                                        props.failed ||
+                                        entry().subscriptionFailed
+                                      )
+                                        return {
+                                          kind: "error" as const,
+                                          label: t("sidebar.statusUnavailable"),
+                                        };
+                                      if (entry().requestFailure)
+                                        return {
+                                          kind: "error" as const,
+                                          label: t("sidebar.requestFailed"),
+                                        };
+                                      if (
+                                        entry().failure ||
+                                        entry().status === "failed"
+                                      )
+                                        return {
+                                          kind: "error" as const,
+                                          label: t("sidebar.connectionError"),
+                                        };
+                                      if (
+                                        entry().status === "waitingForApproval"
+                                      )
+                                        return {
+                                          kind: "approval" as const,
+                                          label: t("sidebar.approvalRequested"),
+                                        };
+                                      if (entry().status === "connecting")
+                                        return {
+                                          kind: "progress" as const,
+                                          label: t(
+                                            entry().sessionId
+                                              ? "sidebar.restoring"
+                                              : "sidebar.connecting",
+                                          ),
+                                        };
+                                      if (
+                                        entry().status === "running" ||
+                                        entry().status === "cancelling"
+                                      )
+                                        return {
+                                          kind: "progress" as const,
+                                          label: t(
+                                            entry().status === "cancelling"
+                                              ? "sidebar.stopping"
+                                              : "sidebar.running",
+                                          ),
+                                        };
+                                      if (entry().unconfirmed)
+                                        return {
+                                          kind: "complete" as const,
+                                          label: t("sidebar.unconfirmed"),
+                                        };
+                                      return undefined;
+                                    };
+
+                                    return (
+                                      <DropdownMenu
+                                        open={menuOpen()}
+                                        onOpenChange={setMenuOpen}
+                                        placement="right-start"
                                       >
-                                        <SidebarMenuSubButton
-                                          as="button"
-                                          aria-current={
-                                            selected() ? "page" : undefined
-                                          }
-                                          class="h-8 w-full pr-7 text-left"
-                                          isActive={selected()}
-                                          onClick={() =>
-                                            props.onSelectThread(entry.id)
-                                          }
+                                        <SidebarMenuSubItem
+                                          class="group/thread-row relative"
+                                          onContextMenu={(event) => {
+                                            event.preventDefault();
+                                            setMenuOpen(true);
+                                          }}
                                         >
-                                          <AgentIcon
-                                            id={entry.agentId}
-                                            src={null}
-                                            compact
-                                          />
-                                          <span class="min-w-0 flex-1 truncate">
-                                            {title()}
-                                          </span>
-                                          <Show
-                                            when={
-                                              entry.status === "running" ||
-                                              entry.status === "cancelling"
+                                          <SidebarMenuSubButton
+                                            title={status()?.label}
+                                            as="button"
+                                            aria-current={
+                                              selected() ? "page" : undefined
+                                            }
+                                            class="h-8 w-full pr-7 text-left"
+                                            isActive={selected()}
+                                            onClick={() =>
+                                              props.onSelectThread(entry().id)
                                             }
                                           >
-                                            <span class="shrink-0 text-xs text-muted">
-                                              {t("sidebar.running")}
+                                            <AgentIcon
+                                              id={entry().agentId}
+                                              src={null}
+                                              compact
+                                            />
+                                            <span class="min-w-0 flex-1 truncate">
+                                              {title()}
                                             </span>
-                                          </Show>
+                                            <Show
+                                              when={
+                                                status()?.kind === "approval"
+                                              }
+                                            >
+                                              <ResponseStatus
+                                                kind="approval"
+                                                label={t(
+                                                  "sidebar.approvalRequested",
+                                                )}
+                                              />
+                                            </Show>
+                                          </SidebarMenuSubButton>
                                           <Show
                                             when={
-                                              entry.status ===
-                                              "waitingForApproval"
+                                              status()?.kind !== "approval" &&
+                                              status()
                                             }
                                           >
-                                            <span class="shrink-0 text-xs text-accent">
-                                              {t("sidebar.waitingForApproval")}
+                                            <span
+                                              class="pointer-events-none absolute top-1.5 right-1 grid size-5 place-items-center group-hover/thread-row:invisible group-focus-within/thread-row:invisible"
+                                              classList={{
+                                                invisible: menuOpen(),
+                                              }}
+                                            >
+                                              <ResponseStatus
+                                                kind={
+                                                  status()?.kind ?? "progress"
+                                                }
+                                                label={status()?.label ?? ""}
+                                              />
                                             </span>
                                           </Show>
-                                          <Show
-                                            when={entry.status === "failed"}
+                                          <DropdownMenuTrigger
+                                            as={SidebarMenuAction}
+                                            aria-label={t(
+                                              "sidebar.threadMenu",
+                                              {
+                                                name: title(),
+                                              },
+                                            )}
+                                            class={
+                                              menuOpen()
+                                                ? "opacity-100"
+                                                : "opacity-0 group-hover/thread-row:opacity-100 group-focus-within/thread-row:opacity-100"
+                                            }
                                           >
-                                            <span class="shrink-0 text-xs text-muted">
-                                              {t("sidebar.connectionError")}
-                                            </span>
-                                          </Show>
-                                        </SidebarMenuSubButton>
-                                        <DropdownMenuTrigger
-                                          as={SidebarMenuAction}
-                                          aria-label={t("sidebar.threadMenu", {
-                                            name: title(),
-                                          })}
-                                          showOnHover
-                                        >
-                                          <EllipsisVertical
-                                            aria-hidden="true"
-                                            style={{ "stroke-width": "1px" }}
-                                          />
-                                        </DropdownMenuTrigger>
-                                      </SidebarMenuSubItem>
-                                      <DropdownMenuContent>
-                                        <DropdownMenuItem
-                                          class="px-3 py-2 text-danger hover:bg-danger-soft data-[highlighted]:bg-danger-soft"
-                                          onSelect={() => requestDelete(entry)}
-                                        >
-                                          <Trash2
-                                            aria-hidden="true"
-                                            class="size-3.5"
-                                          />
-                                          {t("common.delete")}
-                                        </DropdownMenuItem>
-                                      </DropdownMenuContent>
-                                    </DropdownMenu>
-                                  );
-                                }}
-                              </For>
-                            </SidebarMenuSub>
-                          </Show>
-                        </SidebarMenuItem>
-                      )}
+                                            <EllipsisVertical
+                                              aria-hidden="true"
+                                              style={{ "stroke-width": "1px" }}
+                                            />
+                                          </DropdownMenuTrigger>
+                                        </SidebarMenuSubItem>
+                                        <DropdownMenuContent>
+                                          <DropdownMenuItem
+                                            class="px-3 py-2 text-danger hover:bg-danger-soft data-[highlighted]:bg-danger-soft"
+                                            onSelect={() =>
+                                              requestDelete(entry())
+                                            }
+                                          >
+                                            <Trash2
+                                              aria-hidden="true"
+                                              class="size-3.5"
+                                            />
+                                            {t("common.delete")}
+                                          </DropdownMenuItem>
+                                        </DropdownMenuContent>
+                                      </DropdownMenu>
+                                    );
+                                  }}
+                                </For>
+                              </SidebarMenuSub>
+                            </Show>
+                          </SidebarMenuItem>
+                        );
+                      }}
                     </For>
                   </SidebarMenu>
                 </SidebarGroupContent>

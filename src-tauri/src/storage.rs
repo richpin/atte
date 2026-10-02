@@ -125,6 +125,8 @@ impl Store {
                 last_prompt_at: u64::try_from(last_prompt_at)?,
                 status: decode_enum(status)?,
                 failure: failure.map(decode_enum).transpose()?,
+                completed_turn_id: None,
+                request_failure: None,
                 interrupted,
             })
         })

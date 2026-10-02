@@ -6,6 +6,7 @@ export function AgentIcon(props: {
   id: string;
   src: string | null;
   compact?: boolean;
+  waiting?: boolean;
 }) {
   return (
     <Image
@@ -13,7 +14,9 @@ export function AgentIcon(props: {
       class={
         props.compact
           ? "inline-flex size-4 shrink-0 items-center justify-center text-muted"
-          : "inline-flex size-8 shrink-0 items-center justify-center text-muted"
+          : props.waiting
+            ? "inline-flex size-6 shrink-0 items-center justify-center text-muted"
+            : "inline-flex size-8 shrink-0 items-center justify-center text-muted"
       }
     >
       <Image.Img

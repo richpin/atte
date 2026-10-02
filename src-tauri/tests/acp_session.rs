@@ -1002,6 +1002,8 @@ async fn queues_followups_and_dispatches_them_in_fifo_order_after_completion() {
     }
     let queued = threads.get(draft.id).unwrap();
     assert_eq!(queued.turns.len(), 1);
+    let mut stream = subscribe(&threads, draft.id);
+    let mut list = threads.subscribe_list().unwrap();
     std::fs::write(gate, "continue").unwrap();
     let finished = settle(&threads, draft.id).await;
     assert_eq!(
@@ -1012,6 +1014,23 @@ async fn queues_followups_and_dispatches_them_in_fifo_order_after_completion() {
             .collect::<Vec<_>>(),
         ["first", "second", "third"]
     );
+    let expected: Vec<_> = finished.turns.iter().map(|turn| turn.id).collect();
+    tokio::time::timeout(Duration::from_secs(5), async {
+        for expected_id in &expected {
+            loop {
+                if stream.recv().await.unwrap().completed_turn_id == Some(*expected_id) {
+                    break;
+                }
+            }
+            loop {
+                if list.recv().await.unwrap()[0].completed_turn_id == Some(*expected_id) {
+                    break;
+                }
+            }
+        }
+    })
+    .await
+    .unwrap();
     assert!(finished
         .turns
         .iter()
@@ -1705,6 +1724,15 @@ async fn failed_queued_input_blocks_fifo_until_the_user_retries_the_same_input()
     })
     .await
     .unwrap();
+    assert_eq!(
+        failed.request_failure,
+        Some(atte_lib::thread::ConnectionFailure::PromptFailed)
+    );
+    assert_eq!(failed.completed_turn_id, Some(failed.turns[0].id));
+    assert_eq!(
+        threads.list().unwrap()[0].request_failure,
+        failed.request_failure
+    );
     assert_eq!(failed.queued_messages.len(), 2);
     assert_eq!(failed.queued_messages[0].input.body, "retry me");
     assert_eq!(failed.queued_messages[1].input.body, "after me");
@@ -1726,6 +1754,11 @@ async fn failed_queued_input_blocks_fifo_until_the_user_retries_the_same_input()
         .unwrap();
     let completed = settle(&threads, draft.id).await;
 
+    assert_eq!(completed.request_failure, None);
+    assert_eq!(
+        completed.completed_turn_id,
+        completed.turns.last().map(|turn| turn.id)
+    );
     assert!(completed.queued_messages.is_empty());
     assert_eq!(
         completed
@@ -1849,6 +1882,8 @@ async fn cancellation_intent_prevents_queue_dispatch_even_when_completion_wins_o
     threads.cancel_turn(draft.id, turn).unwrap();
     let stopped = settle(&threads, draft.id).await;
     assert!(stopped.interrupted);
+    assert_eq!(stopped.completed_turn_id, None);
+    assert_eq!(stopped.turns[0].stop_reason.as_deref(), Some("cancelled"));
     assert_eq!(stopped.turns.len(), 1);
     assert_eq!(stopped.queued_messages[0].input.body, "keep");
     threads.shutdown().await;
@@ -2125,6 +2160,13 @@ async fn failed_restoration_keeps_the_reference_and_never_exposes_partial_replay
         let restored = Threads::with_store(vec![agent.clone()], store).unwrap();
         restored.connect(draft.id).unwrap();
         let failed = settle(&restored, draft.id).await;
+        assert_eq!(failed.completed_turn_id, None);
+        if mode == "prompt-error" {
+            assert_eq!(
+                failed.request_failure,
+                Some(ConnectionFailure::PromptFailed)
+            );
+        }
         assert_eq!(failed.failure, Some(failure), "{mode}");
         assert_eq!(failed.session_id.as_deref(), Some("remote-1"));
         assert!(failed.turns.is_empty());
@@ -3569,6 +3611,8 @@ async fn prompt_failures_preserve_partial_output_and_reject_stale_updates() {
         threads.connect(draft.id).unwrap();
         let reconnected = settle(&threads, draft.id).await;
         assert_eq!(reconnected.status, ThreadStatus::SessionReady);
+        assert_eq!(reconnected.request_failure, None);
+        assert_eq!(reconnected.completed_turn_id, None);
         assert_eq!(reconnected.turns[0].response, "Hello world");
         threads.shutdown().await;
     }
@@ -3625,6 +3669,11 @@ async fn permission_preserves_agent_choices_and_answers_exactly_once() {
             .is_err());
         let completed = settle(&threads, draft.id).await;
         assert!(completed.permissions.is_empty());
+        assert_eq!(completed.completed_turn_id, Some(completed.turns[0].id));
+        assert_eq!(
+            threads.list().unwrap()[0].completed_turn_id,
+            completed.completed_turn_id
+        );
         assert_eq!(
             completed.turns[0].response,
             format!("selected:{option}Hello world")
@@ -5132,5 +5181,136 @@ async fn manual_reconnect_isolates_shared_work_and_rejects_busy_threads() {
     threads.cancel_turn(second.id, waiting.turns[0].id).unwrap();
     assert!(threads.reconnect(second.id).is_err());
     settle(&threads, second.id).await;
+    threads.shutdown().await;
+}
+
+#[tokio::test]
+async fn response_completion_is_delivered_to_thread_and_list_without_text() {
+    let folder = tempfile::tempdir().unwrap();
+    let mut agent = mock_agent();
+    agent
+        .env
+        .insert("FIXTURE_MODE".into(), "empty-response".into());
+    let threads = Threads::new(vec![agent]);
+    let draft = threads.create(folder.path()).unwrap();
+    threads.connect(draft.id).unwrap();
+    settle(&threads, draft.id).await;
+    let mut stream = subscribe(&threads, draft.id);
+    let mut list = threads.subscribe_list().unwrap();
+    threads.send_message(draft.id, "hello".into()).unwrap();
+    let completed = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let current = stream.recv().await.unwrap();
+            if current.status == ThreadStatus::SessionReady && !current.turns.is_empty() {
+                break current;
+            }
+        }
+    })
+    .await
+    .unwrap();
+    let completed_json = serde_json::to_value(&completed).unwrap();
+    assert_eq!(
+        completed_json["completedTurnId"],
+        completed.turns[0].id.to_string()
+    );
+    assert!(completed.turns[0].response.is_empty());
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let entries = list.recv().await.unwrap();
+            if serde_json::to_value(&entries[0]).unwrap()["completedTurnId"]
+                == completed_json["completedTurnId"]
+            {
+                break;
+            }
+        }
+    })
+    .await
+    .unwrap();
+    threads.shutdown().await;
+}
+
+#[tokio::test]
+async fn completion_is_reset_on_restart_without_reconstructing_from_remote_history() {
+    let root = tempfile::tempdir().unwrap();
+    let store = std::sync::Arc::new(
+        atte_lib::storage::Store::open(&root.path().join("atte.sqlite")).unwrap(),
+    );
+    let mut agent = mock_agent();
+    agent.env.insert(
+        "SESSION_FILE".into(),
+        root.path().join("history.json").to_string_lossy().into(),
+    );
+    let threads = Threads::with_store(vec![agent.clone()], store.clone()).unwrap();
+    let draft = threads.create(root.path()).unwrap();
+    threads.connect(draft.id).unwrap();
+    settle(&threads, draft.id).await;
+    threads
+        .send_message(draft.id, "complete before restart".into())
+        .unwrap();
+    let completed = settle(&threads, draft.id).await;
+    assert_eq!(completed.completed_turn_id, Some(completed.turns[0].id));
+    threads.shutdown().await;
+    drop(threads);
+    let restored = Threads::with_store(vec![agent], store).unwrap();
+    assert_eq!(restored.list().unwrap()[0].completed_turn_id, None);
+    assert_eq!(restored.get(draft.id).unwrap().request_failure, None);
+    restored.connect(draft.id).unwrap();
+    let ready = settle(&restored, draft.id).await;
+    assert_eq!(ready.turns[0].response, "Hello world");
+    assert_eq!(ready.completed_turn_id, None);
+    restored.shutdown().await;
+}
+
+#[tokio::test]
+async fn cancellation_preserves_previous_completion_and_empty_approval_completes_normally() {
+    let folder = tempfile::tempdir().unwrap();
+    let mut agent = mock_agent();
+    agent.env.insert("FIXTURE_MODE".into(), "concurrent".into());
+    let threads = Threads::new(vec![agent]);
+    let draft = threads.create(folder.path()).unwrap();
+    threads.connect(draft.id).unwrap();
+    settle(&threads, draft.id).await;
+    threads.send_message(draft.id, "complete".into()).unwrap();
+    let first = settle(&threads, draft.id).await;
+    let mut stream = subscribe(&threads, draft.id);
+    let mut list = threads.subscribe_list().unwrap();
+    threads
+        .send_message(draft.id, "no-text-hold".into())
+        .unwrap();
+    let active = threads.get(draft.id).unwrap();
+    assert_eq!(active.completed_turn_id, first.completed_turn_id);
+    threads.cancel_turn(draft.id, active.turns[1].id).unwrap();
+    let cancelled = settle(&threads, draft.id).await;
+    assert_eq!(cancelled.completed_turn_id, first.completed_turn_id);
+    assert!(cancelled.turns[1].response.is_empty());
+    threads
+        .send_message(draft.id, "no-text-approval".into())
+        .unwrap();
+    let waiting = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let current = stream.recv().await.unwrap();
+            if current.status == ThreadStatus::WaitingForApproval {
+                break current;
+            }
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(waiting.completed_turn_id, first.completed_turn_id);
+    assert!(waiting.turns[2].response.is_empty());
+    threads
+        .answer_permission(draft.id, waiting.permissions[0].id, "allow".into())
+        .unwrap();
+    let completed = settle(&threads, draft.id).await;
+    assert_eq!(completed.completed_turn_id, Some(completed.turns[2].id));
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            if list.recv().await.unwrap()[0].completed_turn_id == completed.completed_turn_id {
+                break;
+            }
+        }
+    })
+    .await
+    .unwrap();
     threads.shutdown().await;
 }

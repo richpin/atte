@@ -42,6 +42,7 @@ export const ko = {
     languageDescription: "Atte 전체에서 사용할 언어를 선택합니다.",
   },
   thread: {
+    firstResponseWaiting: "첫 응답 대기",
     status: {
       disconnected: "연결 전",
       connecting: "연결 중…",
@@ -168,6 +169,13 @@ export const ko = {
     running: "실행 중",
     waitingForApproval: "승인 대기",
     connectionError: "연결 오류",
+    approvalRequested: "승인 요청",
+    connecting: "연결 중",
+    restoring: "스레드 복원 중",
+    stopping: "중단 중",
+    unconfirmed: "미확인 완료",
+    requestFailed: "요청 실패",
+    statusUnavailable: "스레드 상태를 확인할 수 없습니다",
     threadMenu: "{{ name }} 메뉴",
     deleteFailed: "스레드를 삭제할 수 없습니다. 다시 시도해주세요.",
     deleteTitle: "스레드를 삭제할까요?",

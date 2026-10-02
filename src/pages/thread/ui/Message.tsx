@@ -1,6 +1,6 @@
 import { ChevronDown } from "lucide-solid";
 import { type TranslationKey, useI18n } from "shared/i18n";
-import { Markdown } from "shared/ui";
+import { AgentIcon, Markdown } from "shared/ui";
 import { createSignal, For, Index, onCleanup, onMount, Show } from "solid-js";
 import type { Attachment, Turn } from "../model/types";
 import { AttachmentChip } from "./AttachmentChip";
@@ -85,7 +85,13 @@ function UserMessage(props: { message: string; attachments: Attachment[] }) {
   );
 }
 
-export function Message(props: { turns: Turn[]; streamingTurnId?: string }) {
+export function Message(props: {
+  turns: Turn[];
+  streamingTurnId?: string;
+  waitingTurnId?: string;
+  agentId?: string;
+  approvalPending?: boolean;
+}) {
   const { t } = useI18n();
   return (
     <ol aria-label={t("thread.messages")} class="flex flex-col gap-8">
@@ -96,6 +102,24 @@ export function Message(props: { turns: Turn[]; streamingTurnId?: string }) {
               message={turn().message}
               attachments={turn().attachments ?? []}
             />
+            <Show when={turn().id === props.waitingTurnId && !turn().response}>
+              <div
+                role="status"
+                aria-label={t("thread.firstResponseWaiting")}
+                title={t("thread.firstResponseWaiting")}
+                class="grid size-6 place-items-center"
+              >
+                <span
+                  class="inline-flex size-6 items-center justify-center"
+                  classList={{
+                    "animate-agent-waiting motion-reduce:animate-none":
+                      !props.approvalPending,
+                  }}
+                >
+                  <AgentIcon id={props.agentId ?? ""} src={null} waiting />
+                </span>
+              </div>
+            </Show>
             <Show when={turn().response}>
               <div
                 data-message-participant="agent"

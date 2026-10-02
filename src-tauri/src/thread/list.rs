@@ -61,6 +61,8 @@ mod tests {
             last_prompt_at,
             status: ThreadStatus::SessionReady,
             failure: None,
+            completed_turn_id: None,
+            request_failure: None,
             interrupted: false,
         }
     }

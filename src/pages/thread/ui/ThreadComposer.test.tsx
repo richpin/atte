@@ -33,6 +33,8 @@ function readyThread(): Thread {
     sessionId: "session-1",
     authentication: "authenticated",
     failure: null,
+    completedTurnId: null,
+    requestFailure: null,
     turns: [],
     notice: null,
     permissions: [],

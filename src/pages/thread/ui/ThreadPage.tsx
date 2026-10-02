@@ -182,6 +182,18 @@ export function ThreadPage(props: {
               <Message
                 turns={thread()?.turns ?? []}
                 streamingTurnId={streamingTurnId()}
+                agentId={thread()?.agentId}
+                approvalPending={thread()?.status === "waitingForApproval"}
+                waitingTurnId={
+                  !props.model.subscriptionError() &&
+                  !thread()?.failure &&
+                  !thread()?.requestFailure &&
+                  ["running", "waitingForApproval"].includes(
+                    thread()?.status ?? "",
+                  )
+                    ? activeTurnId()
+                    : undefined
+                }
               />
             </ThreadTimeline>
           </div>

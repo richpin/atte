@@ -42,6 +42,10 @@ pub struct Thread {
     /// Connection success is not proof of authentication.
     pub authentication: AuthenticationStatus,
     pub failure: Option<ConnectionFailure>,
+    /// Last normally completed response in this app run; never persisted.
+    pub completed_turn_id: Option<Uuid>,
+    /// Current prompt failure, independent of connection recovery and notices.
+    pub request_failure: Option<ConnectionFailure>,
     pub turns: Vec<Turn>,
     pub notice: Option<String>,
     pub permissions: Vec<PermissionRequest>,
@@ -97,6 +101,8 @@ impl ThreadPatch {
             last_prompt_at,
             status,
             failure,
+            completed_turn_id,
+            request_failure,
             interrupted,
         } = self.metadata;
         thread.title = title;
@@ -108,6 +114,8 @@ impl ThreadPatch {
         thread.last_prompt_at = last_prompt_at;
         thread.status = status;
         thread.failure = failure;
+        thread.completed_turn_id = completed_turn_id;
+        thread.request_failure = request_failure;
         thread.interrupted = interrupted;
         thread.storage_error = self.storage_error;
         thread.authentication = self.authentication;
@@ -376,6 +384,10 @@ pub struct ThreadMetadata {
     pub last_prompt_at: u64,
     pub status: ThreadStatus,
     pub failure: Option<ConnectionFailure>,
+    #[serde(skip_deserializing)]
+    pub completed_turn_id: Option<Uuid>,
+    #[serde(skip_deserializing)]
+    pub request_failure: Option<ConnectionFailure>,
     pub interrupted: bool,
 }
 
@@ -392,6 +404,8 @@ impl Thread {
             last_prompt_at: self.last_prompt_at,
             status: self.status.clone(),
             failure: self.failure.clone(),
+            completed_turn_id: self.completed_turn_id,
+            request_failure: self.request_failure.clone(),
             interrupted: self.interrupted,
         }
     }
@@ -657,6 +671,8 @@ impl Threads {
                 status: ThreadStatus::Disconnected,
                 authentication: AuthenticationStatus::Unknown,
                 failure: saved.failure,
+                completed_turn_id: None,
+                request_failure: None,
                 turns: Vec::new(),
                 notice: None,
                 permissions: Vec::new(),
@@ -1138,6 +1154,8 @@ impl Threads {
             session_id: None,
             authentication: AuthenticationStatus::Unknown,
             failure: None,
+            completed_turn_id: None,
+            request_failure: None,
             turns: Vec::new(),
             notice: None,
             permissions: Vec::new(),
@@ -1532,11 +1550,14 @@ impl Threads {
             current.dispatching_queued = None;
             let queue = current.thread.queued_messages.clone();
             current.save_queue(queue)?;
+            current.thread.request_failure = Some(ConnectionFailure::PromptFailed);
+            current.publish();
             return Err(unavailable());
         }
         current.thread.status = ThreadStatus::Running;
         current.thread.last_prompt_at = next_prompt_at();
         current.thread.failure = None;
+        current.thread.request_failure = None;
         current.thread.interrupted = false;
         if current.use_prompt_title {
             current.use_prompt_title = false;
@@ -2226,6 +2247,7 @@ impl ThreadState {
         let turn = Uuid::new_v4();
         self.dispatching_queued = Some(queued.clone());
         self.thread.status = ThreadStatus::Running;
+        self.thread.request_failure = None;
         self.thread.turns.push(Turn {
             id: turn,
             message: queued.input.body.clone(),
@@ -2273,11 +2295,13 @@ impl ThreadState {
         let turn = prompt.turn;
         let Some(prompts) = prompts else {
             self.fail_queued_prompt(turn);
+            self.thread.request_failure = Some(ConnectionFailure::PromptFailed);
             self.publish();
             return Err(unavailable());
         };
         if prompts.send(prompt).is_err() {
             self.fail_queued_prompt(turn);
+            self.thread.request_failure = Some(ConnectionFailure::PromptFailed);
             self.publish();
             return Err(unavailable());
         }
@@ -2536,6 +2560,8 @@ impl RuntimeUpdates {
         }
         state.thread.session_id = Some(session_id);
         state.thread.status = ThreadStatus::SessionReady;
+        state.thread.failure = None;
+        state.thread.request_failure = None;
         state.confirmed_configuration = configuration;
         state.thread.prompt_capabilities = prompt_capabilities;
         state.desired_configuration.clear();
@@ -2670,6 +2696,9 @@ impl RuntimeUpdates {
             if failure == ConnectionFailure::AuthenticationRequired {
                 state.thread.authentication = AuthenticationStatus::Required;
             }
+            if failure == ConnectionFailure::PromptFailed {
+                state.thread.request_failure = Some(failure.clone());
+            }
             state.thread.failure = Some(failure);
         });
     }
@@ -2708,10 +2737,17 @@ impl RuntimeUpdates {
         let cancelled = state.thread.status == ThreadStatus::Cancelling;
         state.thread.interrupted =
             cancelled || reason == agent_client_protocol::schema::v1::StopReason::Cancelled;
+        if !state.thread.interrupted {
+            state.thread.completed_turn_id = Some(turn);
+        }
         if let Some(turn) = state.thread.turns.last_mut() {
-            turn.stop_reason = serde_json::to_value(reason)
-                .ok()
-                .and_then(|value| value.as_str().map(str::to_owned));
+            turn.stop_reason = serde_json::to_value(if cancelled {
+                agent_client_protocol::schema::v1::StopReason::Cancelled
+            } else {
+                reason
+            })
+            .ok()
+            .and_then(|value| value.as_str().map(str::to_owned));
         }
         if let Some(queued_message) = state.dispatching_queued.take() {
             let completed_attachments = queued_message.input.attachments.clone();
@@ -2794,6 +2830,7 @@ impl RuntimeUpdates {
             return;
         }
         state.fail_queued_prompt(turn);
+        state.thread.request_failure = Some(failure.clone());
         if failure != ConnectionFailure::AuthenticationRequired {
             state.pending_errors.push(ThreadErrorNotification {
                 id: Uuid::new_v4(),

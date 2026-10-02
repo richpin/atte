@@ -3,6 +3,10 @@
 @custom-variant dark (&:where([data-theme="dark"], [data-theme="dark"] *));
 
 @theme {
+  --color-response-info: #2563eb;
+  --color-response-info-soft: #eff6ff;
+  --color-response-warning: #c2410c;
+  --animate-agent-waiting: agent-waiting 1.4s ease-in-out infinite;
   --animate-waiting-ellipsis: waiting-ellipsis 1.6s step-end infinite;
   --color-canvas: #ffffff;
   --color-input-surface: #ffffff;
@@ -17,6 +21,16 @@
   --color-accent-foreground: #ffffff;
   --color-danger: #b42318;
   --color-danger-soft: #fef3f2;
+}
+
+@keyframes agent-waiting {
+  0%,
+  100% {
+    transform: scale(0.75);
+  }
+  50% {
+    transform: scale(1);
+  }
 }
 
 @keyframes waiting-ellipsis {
@@ -62,6 +76,9 @@
 }
 
 :root[data-theme="dark"] {
+  --color-response-info: #3b82f6;
+  --color-response-info-soft: #172554;
+  --color-response-warning: #fb923c;
   --color-canvas: #171717;
   --color-input-surface: #262626;
   --color-user-bubble: #2a2a2a;

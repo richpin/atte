@@ -33,6 +33,8 @@ export interface Thread {
   sessionId: string | null;
   authentication: "unknown" | "required" | "authenticated";
   failure: ConnectionFailure | null;
+  completedTurnId: string | null;
+  requestFailure: ConnectionFailure | null;
   turns: Turn[];
   notice: string | null;
   permissions: PermissionRequest[];
@@ -119,6 +121,8 @@ export type ThreadMetadata = Pick<
   | "updatedAt"
   | "lastPromptAt"
   | "failure"
+  | "completedTurnId"
+  | "requestFailure"
   | "interrupted"
 >;
 

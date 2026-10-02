@@ -181,7 +181,14 @@ function ShellSidebar(props: { shell: AppShellModel }) {
   return (
     <AppSidebar
       view={shell.view()}
-      threads={threads.history()}
+      threads={threads.history().map((entry) => ({
+        ...entry,
+        subscriptionFailed: threads.subscriptionFailedFor(entry.id),
+        unconfirmed: Boolean(
+          entry.completedTurnId &&
+            threads.confirmedCompletion(entry.id) !== entry.completedTurnId,
+        ),
+      }))}
       selected={threads.selectedThreadId()}
       loading={threads.listLoading()}
       failed={threads.listError()}

@@ -37,6 +37,8 @@ function thread(id: string, changes: Partial<Thread> = {}): Thread {
     sessionId: id,
     authentication: "authenticated",
     failure: null,
+    completedTurnId: null,
+    requestFailure: null,
     turns: [],
     notice: null,
     permissions: [],

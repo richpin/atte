@@ -432,6 +432,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 if let Some(path) = env::var_os("SESSION_FILE") {
                     fs::write(path, serde_json::to_vec(&history)?)?;
                 }
+                if mode == "empty-response" {
+                    send(
+                        &mut output,
+                        json!({"jsonrpc":"2.0","id":request["id"],"result":{"stopReason":"end_turn"}}),
+                    )?;
+                    continue;
+                }
                 assert_eq!(request["params"]["sessionId"], "remote-1");
                 if prompts == 1 {
                     send_title_updates(

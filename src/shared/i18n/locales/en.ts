@@ -36,6 +36,7 @@ export const en = {
     languageDescription: "Choose the language used throughout Atte.",
   },
   thread: {
+    firstResponseWaiting: "Waiting for first response",
     status: {
       disconnected: "Not connected",
       connecting: "Connecting…",
@@ -163,6 +164,13 @@ export const en = {
     running: "Running",
     waitingForApproval: "Waiting for approval",
     connectionError: "Connection error",
+    approvalRequested: "Ask for Approval",
+    connecting: "Connecting",
+    restoring: "Restoring thread",
+    stopping: "Stopping",
+    unconfirmed: "Unconfirmed completion",
+    requestFailed: "Request failed",
+    statusUnavailable: "Thread status unavailable",
     threadMenu: "{{ name }} menu",
     deleteFailed: "The thread could not be deleted. Try again.",
     deleteTitle: "Delete this thread?",
