@@ -14,7 +14,7 @@ export function SignInDialog(props: {
   agentName: string;
   state: AgentAuthenticationState;
   reconnectFailed: boolean;
-  onClose: () => void;
+  onReconnect: () => void;
   onClosed: () => void;
   onRetry: () => void;
   onSelect: (method: string) => void;
@@ -36,15 +36,12 @@ export function SignInDialog(props: {
       : undefined;
   };
   return (
-    <Dialog
-      open={props.open}
-      onOpenChange={(open) => {
-        if (!open) props.onClose();
-      }}
-    >
+    <Dialog open={props.open}>
       <DialogContent
         class="w-[calc(100%-2rem)] max-w-[420px] max-h-[calc(100dvh-2rem)] bg-canvas p-6 text-ink"
-        closeLabel={t("thread.authentication.close")}
+        showCloseButton={false}
+        onEscapeKeyDown={(event) => event.preventDefault()}
+        onInteractOutside={(event) => event.preventDefault()}
         onCloseAutoFocus={(event) => {
           event.preventDefault();
           props.onClosed();
@@ -147,6 +144,11 @@ export function SignInDialog(props: {
                   : "thread.authentication.reconnecting",
               )}
             </p>
+            <Show when={props.reconnectFailed}>
+              <Button variant="outline" onClick={props.onReconnect}>
+                {t("thread.reconnect")}
+              </Button>
+            </Show>
           </Match>
         </Switch>
       </DialogContent>

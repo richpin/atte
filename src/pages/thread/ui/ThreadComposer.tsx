@@ -50,8 +50,6 @@ export function ThreadComposer(props: {
   actionsEnabled: boolean;
   canSend: boolean;
   signInOpen?: boolean;
-  onSignIn?: () => void;
-  signInRef?: (element: HTMLButtonElement) => void;
   promptRef?: (element: HTMLTextAreaElement) => void;
   onDraftChange: (message: string) => void;
   onSelectFiles?: () => void;
@@ -224,19 +222,6 @@ export function ThreadComposer(props: {
             </Show>
           </button>
         </div>
-        <Show when={authenticationRequired()}>
-          <div class="mt-3 flex flex-wrap items-center justify-between gap-2 text-xs text-muted">
-            <p>{t("thread.authentication.required")}</p>
-            <button
-              ref={props.signInRef}
-              type="button"
-              onClick={props.onSignIn}
-              class="shrink-0 rounded-lg border border-line px-3 py-1.5 text-sm text-ink hover:bg-panel focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
-            >
-              {t("thread.authentication.signIn")}
-            </button>
-          </div>
-        </Show>
       </form>
     </div>
   );

@@ -102,17 +102,14 @@ export const en = {
     subscriptionFailed: "Thread updates are unavailable.",
     openAgentManagement: "Open installation and authentication",
     authentication: {
-      close: "Close sign-in",
-      signIn: "Sign in",
       title: "Sign in to {{ agent }}",
-      required: "Sign in to send your message.",
       choose: "Choose a sign-in method.",
       empty: "No supported sign-in methods are available.",
       browser: "Complete sign-in in your browser.",
       terminal: "Complete sign-in in the terminal.",
       cancelling: "Cancelling sign-in…",
       reconnecting: "Signed in. Reconnecting the thread…",
-      reconnectFailed: "Signed in. Use Reconnect to restore the thread.",
+      reconnectFailed: "Signed in. Reconnect to restore the thread.",
 
       loading: "Loading sign-in methods…",
       discoveryFailed: "Sign-in methods could not be loaded. Try again.",

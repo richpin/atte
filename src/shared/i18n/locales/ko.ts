@@ -109,17 +109,14 @@ export const ko = {
     subscriptionFailed: "스레드 상태를 구독할 수 없습니다.",
     openAgentManagement: "설치·인증 관리 열기",
     authentication: {
-      close: "로그인 창 닫기",
-      signIn: "Sign in",
       title: "{{ agent }} 로그인",
-      required: "메시지를 전송하려면 로그인하세요.",
       choose: "로그인 방법을 선택하세요.",
       empty: "지원되는 로그인 방법이 없습니다.",
       browser: "브라우저에서 로그인을 완료하세요.",
       terminal: "터미널에서 로그인을 완료하세요.",
       cancelling: "로그인을 취소하는 중…",
       reconnecting: "로그인 완료. 스레드를 다시 연결하는 중…",
-      reconnectFailed: "로그인 완료. 다시 연결 동작으로 스레드를 복구하세요.",
+      reconnectFailed: "로그인 완료. 스레드를 다시 연결해주세요.",
 
       loading: "로그인 방법을 불러오는 중…",
       discoveryFailed: "로그인 방법을 불러올 수 없습니다. 다시 시도해주세요.",

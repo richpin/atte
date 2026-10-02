@@ -67,7 +67,6 @@ export function ThreadPage(props: {
     completedByAgent: {} as Record<string, number | undefined>,
   });
   const [signInThread, setSignInThread] = createSignal<string>();
-  let signInButton: HTMLButtonElement | undefined;
   let promptInput: HTMLTextAreaElement | undefined;
   let returnToPrompt = false;
   let dialogOrigin: string | undefined;
@@ -76,15 +75,15 @@ export function ThreadPage(props: {
     signInThread() === selectedThreadId() &&
     Boolean(signInThread());
 
-  function closeSignIn() {
-    const current = thread();
-    if (current) void authentication.cancel(current.agentId);
-    setSignInThread(undefined);
-  }
-
   createEffect(() => {
+    const current = thread();
     if (!props.active || signInThread() !== selectedThreadId())
       setSignInThread(undefined);
+    if (props.active && current?.failure === "authenticationRequired") {
+      dialogOrigin = current.id;
+      returnToPrompt = false;
+      setSignInThread(current.id);
+    }
   });
 
   createEffect(() => {
@@ -202,14 +201,16 @@ export function ThreadPage(props: {
             state={authentication.state(current().agentId)}
             reconnectFailed={
               !connecting() &&
-              (props.model.connectFailed() ||
+              (authenticationReconnect.blockedByThread[current().id] !==
+                undefined ||
+                props.model.connectFailed() ||
                 (current().status === "failed" &&
                   current().failure !== "authenticationRequired"))
             }
-            onClose={closeSignIn}
+            onReconnect={() => void props.model.reconnect()}
             onClosed={() => {
               if (!props.active || selectedThreadId() !== dialogOrigin) return;
-              (returnToPrompt ? promptInput : signInButton)?.focus();
+              if (returnToPrompt) promptInput?.focus();
             }}
             onRetry={() => void authentication.discover(current().agentId)}
             onSelect={(method) => void authenticateThread(method)}
@@ -307,21 +308,8 @@ export function ThreadPage(props: {
                   actionsEnabled={actionsEnabled()}
                   canSend={canSend()}
                   signInOpen={signInOpen()}
-                  signInRef={(element) => {
-                    signInButton = element;
-                  }}
                   promptRef={(element) => {
                     promptInput = element;
-                  }}
-                  onSignIn={() => {
-                    returnToPrompt = false;
-                    dialogOrigin = currentThread().id;
-                    setSignInThread(currentThread().id);
-                    if (
-                      authentication.state(currentThread().agentId).status ===
-                      "idle"
-                    )
-                      void authentication.discover(currentThread().agentId);
                   }}
                   onDraftChange={setDraft}
                   onSelectFiles={() => void selectFiles()}
