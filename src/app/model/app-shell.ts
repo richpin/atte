@@ -32,8 +32,7 @@ export function createAppShellModel() {
 
   function showNewThread(folder?: string) {
     threads.startNewThread();
-    setSelectedFolder(folder);
-    setSelectedAgent("");
+    if (folder !== undefined) setSelectedFolder(folder);
     setView("new-thread");
   }
 

@@ -636,7 +636,7 @@ it("groups threads by folder, collapses projects and creates within the selected
 });
 
 it.each(["light", "dark"])(
-  "requires a fresh agent choice for project and general new threads in %s theme",
+  "remembers new thread selections until app remount in %s theme",
   async (theme) => {
     localStorage.setItem("atte.theme", theme);
     const saved = {
@@ -667,10 +667,9 @@ it.each(["light", "dark"])(
     expect(screen.getByRole("button", { name: "original" })).toBeTruthy();
     expect(
       screen.getByRole("button", { name: /^새 스레드 에이전트/ }).textContent,
-    ).toContain("에이전트 선택");
+    ).toContain("Codex");
     const start = screen.getByRole("button", { name: "스레드 시작" });
-    expect(start).toHaveProperty("disabled", true);
-    await userEvent.click(start);
+    expect(start).toHaveProperty("disabled", false);
     expect(invoke).not.toHaveBeenCalledWith("create_thread", expect.anything());
     expect(invoke).not.toHaveBeenCalledWith(
       "connect_thread",
@@ -687,6 +686,26 @@ it.each(["light", "dark"])(
     });
     await screen.findByRole("textbox");
     await userEvent.click(getNewThreadButton());
+    expect(screen.getByRole("button", { name: "project" })).toBeTruthy();
+    expect(
+      screen.getByRole("button", { name: /^새 스레드 에이전트/ }).textContent,
+    ).toContain("Fixture");
+    expect(screen.getByRole("button", { name: "스레드 시작" })).toHaveProperty(
+      "disabled",
+      false,
+    );
+    await userEvent.click(
+      screen.getByRole("button", { name: "original에 새 스레드" }),
+    );
+    expect(screen.getByRole("button", { name: "original" })).toBeTruthy();
+    expect(
+      screen.getByRole("button", { name: /^새 스레드 에이전트/ }).textContent,
+    ).toContain("Fixture");
+    await userEvent.click(getNewThreadButton());
+    expect(screen.getByRole("button", { name: "original" })).toBeTruthy();
+
+    cleanup();
+    render(() => <App />);
     expect(screen.getByRole("button", { name: "폴더 선택" })).toBeTruthy();
     expect(
       screen.getByRole("button", { name: /^새 스레드 에이전트/ }).textContent,
@@ -1566,7 +1585,7 @@ it("keeps the new thread page when another folder selection is cancelled", async
   await startNewThreadWithAgent();
   await screen.findByRole("textbox");
   await userEvent.click(getNewThreadButton());
-  await userEvent.click(screen.getByRole("button", { name: "폴더 선택" }));
+  await userEvent.click(screen.getByRole("button", { name: "project" }));
   expect(
     screen.getByRole("heading", { name: "무엇을 만들고 싶으세요?" }),
   ).toBeTruthy();
@@ -3097,7 +3116,7 @@ it("does not disable the new thread when old subscription cleanup fails", async 
   await userEvent.click(screen.getByRole("button", { name: "폴더 선택" }));
   await startNewThreadWithAgent();
   await userEvent.click(getNewThreadButton());
-  await userEvent.click(screen.getByRole("button", { name: "폴더 선택" }));
+  await userEvent.click(screen.getByRole("button", { name: "project" }));
   await startNewThreadWithAgent();
   rejectCleanup(new Error("old channel closed"));
   await userEvent.type(screen.getByRole("textbox"), "next");
