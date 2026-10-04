@@ -1,6 +1,14 @@
 export { AgentIcon } from "./agent-icon";
 export { Button, type ButtonProps } from "./button";
 export {
+  Card,
+  CardContent,
+  CardDescription,
+  CardFooter,
+  CardHeader,
+  CardTitle,
+} from "./card";
+export {
   Collapsible,
   CollapsibleContent,
   CollapsibleTrigger,
@@ -24,6 +32,7 @@ export {
 } from "./dropdown-menu";
 export { LanguageMenu } from "./language-menu";
 export { Markdown, type MarkdownProps } from "./markdown";
+export { Progress, ProgressLabel, ProgressValueLabel } from "./progress";
 export {
   Resizable,
   ResizableHandle,

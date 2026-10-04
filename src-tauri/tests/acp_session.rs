@@ -5829,3 +5829,69 @@ async fn streams_thoughts_and_replays_the_same_interleaving() {
     assert_eq!(replayed, expected);
     threads.shutdown().await;
 }
+
+#[tokio::test]
+async fn context_usage_routes_without_a_turn_and_resets_then_updates_during_replay() {
+    use atte_lib::thread::{ContextUsage, ThreadUpdate};
+    let folder = tempfile::tempdir().unwrap();
+    let mut agent = mock_agent();
+    for (key, used) in [
+        ("USAGE_UPDATES_RUNNING", 40_000),
+        ("USAGE_UPDATES_RESTORE", 12_000),
+    ] {
+        agent.env.insert(
+            key.into(),
+            serde_json::json!([
+                {"sessionUpdate":"usage_update","used":used,"size":100_000}
+            ])
+            .to_string(),
+        );
+    }
+    let threads = Threads::new(vec![agent]);
+    let draft = threads.create(folder.path()).unwrap();
+    let mut stream = threads.subscribe(draft.id).unwrap();
+    stream.recv().await.unwrap();
+    threads.connect(draft.id).unwrap();
+    settle(&threads, draft.id).await;
+    threads.reconnect(draft.id).unwrap();
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let update = stream.recv().await.unwrap();
+            if let ThreadUpdate::Patch { thread, .. } = update {
+                if thread.context_usage
+                    == Some(ContextUsage {
+                        used: 12_000,
+                        size: 100_000,
+                    })
+                {
+                    break;
+                }
+            }
+        }
+    })
+    .await
+    .unwrap();
+    assert!(threads.get(draft.id).unwrap().turns.is_empty());
+    settle(&threads, draft.id).await;
+    threads.send_message(draft.id, "Hello".into()).unwrap();
+    let completed = settle(&threads, draft.id).await;
+    assert_eq!(
+        completed.context_usage,
+        Some(ContextUsage {
+            used: 40_000,
+            size: 100_000
+        })
+    );
+    let connecting = threads.reconnect(draft.id).unwrap();
+    assert_eq!(connecting.context_usage, None);
+    let restored = settle(&threads, draft.id).await;
+    assert_eq!(
+        restored.context_usage,
+        Some(ContextUsage {
+            used: 12_000,
+            size: 100_000
+        })
+    );
+    assert_eq!(restored.turns.len(), 1);
+    threads.shutdown().await;
+}

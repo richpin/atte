@@ -55,6 +55,7 @@ pub struct Thread {
     pub queued_messages: Vec<QueuedMessage>,
     pub configuration: Vec<ThreadConfiguration>,
     pub prompt_capabilities: PromptCapabilities,
+    pub context_usage: Option<ContextUsage>,
 }
 
 /// Current thread fields excluding the potentially large transcript.
@@ -70,6 +71,7 @@ pub struct ThreadPatch {
     pub queued_messages: Vec<QueuedMessage>,
     pub configuration: Vec<ThreadConfiguration>,
     pub prompt_capabilities: PromptCapabilities,
+    pub context_usage: Option<ContextUsage>,
 }
 
 impl From<&Thread> for ThreadPatch {
@@ -83,6 +85,7 @@ impl From<&Thread> for ThreadPatch {
             queued_messages: thread.queued_messages.clone(),
             configuration: thread.configuration.clone(),
             prompt_capabilities: thread.prompt_capabilities.clone(),
+            context_usage: thread.context_usage,
         }
     }
 }
@@ -127,8 +130,17 @@ impl ThreadPatch {
         thread.queued_messages = self.queued_messages;
         thread.configuration = self.configuration;
         thread.prompt_capabilities = self.prompt_capabilities;
+        thread.context_usage = self.context_usage;
         true
     }
+}
+
+/// Latest agent-reported context occupancy; never persisted.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ContextUsage {
+    pub used: u64,
+    pub size: u64,
 }
 
 /// Agent-provided configuration for one ACP session.
@@ -685,6 +697,7 @@ impl Threads {
                 queued_messages: store.queued_messages(saved.id)?,
                 configuration: Vec::new(),
                 prompt_capabilities: PromptCapabilities::default(),
+                context_usage: None,
             };
             entries.insert(
                 thread.id,
@@ -1168,6 +1181,7 @@ impl Threads {
             queued_messages: Vec::new(),
             configuration: Vec::new(),
             prompt_capabilities: PromptCapabilities::default(),
+            context_usage: None,
         };
         let mut state = self.lock()?;
         if state.closed {
@@ -1387,6 +1401,7 @@ impl Threads {
         if recreate {
             thread.session_id = None;
         }
+        thread.context_usage = None;
         thread.status = ThreadStatus::Connecting;
         thread.authentication = AuthenticationStatus::Unknown;
         thread.failure = None;
@@ -2649,6 +2664,17 @@ impl RuntimeUpdates {
         next
     }
 
+    pub fn context_usage_updated(&self, usage: ContextUsage) {
+        let Ok(mut state) = self.state.lock() else {
+            return;
+        };
+        if state.generation != self.generation || state.thread.context_usage == Some(usage) {
+            return;
+        }
+        state.thread.context_usage = Some(usage);
+        state.publish();
+    }
+
     pub fn configuration_updated(&self, configuration: Vec<ThreadConfiguration>) {
         self.modify_state(|state| {
             state.confirmed_configuration = configuration;
@@ -3099,6 +3125,45 @@ mod title_tests {
             state,
             generation,
         }
+    }
+
+    #[test]
+    fn context_usage_replaces_snapshots_independently_of_turn_status_and_rejects_stale_updates() {
+        let folder = tempfile::tempdir().unwrap();
+        let threads = Threads::default();
+        let draft = threads.create(folder.path()).unwrap();
+        let updates = updates_for(&threads, draft.id);
+        let mut stream = threads.subscribe(draft.id).unwrap();
+        stream.try_recv().unwrap();
+        for (status, used) in [
+            (ThreadStatus::Connecting, 32_000),
+            (ThreadStatus::Running, 40_000),
+            (ThreadStatus::WaitingForApproval, 42_000),
+            (ThreadStatus::Cancelling, 43_000),
+            (ThreadStatus::SessionReady, 12_000),
+        ] {
+            updates.state.lock().unwrap().thread.status = status;
+            let usage = ContextUsage {
+                used,
+                size: 100_000,
+            };
+            updates.context_usage_updated(usage);
+            let ThreadUpdate::Patch { thread, .. } = stream.try_recv().unwrap() else {
+                panic!("expected context usage patch");
+            };
+            assert_eq!(thread.context_usage, Some(usage));
+            assert_eq!(threads.get(draft.id).unwrap().context_usage, Some(usage));
+        }
+        updates.state.lock().unwrap().generation += 1;
+        updates.context_usage_updated(ContextUsage {
+            used: 99_000,
+            size: 100_000,
+        });
+        assert!(stream.try_recv().is_err());
+        assert_eq!(
+            threads.get(draft.id).unwrap().context_usage.unwrap().used,
+            12_000
+        );
     }
 
     #[test]

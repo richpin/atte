@@ -33,6 +33,7 @@ function thread(id: string, changes: Partial<Thread> = {}): Thread {
     lastPromptAt: 1,
     interrupted: false,
     storageError: null,
+    contextUsage: null,
     status: "sessionReady",
     sessionId: id,
     authentication: "authenticated",
@@ -1240,4 +1241,32 @@ it("appends thought deltas without invalidating the answer or neighboring activi
   expect(answerRuns).toBe(1);
   expect(thoughtRuns).toBe(2);
   stop();
+});
+
+it("keeps context usage scoped to selected snapshots and patches", async () => {
+  const model = setup();
+  const first = thread("A", { contextUsage: { used: 32_000, size: 100_000 } });
+  await open(model, "A", first);
+  expect(model.thread()?.contextUsage?.used).toBe(32_000);
+  const { turns: _turns, ...patch } = first;
+  stream("A")({
+    kind: "patch",
+    thread: { ...patch, contextUsage: { used: 12_000, size: 100_000 } },
+    turnUpdates: [],
+  });
+  expect(model.thread()?.contextUsage?.used).toBe(12_000);
+  await open(model, "B");
+  stream("A")({ kind: "patch", thread: patch, turnUpdates: [] });
+  expect(model.thread()?.contextUsage).toBeNull();
+  await open(model, "A", {
+    ...first,
+    contextUsage: { used: 12_000, size: 100_000 },
+  });
+  expect(model.thread()?.contextUsage?.used).toBe(12_000);
+  stream("A")({
+    kind: "patch",
+    thread: { ...patch, contextUsage: null, status: "connecting" },
+    turnUpdates: [],
+  });
+  expect(model.thread()?.contextUsage).toBeNull();
 });

@@ -204,6 +204,7 @@ pub(crate) async fn run(
                             MaybeUndefined::Null => route.updates.title_updated(None),
                             MaybeUndefined::Undefined => {},
                         },
+                        SessionUpdate::UsageUpdate(update) => route.updates.context_usage_updated(crate::thread::ContextUsage { used: update.used, size: update.size }),
                         SessionUpdate::ConfigOptionUpdate(update) => route
                             .updates
                             .configuration_updated(thread_configuration(update.config_options)),

@@ -27,6 +27,7 @@ function readyThread(): Thread {
     lastPromptAt: 1,
     interrupted: false,
     storageError: null,
+    contextUsage: null,
     workingFolder: "/workspace",
     agentId: "agent-1",
     status: "sessionReady",

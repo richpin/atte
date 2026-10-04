@@ -15,7 +15,7 @@ fn send(output: &mut impl Write, message: Value) -> io::Result<()> {
     output.flush()
 }
 
-fn send_title_updates(output: &mut impl Write, key: &str, session: &Value) -> io::Result<()> {
+fn send_session_updates(output: &mut impl Write, key: &str, session: &Value) -> io::Result<()> {
     let Ok(updates) = env::var(key) else {
         return Ok(());
     };
@@ -302,7 +302,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             "session/resume" => {
                 assert_eq!(mode, "resume-only");
                 assert_eq!(request["params"]["sessionId"], "remote-1");
-                send_title_updates(
+                send_session_updates(
                     &mut output,
                     "TITLE_UPDATES_RESTORE",
                     &request["params"]["sessionId"],
@@ -314,9 +314,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 response
             }
             "session/load" => {
+                send_session_updates(
+                    &mut output,
+                    "USAGE_UPDATES_RESTORE",
+                    &request["params"]["sessionId"],
+                )?;
                 assert_ne!(mode, "resume-only");
                 assert_eq!(request["params"]["sessionId"], "remote-1");
-                send_title_updates(
+                send_session_updates(
                     &mut output,
                     "TITLE_UPDATES_RESTORE",
                     &request["params"]["sessionId"],
@@ -402,6 +407,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
             "session/prompt" => {
+                send_session_updates(
+                    &mut output,
+                    "USAGE_UPDATES_RUNNING",
+                    &request["params"]["sessionId"],
+                )?;
                 prompts += 1;
                 if let Some(path) = env::var_os("PROMPT_METADATA_DB") {
                     let database = rusqlite::Connection::open(path)?;
@@ -540,12 +550,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
                 assert_eq!(request["params"]["sessionId"], "remote-1");
                 if prompts == 1 {
-                    send_title_updates(
+                    send_session_updates(
                         &mut output,
                         "TITLE_UPDATES_RUNNING",
                         &request["params"]["sessionId"],
                     )?;
-                    send_title_updates(&mut output, "TITLE_UPDATES_FOREIGN", &json!("foreign"))?;
+                    send_session_updates(&mut output, "TITLE_UPDATES_FOREIGN", &json!("foreign"))?;
                 }
                 if env::var_os("CONFIGURATION_UPDATE_DURING_PROMPT").is_some() {
                     let mut foreign = configuration();
@@ -740,10 +750,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let new_session = response["result"]["sessionId"].clone();
         send(&mut output, response)?;
         if method == "session/new" {
-            send_title_updates(&mut output, "TITLE_UPDATES_NEW", &new_session)?;
+            send_session_updates(&mut output, "TITLE_UPDATES_NEW", &new_session)?;
         }
         if method == "session/prompt" && prompts == 1 {
-            send_title_updates(
+            send_session_updates(
                 &mut output,
                 "TITLE_UPDATES_IDLE",
                 &request["params"]["sessionId"],

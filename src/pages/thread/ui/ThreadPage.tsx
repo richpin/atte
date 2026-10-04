@@ -8,6 +8,7 @@ import type { ThreadModel } from "../model/thread";
 import type { PreparedAgent } from "../model/types";
 import { Message } from "./Message";
 import { ThreadComposer } from "./ThreadComposer";
+import { ThreadInfoCard } from "./ThreadInfoCard";
 import { ThreadTimeline } from "./ThreadTimeline";
 
 const composerBottomOffset = 16;
@@ -152,7 +153,7 @@ export function ThreadPage(props: {
     (!thread() || connecting() || thread()?.status === "connecting");
 
   return (
-    <main class="flex h-full min-h-0 flex-col overflow-hidden bg-canvas text-ink">
+    <main class="@container/thread flex h-full min-h-0 flex-col overflow-hidden bg-canvas text-ink">
       <Show when={selectedThreadId()}>
         <div class="relative min-h-0 flex-1">
           <div hidden={loading()} class="h-full">
@@ -235,6 +236,9 @@ export function ThreadPage(props: {
                 </span>
               </h2>
             </div>
+          </Show>
+          <Show when={thread()}>
+            <ThreadInfoCard usage={thread()?.contextUsage ?? null} />
           </Show>
           <div
             ref={(element) => {

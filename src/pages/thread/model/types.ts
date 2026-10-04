@@ -12,6 +12,11 @@ export type ConnectionFailure =
   | "sessionRestorationFailed"
   | "promptFailed";
 
+export interface ContextUsage {
+  used: number;
+  size: number;
+}
+
 export interface Thread {
   id: string;
   title: string;
@@ -40,6 +45,7 @@ export interface Thread {
   permissions: PermissionRequest[];
   queuedMessages: QueuedMessage[];
   configuration: ThreadConfiguration[];
+  contextUsage: ContextUsage | null;
   promptCapabilities?: { image: boolean; audio: boolean };
 }
 
