@@ -1120,3 +1120,59 @@ it("preserves text and tool order while updating only the matching call", async 
     tool: { title: "Test", status: "failed", rawOutput: "Failure" },
   });
 });
+
+it("replaces plan snapshots in place without altering surrounding response parts", async () => {
+  const model = setup();
+  await open(model, "A", running("A"));
+  const receive = stream("A");
+  receive({
+    kind: "textDelta",
+    threadId: "A",
+    turnId: "turn",
+    partId: "before",
+    text: "Before",
+  });
+  receive({
+    kind: "planUpdate",
+    threadId: "A",
+    turnId: "turn",
+    part: {
+      kind: "plan",
+      id: "plan",
+      plan: {
+        entries: [{ content: "Old", priority: "high", status: "pending" }],
+      },
+    },
+  });
+  receive({
+    kind: "textDelta",
+    threadId: "A",
+    turnId: "turn",
+    partId: "after",
+    text: "After",
+  });
+  const first = model.thread()?.turns[0].responseParts[0];
+  for (const entries of [
+    [],
+    [
+      {
+        content: "New",
+        priority: "low" as const,
+        status: "completed" as const,
+      },
+    ],
+  ]) {
+    receive({
+      kind: "planUpdate",
+      threadId: "A",
+      turnId: "turn",
+      part: { kind: "plan", id: "plan", plan: { entries } },
+    });
+  }
+  const parts = model.thread()?.turns[0].responseParts;
+  expect(parts?.map((part) => part.id)).toEqual(["before", "plan", "after"]);
+  expect(parts?.[0]).toBe(first);
+  expect(parts?.[1]).toMatchObject({
+    plan: { entries: [{ content: "New", status: "completed" }] },
+  });
+});

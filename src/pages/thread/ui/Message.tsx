@@ -13,6 +13,7 @@ import {
 } from "solid-js";
 import type { Attachment, ResponsePart, Turn } from "../model/types";
 import { AttachmentChip } from "./AttachmentChip";
+import { Plan } from "./Plan";
 import { ToolCall } from "./ToolCall";
 
 const collapsedLines = 20;
@@ -117,7 +118,10 @@ export function Message(props: {
             <Show
               when={
                 turn().id === props.waitingTurnId &&
-                !turn().responseParts.length
+                !turn().responseParts.some(
+                  (part) =>
+                    part.kind !== "plan" || part.plan.entries.length > 0,
+                )
               }
             >
               <div
@@ -140,6 +144,19 @@ export function Message(props: {
             <Index each={turn().responseParts}>
               {(part, index) => (
                 <Switch>
+                  <Match
+                    when={
+                      part().kind === "plan" &&
+                      (part() as Extract<ResponsePart, { kind: "plan" }>)
+                    }
+                  >
+                    {(plan) => (
+                      <Plan
+                        plan={plan().plan}
+                        active={turn().id === props.streamingTurnId}
+                      />
+                    )}
+                  </Match>
                   <Match
                     when={
                       part().kind === "tool" &&

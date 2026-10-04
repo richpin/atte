@@ -216,6 +216,7 @@ pub(crate) async fn run(
                             if let Some(active) = &mut route.active {
                                 match update {
                                     SessionUpdate::AgentMessageChunk(chunk) => if let ContentBlock::Text(text) = chunk.content { route.updates.append_text(active.turn, text.text); },
+                                    SessionUpdate::Plan(plan) => { route.updates.update_plan(active.turn, plan); },
                                     SessionUpdate::ToolCall(tool) => { route.updates.update_tool(active.turn, tool.into()); },
                                     SessionUpdate::ToolCallUpdate(tool) => { route.updates.update_tool(active.turn, tool); },
                                     _ => {},

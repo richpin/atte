@@ -483,9 +483,9 @@ export function createThreadModel(
     }
     const turnIndex = current.turns.length - 1;
     const parts = current.turns[turnIndex].responseParts;
-    if (update.kind === "toolUpdate") {
+    if (update.kind === "toolUpdate" || update.kind === "planUpdate") {
       const index = parts.findIndex(
-        (part) => part.kind === "tool" && part.id === update.part.id,
+        (part) => part.kind === update.part.kind && part.id === update.part.id,
       );
       if (index < 0)
         setState(

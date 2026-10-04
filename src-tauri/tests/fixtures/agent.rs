@@ -471,6 +471,31 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     )?;
                     continue;
                 }
+                if mode == "plan-stream" {
+                    let updates = [
+                        json!({"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"Before"}}),
+                        json!({"sessionUpdate":"plan","entries":[{"content":"Read","priority":"high","status":"pending"},{"content":"Test","priority":"low","status":"pending"}]}),
+                        json!({"sessionUpdate":"tool_call","toolCallId":"read-1","title":"Read file","status":"completed"}),
+                        json!({"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"After"}}),
+                        json!({"sessionUpdate":"plan","entries":[]}),
+                        json!({"sessionUpdate":"plan","entries":[{"content":"Test","priority":"low","status":"completed"},{"content":"Review","priority":"high","status":"in_progress"}]}),
+                    ];
+                    for update in updates {
+                        send(
+                            &mut output,
+                            json!({"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"remote-1","update":update}}),
+                        )?;
+                        history.push(update);
+                    }
+                    if let Some(path) = env::var_os("SESSION_FILE") {
+                        fs::write(path, serde_json::to_vec(&history)?)?;
+                    }
+                    send(
+                        &mut output,
+                        json!({"jsonrpc":"2.0","id":request["id"],"result":{"stopReason":"end_turn"}}),
+                    )?;
+                    continue;
+                }
                 history.push(json!({"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"Hello world"}}));
                 if let Some(path) = env::var_os("SESSION_FILE") {
                     fs::write(path, serde_json::to_vec(&history)?)?;

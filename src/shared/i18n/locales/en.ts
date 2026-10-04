@@ -36,6 +36,13 @@ export const en = {
     languageDescription: "Choose the language used throughout Atte.",
   },
   thread: {
+    plan: {
+      title: "Work plan",
+      completed: "{{completed}}/{{total}} completed",
+      pending: "Pending",
+      in_progress: "In progress",
+      done: "Completed",
+    },
     tool: {
       fallbackTitle: "Tool call",
       pending: "Waiting",

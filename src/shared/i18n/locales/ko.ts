@@ -42,6 +42,13 @@ export const ko = {
     languageDescription: "Atte 전체에서 사용할 언어를 선택합니다.",
   },
   thread: {
+    plan: {
+      title: "작업 계획",
+      completed: "{{completed}}/{{total}} 완료",
+      pending: "대기 중",
+      in_progress: "진행 중",
+      done: "완료",
+    },
     tool: {
       fallbackTitle: "도구 호출",
       pending: "대기 중",

@@ -158,9 +158,20 @@ export type ToolContent =
   | { type: "diff"; path: string }
   | { type: "terminal"; terminalId: string };
 
+export interface Plan {
+  entries: {
+    content: string;
+    priority: "high" | "medium" | "low";
+    status: "pending" | "in_progress" | "completed";
+    _meta?: Record<string, unknown> | null;
+  }[];
+  _meta?: Record<string, unknown> | null;
+}
+
 export type ResponsePart =
   | { kind: "text"; id: string; text: string }
-  | { kind: "tool"; id: string; tool: ToolCall };
+  | { kind: "tool"; id: string; tool: ToolCall }
+  | { kind: "plan"; id: string; plan: Plan };
 
 export interface Turn {
   id: string;
@@ -200,6 +211,12 @@ export type ThreadUpdate =
       turnId: string;
       partId: string;
       text: string;
+    }
+  | {
+      kind: "planUpdate";
+      threadId: string;
+      turnId: string;
+      part: Extract<ResponsePart, { kind: "plan" }>;
     }
   | {
       kind: "toolUpdate";

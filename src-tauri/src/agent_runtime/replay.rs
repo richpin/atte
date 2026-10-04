@@ -75,6 +75,21 @@ impl Replay {
                 }
                 self.user_chunk = false;
             }
+            SessionUpdate::Plan(plan) => {
+                if self.turns.is_empty() {
+                    self.turns.push(Turn {
+                        id: Uuid::new_v4(),
+                        message: String::new(),
+                        attachments: Vec::new(),
+                        response_parts: Vec::new(),
+                        stop_reason: None,
+                    });
+                }
+                if let Some(turn) = self.turns.last_mut() {
+                    turn.update_plan(plan);
+                }
+                self.user_chunk = false;
+            }
             SessionUpdate::ToolCall(tool) => self.update_tool(tool.into()),
             SessionUpdate::ToolCallUpdate(tool) => self.update_tool(tool),
             _ => {}
@@ -112,6 +127,32 @@ fn attachment_name(
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn plan_only_replies_separate_turns_and_restore_the_final_snapshot() {
+        let mut replay = Replay::new();
+        for update in [
+            json!({"sessionUpdate":"plan","entries":[{"content":"Initial","priority":"high","status":"pending"}]}),
+            json!({"sessionUpdate":"plan","entries":[{"content":"Initial","priority":"high","status":"completed"}]}),
+            json!({"sessionUpdate":"user_message_chunk","content":{"type":"text","text":"Next"}}),
+            json!({"sessionUpdate":"plan","entries":[{"content":"Next task","priority":"low","status":"in_progress"}]}),
+            json!({"sessionUpdate":"user_message_chunk","content":{"type":"text","text":"Next"}}),
+        ] {
+            replay.update(serde_json::from_value(update).unwrap());
+        }
+        let turns = serde_json::to_value(&replay.turns).unwrap();
+        assert_eq!(replay.turns.len(), 3);
+        assert_eq!(turns[0]["responseParts"].as_array().unwrap().len(), 1);
+        assert_eq!(
+            turns[0]["responseParts"][0]["plan"]["entries"][0]["status"],
+            "completed"
+        );
+        assert_eq!(
+            turns[1]["responseParts"][0]["plan"]["entries"][0]["content"],
+            "Next task"
+        );
+        assert!(replay.turns[2].response_parts.is_empty());
+    }
 
     #[test]
     fn tool_only_replies_separate_identical_user_messages_and_restore_updates() {

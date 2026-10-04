@@ -4155,6 +4155,21 @@ impl TranscriptSubscription {
                 if let Some(previous) = turn.response_parts.iter_mut().find(|previous| matches!(previous, atte_lib::thread::ResponsePart::Tool { id: existing, .. } if existing == id)) { *previous = part; }
                 else { turn.response_parts.push(part); }
             }
+            ThreadUpdate::PlanUpdate {
+                thread_id,
+                turn_id,
+                part,
+            } => {
+                let thread = self.thread.as_mut().unwrap();
+                assert_eq!(thread_id, thread.id);
+                let turn = thread.turns.last_mut().unwrap();
+                assert_eq!(turn_id, turn.id);
+                let atte_lib::thread::ResponsePart::Plan { id, .. } = &part else {
+                    panic!("plan update");
+                };
+                if let Some(previous) = turn.response_parts.iter_mut().find(|previous| matches!(previous, atte_lib::thread::ResponsePart::Plan { id: existing, .. } if existing == id)) { *previous = part; }
+                else { turn.response_parts.push(part); }
+            }
         }
         self.thread.clone()
     }
@@ -5671,5 +5686,62 @@ async fn receives_final_tool_results_after_cancellation_without_late_response_te
     let parts = serde_json::to_value(&cancelled.turns[0].response_parts).unwrap();
     assert_eq!(parts[0]["tool"]["status"], "failed");
     assert_eq!(parts[0]["tool"]["rawOutput"], "Command stopped");
+    threads.shutdown().await;
+}
+
+#[tokio::test]
+async fn streams_plan_snapshots_and_restores_the_final_plan_at_its_original_position() {
+    use atte_lib::thread::ResponsePart;
+    let folder = tempfile::tempdir().unwrap();
+    let mut agent = mock_agent();
+    agent
+        .env
+        .insert("FIXTURE_MODE".into(), "plan-stream".into());
+    agent.env.insert(
+        "SESSION_FILE".into(),
+        folder.path().join("history.json").to_string_lossy().into(),
+    );
+    let threads = Threads::new(vec![agent]);
+    let draft = threads.create(folder.path()).unwrap();
+    threads.connect(draft.id).unwrap();
+    assert_eq!(
+        settle(&threads, draft.id).await.status,
+        ThreadStatus::SessionReady
+    );
+    let mut stream = subscribe(&threads, draft.id);
+    threads.send_message(draft.id, "Inspect".into()).unwrap();
+    let completed = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let next = stream.recv().await.unwrap();
+            if next.status == ThreadStatus::SessionReady && !next.turns.is_empty() {
+                break next;
+            }
+        }
+    })
+    .await
+    .unwrap();
+    let parts = &completed.turns[0].response_parts;
+    assert_eq!(parts.len(), 4);
+    assert!(matches!(&parts[0], ResponsePart::Text { text, .. } if text == "Before"));
+    assert!(matches!(&parts[3], ResponsePart::Text { text, .. } if text == "After"));
+    let value = serde_json::to_value(parts).unwrap();
+    assert_eq!(value[1]["plan"]["entries"][0]["content"], "Test");
+    assert_eq!(value[1]["plan"]["entries"][0]["status"], "completed");
+    assert_eq!(value[1]["plan"]["entries"][1]["content"], "Review");
+    assert_eq!(
+        threads.get(draft.id).unwrap().turns[0].response_parts,
+        *parts
+    );
+    let mut snapshot = threads.subscribe(draft.id).unwrap();
+    let atte_lib::thread::ThreadUpdate::Thread { thread } = snapshot.recv().await.unwrap() else {
+        panic!("snapshot");
+    };
+    assert_eq!(thread.turns[0].response_parts, *parts);
+    threads.reconnect(draft.id).unwrap();
+    let restored = settle(&threads, draft.id).await;
+    assert_eq!(restored.turns[0].response_text(), "BeforeAfter");
+    let replayed = serde_json::to_value(&restored.turns[0].response_parts).unwrap();
+    assert_eq!(replayed[1]["plan"], value[1]["plan"]);
+    assert_eq!(restored.turns[0].response_parts[2], parts[2]);
     threads.shutdown().await;
 }

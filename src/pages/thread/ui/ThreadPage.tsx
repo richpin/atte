@@ -181,7 +181,11 @@ export function ThreadPage(props: {
               </Show>
               <Message
                 turns={thread()?.turns ?? []}
-                streamingTurnId={streamingTurnId()}
+                streamingTurnId={
+                  !props.model.subscriptionError()
+                    ? streamingTurnId()
+                    : undefined
+                }
                 agentId={thread()?.agentId}
                 permissionToolIds={thread()?.permissions.map(
                   (request) => request.toolCallId,

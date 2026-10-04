@@ -2490,6 +2490,13 @@ pub enum ThreadUpdate {
         turn_id: Uuid,
         part: ResponsePart,
     },
+    PlanUpdate {
+        #[serde(rename = "threadId")]
+        thread_id: Uuid,
+        #[serde(rename = "turnId")]
+        turn_id: Uuid,
+        part: ResponsePart,
+    },
 }
 
 /// A transient failure occurrence, delivered only with live updates, never snapshots.
@@ -2991,6 +2998,33 @@ impl RuntimeUpdates {
         Some(fields)
     }
 
+    pub fn update_plan(&self, turn: Uuid, plan: agent_client_protocol::schema::v1::Plan) {
+        let Ok(mut state) = self.state.lock() else {
+            return;
+        };
+        if state.generation != self.generation
+            || !matches!(
+                state.thread.status,
+                ThreadStatus::Running | ThreadStatus::WaitingForApproval | ThreadStatus::Cancelling
+            )
+            || state.thread.turns.last().map(|item| item.id) != Some(turn)
+        {
+            return;
+        }
+        let Some(last) = state.thread.turns.last_mut() else {
+            return;
+        };
+        let part = last.update_plan(plan);
+        let change = ThreadUpdate::PlanUpdate {
+            thread_id: state.thread.id,
+            turn_id: turn,
+            part,
+        };
+        state
+            .subscribers
+            .retain(|sender| sender.send(change.clone()).is_ok());
+    }
+
     fn modify(&self, update: impl FnOnce(&mut Thread)) {
         self.modify_state(|state| update(&mut state.thread));
     }
@@ -3026,6 +3060,62 @@ mod title_tests {
             state,
             generation,
         }
+    }
+
+    #[test]
+    fn plan_updates_accept_cancellation_but_reject_stale_runtime_and_turn() {
+        let folder = tempfile::tempdir().unwrap();
+        let threads = Threads::default();
+        let draft = threads.create(folder.path()).unwrap();
+        let updates = updates_for(&threads, draft.id);
+        let turn_id = Uuid::new_v4();
+        {
+            let mut state = updates.state.lock().unwrap();
+            state.thread.status = ThreadStatus::Running;
+            state.thread.turns.push(Turn {
+                id: turn_id,
+                message: String::new(),
+                attachments: Vec::new(),
+                response_parts: Vec::new(),
+                stop_reason: None,
+            });
+        }
+        let mut stream = threads.subscribe(draft.id).unwrap();
+        stream.try_recv().unwrap();
+        let plan = || {
+            serde_json::from_value(serde_json::json!({"entries":[
+                {"content":"Task","priority":"medium","status":"pending"}
+            ]}))
+            .unwrap()
+        };
+        updates.update_plan(Uuid::new_v4(), plan());
+        assert!(stream.try_recv().is_err());
+        for status in [
+            ThreadStatus::Running,
+            ThreadStatus::WaitingForApproval,
+            ThreadStatus::Cancelling,
+        ] {
+            updates.state.lock().unwrap().thread.status = status;
+            updates.update_plan(turn_id, plan());
+            assert!(matches!(
+                stream.try_recv().unwrap(),
+                ThreadUpdate::PlanUpdate { .. }
+            ));
+        }
+        updates.state.lock().unwrap().thread.status = ThreadStatus::SessionReady;
+        updates.update_plan(turn_id, plan());
+        assert!(stream.try_recv().is_err());
+        {
+            let mut state = updates.state.lock().unwrap();
+            state.thread.status = ThreadStatus::Running;
+            state.generation += 1;
+        }
+        updates.update_plan(turn_id, plan());
+        assert!(stream.try_recv().is_err());
+        assert_eq!(
+            threads.get(draft.id).unwrap().turns[0].response_parts.len(),
+            1
+        );
     }
 
     #[test]

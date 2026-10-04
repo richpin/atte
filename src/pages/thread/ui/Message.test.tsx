@@ -270,3 +270,45 @@ it("renders tools between text parts and stops waiting on a tool-only response",
     screen.queryByRole("status", { name: "Waiting for first response" }),
   ).toBeNull();
 });
+
+it("keeps plan expansion when snapshots change and waits only for empty plans", () => {
+  const current = turn("Plan please");
+  const [turns, setTurns] = createStore<Turn[]>([
+    {
+      ...current,
+      responseParts: [{ kind: "plan", id: "plan", plan: { entries: [] } }],
+    },
+  ]);
+  render(() => (
+    <I18nProvider>
+      <Message
+        turns={turns}
+        waitingTurnId={current.id}
+        streamingTurnId={current.id}
+      />
+    </I18nProvider>
+  ));
+  expect(
+    screen.getByRole("status", { name: "Waiting for first response" }),
+  ).toBeTruthy();
+  setTurns(0, "responseParts", 0, {
+    kind: "plan",
+    id: "plan",
+    plan: {
+      entries: [{ content: "Initial", priority: "high", status: "pending" }],
+    },
+  });
+  expect(screen.queryByRole("status")).toBeNull();
+  fireEvent.click(screen.getByRole("button"));
+  setTurns(0, "responseParts", 0, {
+    kind: "plan",
+    id: "plan",
+    plan: {
+      entries: [{ content: "Updated", priority: "low", status: "in_progress" }],
+    },
+  });
+  expect(screen.getByRole("button").getAttribute("aria-expanded")).toBe(
+    "false",
+  );
+  expect(screen.getByRole("button").textContent).toContain("Updated");
+});

@@ -1,6 +1,6 @@
 //! Ordered response content shared by live notifications and history replay.
 use super::Turn;
-use agent_client_protocol::schema::v1::{ToolCallUpdate, ToolCallUpdateFields};
+use agent_client_protocol::schema::v1::{Plan, ToolCallUpdate, ToolCallUpdateFields};
 use serde::Serialize;
 use uuid::Uuid;
 
@@ -11,6 +11,10 @@ pub enum ResponsePart {
         id: String,
         text: String,
     },
+    Plan {
+        id: String,
+        plan: Plan,
+    },
     Tool {
         id: String,
         tool: Box<ToolCallUpdateFields>,
@@ -18,7 +22,7 @@ pub enum ResponsePart {
 }
 
 impl Turn {
-    /// Append consecutive text to one part; tools form boundaries between text parts.
+    /// Append consecutive text to one part; activity forms boundaries between text parts.
     pub fn append_response_text(&mut self, text: &str) -> String {
         if let Some(ResponsePart::Text { id, text: previous }) = self.response_parts.last_mut() {
             previous.push_str(text);
@@ -72,13 +76,33 @@ impl Turn {
         self.response_parts[index].clone()
     }
 
+    /// Replace the turn's plan snapshot while preserving its first position and identity.
+    pub fn update_plan(&mut self, plan: Plan) -> ResponsePart {
+        if let Some(part) = self
+            .response_parts
+            .iter_mut()
+            .find(|part| matches!(part, ResponsePart::Plan { .. }))
+        {
+            if let ResponsePart::Plan { plan: previous, .. } = part {
+                *previous = plan;
+            }
+            return part.clone();
+        }
+        let part = ResponsePart::Plan {
+            id: Uuid::new_v4().to_string(),
+            plan,
+        };
+        self.response_parts.push(part.clone());
+        part
+    }
+
     /// Text-only projection for consumers that do not render tool activity.
     pub fn response_text(&self) -> String {
         self.response_parts
             .iter()
             .filter_map(|part| match part {
                 ResponsePart::Text { text, .. } => Some(text.as_str()),
-                ResponsePart::Tool { .. } => None,
+                ResponsePart::Tool { .. } | ResponsePart::Plan { .. } => None,
             })
             .collect()
     }
@@ -88,6 +112,43 @@ impl Turn {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn plan_snapshots_replace_entries_at_the_first_position_even_after_clearing() {
+        let mut turn = Turn {
+            id: Uuid::new_v4(),
+            message: String::new(),
+            attachments: Vec::new(),
+            response_parts: Vec::new(),
+            stop_reason: None,
+        };
+        turn.append_response_text("Before");
+        let initial = turn.update_plan(
+            serde_json::from_value(json!({"entries":[
+                {"content":"Read","priority":"high","status":"completed"},
+                {"content":"Test","priority":"low","status":"pending"}
+            ]}))
+            .unwrap(),
+        );
+        turn.append_response_text("After");
+        turn.update_plan(serde_json::from_value(json!({"entries":[]})).unwrap());
+        let updated = turn.update_plan(
+            serde_json::from_value(json!({"entries":[
+                {"content":"Test","priority":"low","status":"in_progress"}
+            ]}))
+            .unwrap(),
+        );
+        let before = serde_json::to_value(initial).unwrap();
+        let after = serde_json::to_value(updated).unwrap();
+        assert_eq!(before["id"], after["id"]);
+        assert_eq!(after["plan"]["entries"].as_array().unwrap().len(), 1);
+        assert_eq!(turn.response_parts.len(), 3);
+        assert_eq!(turn.response_text(), "BeforeAfter");
+        assert_eq!(
+            serde_json::to_value(&turn).unwrap()["responseParts"][1],
+            after
+        );
+    }
 
     #[test]
     fn preserves_interleaving_when_parallel_tools_finish_out_of_order() {
