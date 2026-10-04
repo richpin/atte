@@ -36,6 +36,7 @@ export const en = {
     languageDescription: "Choose the language used throughout Atte.",
   },
   thread: {
+    errors: "Thread errors",
     firstResponseWaiting: "Waiting for first response",
     status: {
       disconnected: "Not connected",
@@ -56,7 +57,6 @@ export const en = {
       authenticationRequired: "Sign in to the agent, then reconnect.",
       processExited: "The agent process exited.",
       connectionClosed: "The connection to the agent was lost.",
-      promptFailed: "The message failed. Reconnect and try again.",
       timedOut: "The agent connection timed out.",
       agentRemoved: "Install the agent, then try again in this thread.",
       resumptionUnsupported:
@@ -178,7 +178,6 @@ export const en = {
     restoring: "Restoring thread",
     stopping: "Stopping",
     unconfirmed: "Unconfirmed completion",
-    requestFailed: "Request failed",
     statusUnavailable: "Thread status unavailable",
     threadMenu: "{{ name }} menu",
     deleteFailed: "The thread could not be deleted. Try again.",
@@ -216,6 +215,7 @@ export const en = {
     logoutFailed: "Logout failed. Try again.",
   },
   backend: {
+    requestExecutionFailed: "The message failed. Please try again.",
     appClosing: "The app is closing.",
     openWindowFailed: "The window could not be opened.",
     storage:

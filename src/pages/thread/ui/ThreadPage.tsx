@@ -10,6 +10,7 @@ import type { ThreadModel } from "../model/thread";
 import type { PreparedAgent } from "../model/types";
 import { Message } from "./Message";
 import { ThreadComposer } from "./ThreadComposer";
+import { ThreadErrors } from "./ThreadErrors";
 import { ThreadTimeline } from "./ThreadTimeline";
 
 const composerBottomOffset = 16;
@@ -192,6 +193,15 @@ export function ThreadPage(props: {
     <main class="relative flex h-full min-h-0 flex-col overflow-hidden bg-canvas text-ink">
       <div inert={signInOpen()} class="flex h-full min-h-0 flex-col">
         <Show when={selectedThreadId()}>
+          <Show when={!signInOpen()}>
+            <ThreadErrors
+              thread={thread()}
+              subscriptionFailed={model.subscriptionError()}
+              canReconnect={model.canReconnect()}
+              onReconnect={() => void model.reconnect()}
+              onManage={props.onManage}
+            />
+          </Show>
           <div class="relative min-h-0 flex-1">
             <div hidden={loading()} class="h-full">
               <ThreadTimeline
@@ -201,12 +211,12 @@ export function ThreadPage(props: {
                 <Show
                   when={
                     thread() &&
-                    (["agentRemoved", "executableNotFound"].includes(
+                    !["agentRemoved", "executableNotFound"].includes(
                       thread()?.failure ?? "",
-                    ) ||
-                      !props.agents.some(
-                        (agent) => agent.id === thread()?.agentId,
-                      ))
+                    ) &&
+                    !props.agents.some(
+                      (agent) => agent.id === thread()?.agentId,
+                    )
                   }
                 >
                   <button
@@ -225,7 +235,6 @@ export function ThreadPage(props: {
                   waitingTurnId={
                     !props.model.subscriptionError() &&
                     !thread()?.failure &&
-                    !thread()?.requestFailure &&
                     ["running", "waitingForApproval"].includes(
                       thread()?.status ?? "",
                     )
@@ -312,6 +321,7 @@ export function ThreadPage(props: {
         {(current) => (
           <SignInDialog
             open={signInOpen()}
+            agentId={current().agentId}
             agentName={
               props.agents.find((agent) => agent.id === current().agentId)
                 ?.name ?? current().agentId

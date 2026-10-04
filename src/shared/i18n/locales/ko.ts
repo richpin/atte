@@ -42,6 +42,7 @@ export const ko = {
     languageDescription: "Atte 전체에서 사용할 언어를 선택합니다.",
   },
   thread: {
+    errors: "스레드 오류",
     firstResponseWaiting: "첫 응답 대기",
     status: {
       disconnected: "연결 전",
@@ -63,7 +64,6 @@ export const ko = {
         "에이전트 로그인이 필요합니다. 로그인 후 다시 연결해주세요.",
       processExited: "에이전트 프로세스가 종료되었습니다.",
       connectionClosed: "에이전트와의 연결이 끊어졌습니다.",
-      promptFailed: "메시지 실행에 실패했습니다. 다시 연결해주세요.",
       timedOut: "에이전트 연결 시간이 초과되었습니다.",
       agentRemoved: "에이전트를 설치한 뒤 이 스레드에서 다시 시도해주세요.",
       resumptionUnsupported:
@@ -183,7 +183,6 @@ export const ko = {
     restoring: "스레드 복원 중",
     stopping: "중단 중",
     unconfirmed: "미확인 완료",
-    requestFailed: "요청 실패",
     statusUnavailable: "스레드 상태를 확인할 수 없습니다",
     threadMenu: "{{ name }} 메뉴",
     deleteFailed: "스레드를 삭제할 수 없습니다. 다시 시도해주세요.",
@@ -221,6 +220,7 @@ export const ko = {
     logoutFailed: "로그아웃하지 못했습니다. 다시 시도해주세요.",
   },
   backend: {
+    requestExecutionFailed: "메시지 실행에 실패했습니다. 다시 시도해주세요.",
     appClosing: "앱을 종료하고 있습니다.",
     openWindowFailed: "창을 열 수 없습니다.",
     storage:

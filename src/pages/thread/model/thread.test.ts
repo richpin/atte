@@ -38,7 +38,6 @@ function thread(id: string, changes: Partial<Thread> = {}): Thread {
     authentication: "authenticated",
     failure: null,
     completedTurnId: null,
-    requestFailure: null,
     turns: [],
     notice: null,
     permissions: [],
@@ -923,7 +922,7 @@ it("unsubscribes late registrations after disposal", async () => {
   );
 });
 
-it("notifies failure occurrences once without replaying snapshots on navigation", async () => {
+it("keeps persistent failures in thread state without toast notifications", async () => {
   const notify = vi.fn();
   const model = setup(notify);
   const failed = thread("A", { status: "failed", failure: "processExited" });
@@ -937,15 +936,15 @@ it("notifies failure occurrences once without replaying snapshots on navigation"
   };
   stream("A")(event);
   stream("A")(event);
-  expect(notify).toHaveBeenCalledTimes(1);
+  expect(notify).not.toHaveBeenCalled();
   await open(model, "B");
   await open(model, "A", failed);
-  expect(notify).toHaveBeenCalledTimes(1);
+  expect(notify).not.toHaveBeenCalled();
   stream("A")({
     ...event,
     errors: [{ id: "error-2", failure: "processExited" }],
   });
-  expect(notify).toHaveBeenCalledTimes(2);
+  expect(notify).not.toHaveBeenCalled();
 });
 
 it("reports repeated command failures as separate notifications", async () => {
@@ -963,7 +962,56 @@ it("reports repeated command failures as separate notifications", async () => {
   ]);
 });
 
-it("suppresses the resumption notice but reports storage errors once", async () => {
+it("toasts each request failure event once without changing the thread failure", async () => {
+  const notify = vi.fn();
+  const model = setup(notify);
+  await open(model, "A");
+  const failed = thread("A");
+  const event: ThreadUpdate = {
+    kind: "patch",
+    thread: failed,
+    turnUpdates: [],
+    errors: [
+      {
+        id: "request-1",
+        message: "메시지 실행에 실패했습니다. 다시 시도해주세요.",
+      },
+    ],
+  };
+  stream("A")(event);
+  stream("A")(event);
+  expect(notify).toHaveBeenCalledTimes(1);
+  expect(model.thread()?.failure).toBeNull();
+  await open(model, "B");
+  await open(model, "A", failed);
+  expect(notify).toHaveBeenCalledTimes(1);
+  stream("A")({
+    ...event,
+    errors: [
+      {
+        id: "request-2",
+        message: "메시지 실행에 실패했습니다. 다시 시도해주세요.",
+      },
+    ],
+  });
+  expect(notify).toHaveBeenCalledTimes(2);
+});
+
+it("toasts a rejected send command without adding a thread failure", async () => {
+  const notify = vi.fn();
+  const model = setup(notify);
+  await open(model, "A");
+  model.setDraft("retry me");
+  commands.set("send_message", async () => {
+    throw new Error("Send rejected");
+  });
+  await model.send();
+  expect(notify).toHaveBeenCalledTimes(1);
+  expect(model.thread()?.failure).toBeNull();
+  expect(model.draft()).toBe("retry me");
+});
+
+it("keeps storage errors in thread state without toast notifications", async () => {
   const notify = vi.fn();
   const model = setup(notify);
   const resumed = thread("A", {
@@ -984,7 +1032,61 @@ it("suppresses the resumption notice but reports storage errors once", async () 
   };
   stream("A")(event);
   stream("A")(event);
-  expect(notify).toHaveBeenCalledExactlyOnceWith("storage failed");
+  expect(model.thread()?.storageError).toBe("storage failed");
+  expect(notify).not.toHaveBeenCalled();
+});
+
+it("still reports error events that have no persistent thread error, once per occurrence", async () => {
+  const notify = vi.fn();
+  const model = setup(notify);
+  await open(model, "A");
+  const event: ThreadUpdate = {
+    kind: "patch",
+    thread: thread("A"),
+    turnUpdates: [],
+    errors: [{ id: "transient-1", message: "Operation rejected" }],
+  };
+  stream("A")(event);
+  stream("A")(event);
+  expect(notify).toHaveBeenCalledExactlyOnceWith("Operation rejected");
+  stream("A")({
+    ...event,
+    errors: [{ id: "transient-2", message: "Operation rejected" }],
+  });
+  expect(notify).toHaveBeenCalledTimes(2);
+});
+
+it("shows subscription failure in state without toast notifications", async () => {
+  const notify = vi.fn();
+  const model = setup(notify);
+  await open(model, "A", running("A"));
+  stream("A")({
+    kind: "textDelta",
+    threadId: "A",
+    turnId: "unknown",
+    text: "ignored",
+  });
+  expect(model.subscriptionError()).toBe(true);
+  expect(notify).not.toHaveBeenCalled();
+});
+
+it("does not toast a connection command rejection already represented by its failure patch", async () => {
+  const notify = vi.fn();
+  const model = setup(notify);
+  await open(model, "A");
+  commands.set("reconnect_thread", async () => {
+    const failed = thread("A", { status: "failed", failure: "processExited" });
+    stream("A")({
+      kind: "patch",
+      thread: failed,
+      turnUpdates: [],
+      errors: [{ id: "connection-1", failure: "processExited" }],
+    });
+    throw new Error("Connection failed");
+  });
+  await model.reconnect();
+  expect(model.thread()?.failure).toBe("processExited");
+  expect(notify).not.toHaveBeenCalled();
 });
 
 it("manually reconnects an idle thread and preserves its input", async () => {
@@ -1015,7 +1117,8 @@ it("recovers subscription before connecting a failed agent", async () => {
   });
   for (let index = 0; index < 5; index++)
     await vi.advanceTimersByTimeAsync(5_000);
-  expect(notify).toHaveBeenCalledTimes(1);
+  expect(notify).not.toHaveBeenCalled();
+  expect(model.subscriptionError()).toBe(true);
   expect(model.canReconnect()).toBe(true);
   commands.delete("subscribe_thread");
   await model.reconnect();

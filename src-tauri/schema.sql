@@ -40,7 +40,6 @@ CREATE TABLE threads (
         'processExited',
         'connectionClosed',
         'timedOut',
-        'promptFailed',
         'agentRemoved',
         'resumptionUnsupported',
         'sessionRestorationFailed'

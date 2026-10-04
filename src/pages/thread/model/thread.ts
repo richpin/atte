@@ -80,7 +80,7 @@ export function createThreadModel(
     if (message && notify) notifyError(message);
   }
   const observedErrors = new Set<string>();
-  let connectionFailureReported = false;
+  let connectionFailureReceived = false;
   const [configurationError, setConfigurationError] = createSignal<{
     configId: string;
     message: string;
@@ -228,7 +228,6 @@ export function createThreadModel(
 
   let reconnectAfterSubscription = false;
   function subscriptionFailed(cause?: unknown) {
-    const alreadyFailed = subscriptionError();
     setSubscriptionLive(false);
     setSubscriptionError(true);
     const id = selectedThreadId();
@@ -242,7 +241,6 @@ export function createThreadModel(
       setError(localizedMessage(cause, "thread.error.open"));
       return;
     }
-    if (!alreadyFailed) notifyError(t("thread.subscriptionFailed"));
     if (subscriptionRetries >= maximumSubscriptionRetries) {
       setRetryExhausted(true);
       return;
@@ -316,7 +314,6 @@ export function createThreadModel(
       lastPromptAt,
       failure,
       completedTurnId,
-      requestFailure,
       interrupted,
     } = updatedThread;
     const metadata = {
@@ -331,7 +328,6 @@ export function createThreadModel(
       lastPromptAt,
       failure,
       completedTurnId,
-      requestFailure,
       interrupted,
     };
     void client.cancelQueries({ queryKey: threadListQueryKey });
@@ -426,10 +422,12 @@ export function createThreadModel(
         if (observedErrors.has(error.id)) continue;
         observedErrors.add(error.id);
         if (error.failure) {
-          notifyError(t(failureKeys[error.failure]));
-          if (connecting()) connectionFailureReported = true;
+          const persistent = error.failure === update.thread.failure;
+          if (!persistent) notifyError(t(failureKeys[error.failure]));
+          if (connecting()) connectionFailureReceived = true;
         } else if (error.message) {
-          notifyError(content(error.message) ?? error.message);
+          if (error.message !== update.thread.storageError)
+            notifyError(content(error.message) ?? error.message);
         }
       }
       updateThreadInList(update.thread);
@@ -771,7 +769,7 @@ export function createThreadModel(
     const expectedView = view;
     const current = thread();
     if (!current || !actionsEnabled() || connecting()) return;
-    connectionFailureReported = false;
+    connectionFailureReceived = false;
     setConnectingThreadId(current.id);
     setConnectFailed(false);
     setError(undefined);
@@ -785,7 +783,7 @@ export function createThreadModel(
         setConnectFailed(true);
         setError(
           localizedMessage(cause, "thread.error.connect"),
-          !connectionFailureReported,
+          !connectionFailureReceived,
         );
       }
     } finally {
@@ -907,7 +905,7 @@ export function createThreadModel(
 
 export type ThreadModel = ReturnType<typeof createThreadModel>;
 
-const failureKeys: Record<ConnectionFailure, TranslationKey> = {
+export const failureKeys: Record<ConnectionFailure, TranslationKey> = {
   executableNotFound: "thread.failure.executableNotFound",
   launchFailed: "thread.failure.launchFailed",
   initializationFailed: "thread.failure.initializationFailed",
@@ -915,7 +913,6 @@ const failureKeys: Record<ConnectionFailure, TranslationKey> = {
   authenticationRequired: "thread.failure.authenticationRequired",
   processExited: "thread.failure.processExited",
   connectionClosed: "thread.failure.connectionClosed",
-  promptFailed: "thread.failure.promptFailed",
   timedOut: "thread.failure.timedOut",
   agentRemoved: "thread.failure.agentRemoved",
   resumptionUnsupported: "thread.failure.resumptionUnsupported",

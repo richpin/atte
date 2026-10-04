@@ -1318,7 +1318,9 @@ it("keeps the saved list accessible without agents and restores on selection onl
       .mock.calls.some(([command]) => command === "connect_thread"),
   ).toBe(false);
   await userEvent.click(screen.getByRole("button", { name: "지난 작업" }));
-  await screen.findByText(/에이전트를 설치한 뒤/);
+  expect(
+    (await screen.findByRole("status", { name: "스레드 오류" })).textContent,
+  ).toContain("에이전트를 설치한 뒤");
   await userEvent.click(
     screen.getByRole("button", { name: "설치·인증 관리 열기" }),
   );
@@ -1692,7 +1694,9 @@ it("keeps the authentication explanation without duplicate timeline actions", as
   render(() => <App />);
   await userEvent.click(screen.getByRole("button", { name: "폴더 선택" }));
   await startNewThreadWithAgent();
-  expect(await screen.findByText(/에이전트 로그인이 필요합니다/)).toBeTruthy();
+  expect(await screen.findByRole("dialog")).toBeTruthy();
+  expect(screen.queryByRole("status", { name: "스레드 오류" })).toBeNull();
+  expect(screen.queryByRole("alert")).toBeNull();
   expect(
     screen.queryByText("인증 상태는 아직 확인되지 않았습니다."),
   ).toBeNull();
@@ -1739,6 +1743,8 @@ it("automatically blocks the thread with sign-in while preserving the composer",
   const title = await screen.findByText("Private work");
   const threadButton = title.closest("button");
   if (!threadButton) throw new Error("thread title must belong to its button");
+  expect(threadButton.querySelector('[role="status"]')).toBeNull();
+  expect(screen.queryByRole("status", { name: "연결 오류" })).toBeNull();
   await userEvent.click(threadButton);
   expect(
     await screen.findByRole("dialog", { name: "Codex 로그인" }),
@@ -2582,9 +2588,10 @@ it("shows process exit after readiness without reconnecting automatically", asyn
     failure: "processExited",
     turns: [],
   });
-  expect((await screen.findByRole("alert")).textContent).toContain(
-    "프로세스가 종료",
-  );
+  expect(
+    (await screen.findByRole("status", { name: "스레드 오류" })).textContent,
+  ).toContain("프로세스가 종료");
+  expect(screen.queryByRole("alert")).toBeNull();
   expect(
     requests.mock.calls.filter(([command]) => command === "connect_thread"),
   ).toHaveLength(1);
@@ -3746,7 +3753,9 @@ it("keeps thread content after agent removal and offers setup and explicit retry
     ],
   });
   expect(await screen.findByText("삭제 전 응답")).toBeTruthy();
-  expect(screen.getByText(/에이전트를 설치한 뒤/)).toBeTruthy();
+  expect(
+    screen.getByRole("status", { name: "스레드 오류" }).textContent,
+  ).toContain("에이전트를 설치한 뒤");
   await userEvent.click(screen.getByRole("button", { name: "스레드 메뉴" }));
   expect(
     screen
@@ -4063,7 +4072,6 @@ it("shows first response waiting, approval and running until protocol completion
     interrupted: false,
     authentication: "authenticated",
     failure: null,
-    requestFailure: null,
     completedTurnId: null,
     permissions: [],
     queuedMessages: [],
@@ -4154,7 +4162,6 @@ function responseThread(id: string) {
     interrupted: false,
     authentication: "authenticated",
     failure: null,
-    requestFailure: null,
     completedTurnId: null as string | null,
     permissions: [],
     queuedMessages: [],
@@ -4163,6 +4170,141 @@ function responseThread(id: string) {
     turns: [],
   };
 }
+
+it.each([
+  {
+    status: "failed",
+    failure: "processExited",
+    message: "에이전트 프로세스가 종료되었습니다.",
+  },
+  {
+    status: "sessionReady",
+    storageError: "Thread storage unavailable",
+    message: "Thread storage unavailable",
+  },
+])(
+  "shows current thread errors only in the banner and preserves them on reentry: $message",
+  async (error) => {
+    const first = { ...responseThread("failed"), storageError: null, ...error };
+    const second = responseThread("other");
+    const original = vi.mocked(invoke).getMockImplementation();
+    vi.mocked(invoke).mockImplementation((command, args) => {
+      if (command === "list_threads") return Promise.resolve([first, second]);
+      if (command === "subscribe_thread")
+        return subscribeWith(
+          args,
+          (args as { id: string }).id === first.id ? first : second,
+        );
+      return original?.(command, args) ?? Promise.resolve();
+    });
+    render(() => <App />);
+    await userEvent.click(
+      await screen.findByRole("button", { name: first.title }),
+    );
+    await waitFor(() => expect(typeof receiveUpdate).toBe("function"));
+    receiveUpdate({
+      kind: "patch",
+      thread: first,
+      turnUpdates: [],
+      errors: [
+        {
+          id: "failure-1",
+          failure: first.failure,
+          message: first.storageError,
+        },
+      ],
+    });
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(
+      (await screen.findByRole("status", { name: "스레드 오류" })).textContent,
+    ).toContain(error.message);
+
+    await userEvent.click(getSidebarThreadButton(second.title));
+    await waitFor(() =>
+      expect(screen.queryByRole("status", { name: "스레드 오류" })).toBeNull(),
+    );
+    await userEvent.click(getSidebarThreadButton(first.title));
+    expect(
+      (await screen.findByRole("status", { name: "스레드 오류" })).textContent,
+    ).toContain(error.message);
+    expect(screen.queryByRole("alert")).toBeNull();
+
+    if (first.failure) {
+      await userEvent.click(screen.getByRole("button", { name: "다시 연결" }));
+      expect(invoke).toHaveBeenCalledWith("reconnect_thread", { id: first.id });
+    } else {
+      expect(screen.queryByRole("button", { name: "다시 연결" })).toBeNull();
+    }
+
+    receiveUpdate({
+      kind: "patch",
+      thread: {
+        ...first,
+        status: "sessionReady",
+        failure: null,
+        storageError: null,
+      },
+      turnUpdates: [],
+    });
+    await waitFor(() =>
+      expect(screen.queryByRole("status", { name: "스레드 오류" })).toBeNull(),
+    );
+  },
+);
+
+it("reports request failure with one toast and no banner or sidebar error, without replaying it on reentry", async () => {
+  const failed = {
+    ...responseThread("request-failure"),
+  };
+  const other = responseThread("other-request");
+  const original = vi.mocked(invoke).getMockImplementation();
+  vi.mocked(invoke).mockImplementation((command, args) => {
+    if (command === "list_threads") return Promise.resolve([failed, other]);
+    if (command === "subscribe_thread")
+      return subscribeWith(
+        args,
+        (args as { id: string }).id === failed.id ? failed : other,
+      );
+    return original?.(command, args) ?? Promise.resolve();
+  });
+  render(() => <App />);
+  await userEvent.click(
+    await screen.findByRole("button", { name: failed.title }),
+  );
+  await waitFor(() => expect(typeof receiveUpdate).toBe("function"));
+  const event = {
+    kind: "patch",
+    thread: failed,
+    turnUpdates: [],
+    errors: [
+      {
+        id: "request-1",
+        message: "메시지 실행에 실패했습니다. 다시 시도해주세요.",
+      },
+    ],
+  };
+  receiveUpdate(event);
+  receiveUpdate(event);
+  expect((await screen.findByRole("alert")).textContent).toContain(
+    "메시지 실행에 실패했습니다.",
+  );
+  expect(screen.getAllByRole("alert")).toHaveLength(1);
+  expect(screen.queryByRole("status", { name: "스레드 오류" })).toBeNull();
+  expect(screen.queryByRole("status", { name: "요청 실패" })).toBeNull();
+  expect(screen.queryByRole("status", { name: "연결 오류" })).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "알림 닫기" }));
+  await waitFor(() => expect(screen.queryByRole("alert")).toBeNull());
+  await userEvent.click(getSidebarThreadButton(other.title));
+  await userEvent.click(getSidebarThreadButton(failed.title));
+  await waitFor(() =>
+    expect(invoke).toHaveBeenCalledWith(
+      "subscribe_thread",
+      expect.objectContaining({ id: failed.id }),
+    ),
+  );
+  expect(screen.queryByRole("alert")).toBeNull();
+  expect(screen.queryByRole("status", { name: "스레드 오류" })).toBeNull();
+});
 
 it("confirms completion only on the visible thread page and preserves it through cancellation and duplicate updates", async () => {
   const first = { ...responseThread("first"), completedTurnId: "first-turn" };
@@ -4254,7 +4396,7 @@ it("confirms completion only on the visible thread page and preserves it through
 it("keeps actual errors after list recovery and prioritizes subscription failure over progress", async () => {
   const first = {
     ...responseThread("errors"),
-    requestFailure: "promptFailed",
+    failure: "connectionClosed",
     completedTurnId: "old",
   };
   let listUpdate!: (entries: Record<string, unknown>[]) => void;
@@ -4279,15 +4421,15 @@ it("keeps actual errors after list recovery and prioritizes subscription failure
   ).toBeDefined();
   listUpdate([first]);
   expect(
-    await screen.findByRole("status", { name: "요청 실패" }),
+    await screen.findByRole("status", { name: "연결 오류" }),
   ).toBeDefined();
   await userEvent.click(getSidebarThreadButton(first.title));
   expect(
-    await screen.findByRole("status", { name: "요청 실패" }),
+    await screen.findByRole("status", { name: "연결 오류" }),
   ).toBeDefined();
   const recovered = {
     ...first,
-    requestFailure: null,
+    failure: null,
     status: "running",
     turns: [
       { id: "next", message: "try again", response: "", stopReason: null },
@@ -4321,10 +4463,10 @@ it("keeps actual errors after list recovery and prioritizes subscription failure
   expect(await screen.findByRole("menuitem", { name: "삭제" })).toBeDefined();
 });
 
-it("retries the failed list subscription and keeps rows and request errors during recovery", async () => {
+it("retries the failed list subscription and keeps rows and connection errors during recovery", async () => {
   const first = {
     ...responseThread("retry-list"),
-    requestFailure: "promptFailed",
+    failure: "connectionClosed",
   };
   let attempts = 0;
   let deliver!: () => void;
@@ -4357,6 +4499,6 @@ it("retries the failed list subscription and keeps rows and request errors durin
   ).toBeDefined();
   deliver();
   expect(
-    await screen.findByRole("status", { name: "요청 실패" }),
+    await screen.findByRole("status", { name: "연결 오류" }),
   ).toBeDefined();
 });

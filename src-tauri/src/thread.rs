@@ -45,8 +45,6 @@ pub struct Thread {
     pub failure: Option<ConnectionFailure>,
     /// Last normally completed response in this app run; never persisted.
     pub completed_turn_id: Option<Uuid>,
-    /// Current prompt failure, independent of connection recovery and notices.
-    pub request_failure: Option<ConnectionFailure>,
     pub turns: Vec<Turn>,
     pub notice: Option<String>,
     pub permissions: Vec<PermissionRequest>,
@@ -103,7 +101,6 @@ impl ThreadPatch {
             status,
             failure,
             completed_turn_id,
-            request_failure,
             interrupted,
         } = self.metadata;
         thread.title = title;
@@ -116,7 +113,6 @@ impl ThreadPatch {
         thread.status = status;
         thread.failure = failure;
         thread.completed_turn_id = completed_turn_id;
-        thread.request_failure = request_failure;
         thread.interrupted = interrupted;
         thread.storage_error = self.storage_error;
         thread.authentication = self.authentication;
@@ -387,8 +383,6 @@ pub struct ThreadMetadata {
     pub failure: Option<ConnectionFailure>,
     #[serde(skip_deserializing)]
     pub completed_turn_id: Option<Uuid>,
-    #[serde(skip_deserializing)]
-    pub request_failure: Option<ConnectionFailure>,
     pub interrupted: bool,
 }
 
@@ -406,7 +400,6 @@ impl Thread {
             status: self.status.clone(),
             failure: self.failure.clone(),
             completed_turn_id: self.completed_turn_id,
-            request_failure: self.request_failure.clone(),
             interrupted: self.interrupted,
         }
     }
@@ -463,7 +456,6 @@ pub enum ConnectionFailure {
     ProcessExited,
     ConnectionClosed,
     TimedOut,
-    PromptFailed,
     AgentRemoved,
     ResumptionUnsupported,
     SessionRestorationFailed,
@@ -675,7 +667,6 @@ impl Threads {
                 authentication: AuthenticationStatus::Unknown,
                 failure: saved.failure,
                 completed_turn_id: None,
-                request_failure: None,
                 turns: Vec::new(),
                 notice: None,
                 permissions: Vec::new(),
@@ -1158,7 +1149,6 @@ impl Threads {
             authentication: AuthenticationStatus::Unknown,
             failure: None,
             completed_turn_id: None,
-            request_failure: None,
             turns: Vec::new(),
             notice: None,
             permissions: Vec::new(),
@@ -1565,13 +1555,11 @@ impl Threads {
             current.dispatching_queued = None;
             let queue = current.thread.queued_messages.clone();
             current.save_queue(queue)?;
-            current.thread.request_failure = Some(ConnectionFailure::PromptFailed);
             current.publish();
             return Err(unavailable());
         }
         current.thread.status = ThreadStatus::Running;
         current.thread.failure = None;
-        current.thread.request_failure = None;
         current.thread.interrupted = false;
         if current.use_prompt_title {
             current.use_prompt_title = false;
@@ -2285,7 +2273,6 @@ impl ThreadState {
         let turn = Uuid::new_v4();
         self.dispatching_queued = Some(queued.clone());
         self.thread.status = ThreadStatus::Running;
-        self.thread.request_failure = None;
         self.thread.turns.push(Turn {
             id: turn,
             message: queued.input.body.clone(),
@@ -2333,13 +2320,11 @@ impl ThreadState {
         let turn = prompt.turn;
         let Some(prompts) = prompts else {
             self.fail_queued_prompt(turn);
-            self.thread.request_failure = Some(ConnectionFailure::PromptFailed);
             self.publish();
             return Err(unavailable());
         };
         if prompts.send(prompt).is_err() {
             self.fail_queued_prompt(turn);
-            self.thread.request_failure = Some(ConnectionFailure::PromptFailed);
             self.publish();
             return Err(unavailable());
         }
@@ -2586,6 +2571,30 @@ impl RuntimeUpdates {
         state.publish();
     }
 
+    /// Reports a rejected request without failing the agent connection.
+    pub fn request_failed(&self, turn: Uuid, input: UserInput, queued_message: Option<Uuid>) {
+        if let Some(queued_message) = queued_message {
+            self.queued_prompt_failed(turn, queued_message);
+        } else {
+            self.direct_prompt_failed(turn, input);
+        }
+        let Ok(mut state) = self.state.lock() else {
+            return;
+        };
+        if state.generation != self.generation {
+            return;
+        }
+        state.thread.status = ThreadStatus::SessionReady;
+        state.thread.interrupted = true;
+        state.clear_permissions();
+        state.pending_errors.push(ThreadErrorNotification {
+            id: Uuid::new_v4(),
+            failure: None,
+            message: Some("메시지 실행에 실패했습니다. 다시 시도해주세요.".into()),
+        });
+        state.publish();
+    }
+
     pub fn session_ready(
         &self,
         session_id: String,
@@ -2599,7 +2608,6 @@ impl RuntimeUpdates {
         state.thread.session_id = Some(session_id);
         state.thread.status = ThreadStatus::SessionReady;
         state.thread.failure = None;
-        state.thread.request_failure = None;
         state.confirmed_configuration = configuration;
         state.thread.prompt_capabilities = prompt_capabilities;
         state.desired_configuration.clear();
@@ -2734,9 +2742,6 @@ impl RuntimeUpdates {
             if failure == ConnectionFailure::AuthenticationRequired {
                 state.thread.authentication = AuthenticationStatus::Required;
             }
-            if failure == ConnectionFailure::PromptFailed {
-                state.thread.request_failure = Some(failure.clone());
-            }
             state.thread.failure = Some(failure);
         });
     }
@@ -2845,15 +2850,7 @@ impl RuntimeUpdates {
     }
 
     /// Restores a failed queued prompt without terminating an otherwise healthy session.
-    pub fn queued_prompt_failed(
-        &self,
-        turn: Uuid,
-        queued_message: Uuid,
-        failure: ConnectionFailure,
-    ) {
-        if failure == ConnectionFailure::AuthenticationRequired {
-            self.record_authentication(AuthenticationStatus::Required);
-        }
+    pub fn queued_prompt_failed(&self, turn: Uuid, queued_message: Uuid) {
         let Ok(mut state) = self.state.lock() else {
             return;
         };
@@ -2868,20 +2865,6 @@ impl RuntimeUpdates {
             return;
         }
         state.fail_queued_prompt(turn);
-        state.thread.request_failure = Some(failure.clone());
-        if failure != ConnectionFailure::AuthenticationRequired {
-            state.pending_errors.push(ThreadErrorNotification {
-                id: Uuid::new_v4(),
-                failure: Some(failure.clone()),
-                message: None,
-            });
-        }
-        if failure == ConnectionFailure::AuthenticationRequired {
-            state.thread.authentication = AuthenticationStatus::Required;
-            state.thread.status = ThreadStatus::Failed;
-            state.thread.failure = Some(failure);
-            state.clear_configuration();
-        }
         state.publish();
     }
 

@@ -9,8 +9,7 @@ export type ConnectionFailure =
   | "timedOut"
   | "agentRemoved"
   | "resumptionUnsupported"
-  | "sessionRestorationFailed"
-  | "promptFailed";
+  | "sessionRestorationFailed";
 
 export interface Thread {
   id: string;
@@ -34,7 +33,6 @@ export interface Thread {
   authentication: "unknown" | "required" | "authenticated";
   failure: ConnectionFailure | null;
   completedTurnId: string | null;
-  requestFailure: ConnectionFailure | null;
   turns: Turn[];
   notice: string | null;
   permissions: PermissionRequest[];
@@ -122,7 +120,6 @@ export type ThreadMetadata = Pick<
   | "lastPromptAt"
   | "failure"
   | "completedTurnId"
-  | "requestFailure"
   | "interrupted"
 >;
 

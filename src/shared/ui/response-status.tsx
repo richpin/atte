@@ -1,4 +1,4 @@
-import { Circle, CircleAlert, LoaderCircle } from "lucide-solid";
+import { LoaderCircle } from "lucide-solid";
 import { Show } from "solid-js";
 
 export function ResponseStatus(props: {
@@ -14,7 +14,7 @@ export function ResponseStatus(props: {
       classList={{
         "text-response-info":
           props.kind === "complete" || props.kind === "approval",
-        "text-response-warning": props.kind === "error",
+        "text-danger": props.kind === "error",
         "text-muted": props.kind === "progress",
         "rounded bg-response-info-soft px-1.5 py-0.5 text-xs":
           props.kind === "approval",
@@ -28,11 +28,8 @@ export function ResponseStatus(props: {
           strokeWidth={2}
         />
       </Show>
-      <Show when={props.kind === "complete"}>
-        <Circle aria-hidden="true" class="size-4" strokeWidth={2} />
-      </Show>
-      <Show when={props.kind === "error"}>
-        <CircleAlert aria-hidden="true" class="size-4" strokeWidth={2} />
+      <Show when={props.kind === "complete" || props.kind === "error"}>
+        <span aria-hidden="true" class="size-2 rounded-full bg-current" />
       </Show>
     </span>
   );

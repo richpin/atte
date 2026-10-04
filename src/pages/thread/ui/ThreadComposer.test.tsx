@@ -34,7 +34,6 @@ function readyThread(): Thread {
     authentication: "authenticated",
     failure: null,
     completedTurnId: null,
-    requestFailure: null,
     turns: [],
     notice: null,
     permissions: [],

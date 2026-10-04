@@ -1,5 +1,6 @@
 import { useI18n } from "shared/i18n";
 import {
+  AgentIcon,
   Button,
   Dialog,
   DialogContent,
@@ -11,6 +12,7 @@ import type { AgentAuthenticationState } from "../model/authentication";
 
 export function SignInDialog(props: {
   open: boolean;
+  agentId: string;
   agentName: string;
   state: AgentAuthenticationState;
   reconnectFailed: boolean;
@@ -48,8 +50,11 @@ export function SignInDialog(props: {
           props.onClosed();
         }}
       >
-        <DialogTitle class="pr-6 leading-snug break-words">
-          {t("thread.authentication.title", { agent: props.agentName })}
+        <DialogTitle class="flex items-center gap-2 pr-6 leading-snug break-words [[data-theme=dark]_&_img]:invert">
+          <AgentIcon id={props.agentId} src={null} compact />
+          <span class="min-w-0">
+            {t("thread.authentication.title", { agent: props.agentName })}
+          </span>
         </DialogTitle>
         <DialogDescription class="text-muted">
           {t("thread.authentication.choose")}
