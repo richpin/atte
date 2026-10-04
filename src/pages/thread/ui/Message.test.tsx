@@ -312,3 +312,48 @@ it("keeps plan expansion when snapshots change and waits only for empty plans", 
   );
   expect(screen.getByRole("button").textContent).toContain("Updated");
 });
+
+it("replaces first-response waiting with thoughts and stops thinking at the next response part", () => {
+  const [turns, setTurns] = createStore<Turn[]>([turn("Inspect")]);
+  const [thinking, setThinking] = createSignal<string | undefined>("turn-1");
+  render(() => (
+    <I18nProvider>
+      <Message
+        turns={turns}
+        waitingTurnId="turn-1"
+        thinkingTurnId={thinking()}
+      />
+    </I18nProvider>
+  ));
+  expect(screen.getByRole("status")).toBeTruthy();
+  setTurns(0, "responseParts", [
+    { kind: "thought", id: "thought", text: "**Reasoning**" },
+  ]);
+  expect(screen.queryByRole("status")).toBeNull();
+  expect(screen.getByRole("button", { name: "Thinking" })).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "Thinking" }));
+  setTurns(0, "responseParts", 1, {
+    kind: "text",
+    id: "answer",
+    text: "Answer",
+  });
+  expect(
+    screen
+      .getByRole("button", { name: "Thinking" })
+      .getAttribute("aria-expanded"),
+  ).toBe("true");
+  expect(document.querySelector("[data-thought] .animate-spin")).toBeNull();
+  setTurns(0, "responseParts", 2, {
+    kind: "thought",
+    id: "next",
+    text: "Review",
+  });
+  expect(
+    screen
+      .getAllByRole("button", { name: "Thinking" })[1]
+      .getAttribute("aria-expanded"),
+  ).toBe("false");
+  setThinking(undefined);
+  expect(document.querySelector("[data-thought] .animate-spin")).toBeNull();
+  expect(screen.getAllByRole("button", { name: "Thinking" })).toHaveLength(2);
+});

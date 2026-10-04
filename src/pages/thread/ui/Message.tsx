@@ -14,6 +14,7 @@ import {
 import type { Attachment, ResponsePart, Turn } from "../model/types";
 import { AttachmentChip } from "./AttachmentChip";
 import { Plan } from "./Plan";
+import { Thought } from "./Thought";
 import { ToolCall } from "./ToolCall";
 
 const collapsedLines = 20;
@@ -99,6 +100,7 @@ function UserMessage(props: { message: string; attachments: Attachment[] }) {
 export function Message(props: {
   turns: Turn[];
   streamingTurnId?: string;
+  thinkingTurnId?: string;
   waitingTurnId?: string;
   agentId?: string;
   approvalPending?: boolean;
@@ -144,6 +146,22 @@ export function Message(props: {
             <Index each={turn().responseParts}>
               {(part, index) => (
                 <Switch>
+                  <Match
+                    when={
+                      part().kind === "thought" &&
+                      (part() as Extract<ResponsePart, { kind: "thought" }>)
+                    }
+                  >
+                    {(thought) => (
+                      <Thought
+                        part={thought()}
+                        active={
+                          turn().id === props.thinkingTurnId &&
+                          index === turn().responseParts.length - 1
+                        }
+                      />
+                    )}
+                  </Match>
                   <Match
                     when={
                       part().kind === "plan" &&

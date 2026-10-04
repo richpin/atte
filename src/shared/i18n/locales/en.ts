@@ -36,6 +36,9 @@ export const en = {
     languageDescription: "Choose the language used throughout Atte.",
   },
   thread: {
+    thought: {
+      title: "Thinking",
+    },
     plan: {
       title: "Work plan",
       completed: "{{completed}}/{{total}} completed",

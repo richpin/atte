@@ -75,6 +75,23 @@ impl Replay {
                 }
                 self.user_chunk = false;
             }
+            SessionUpdate::AgentThoughtChunk(chunk) => {
+                if self.turns.is_empty() {
+                    self.turns.push(Turn {
+                        id: Uuid::new_v4(),
+                        message: String::new(),
+                        attachments: Vec::new(),
+                        response_parts: Vec::new(),
+                        stop_reason: None,
+                    });
+                }
+                if let (Some(turn), ContentBlock::Text(text)) =
+                    (self.turns.last_mut(), chunk.content)
+                {
+                    turn.append_thought(&text.text, chunk.message_id.map(|id| id.to_string()));
+                }
+                self.user_chunk = false;
+            }
             SessionUpdate::Plan(plan) => {
                 if self.turns.is_empty() {
                     self.turns.push(Turn {
@@ -127,6 +144,24 @@ fn attachment_name(
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn thought_only_replies_separate_turns_even_without_a_user_message() {
+        let mut replay = Replay::new();
+        for update in [
+            json!({"sessionUpdate":"agent_thought_chunk","content":{"type":"text","text":"First"}}),
+            json!({"sessionUpdate":"user_message_chunk","content":{"type":"text","text":"Again"}}),
+            json!({"sessionUpdate":"agent_thought_chunk","content":{"type":"text","text":"Second"}}),
+            json!({"sessionUpdate":"user_message_chunk","content":{"type":"text","text":"Again"}}),
+        ] {
+            replay.update(serde_json::from_value(update).unwrap());
+        }
+        let turns = serde_json::to_value(&replay.turns).unwrap();
+        assert_eq!(replay.turns.len(), 3);
+        assert_eq!(turns[0]["responseParts"][0]["text"], "First");
+        assert_eq!(turns[1]["responseParts"][0]["text"], "Second");
+        assert!(replay.turns[2].response_parts.is_empty());
+    }
 
     #[test]
     fn plan_only_replies_separate_turns_and_restore_the_final_snapshot() {

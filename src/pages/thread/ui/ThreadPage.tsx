@@ -186,6 +186,14 @@ export function ThreadPage(props: {
                     ? streamingTurnId()
                     : undefined
                 }
+                thinkingTurnId={
+                  !props.model.subscriptionError() &&
+                  !thread()?.failure &&
+                  !thread()?.requestFailure &&
+                  thread()?.status === "running"
+                    ? activeTurnId()
+                    : undefined
+                }
                 agentId={thread()?.agentId}
                 permissionToolIds={thread()?.permissions.map(
                   (request) => request.toolCallId,

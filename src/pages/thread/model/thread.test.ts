@@ -1176,3 +1176,68 @@ it("replaces plan snapshots in place without altering surrounding response parts
     plan: { entries: [{ content: "New", status: "completed" }] },
   });
 });
+
+it("appends thought deltas without invalidating the answer or neighboring activity", async () => {
+  const model = setup();
+  await open(model, "A", running("A"));
+  const receive = stream("A");
+  receive({
+    kind: "textDelta",
+    threadId: "A",
+    turnId: "turn",
+    partId: "answer",
+    text: "Answer",
+  });
+  receive({
+    kind: "toolUpdate",
+    threadId: "A",
+    turnId: "turn",
+    part: {
+      kind: "tool",
+      id: "tool",
+      tool: { title: "Read", status: "completed" },
+    },
+  });
+  receive({
+    kind: "thoughtDelta",
+    threadId: "A",
+    turnId: "turn",
+    partId: "thought",
+    text: "Think",
+  });
+  const parts = model.thread()?.turns[0].responseParts;
+  const answer = parts?.[0];
+  const tool = parts?.[1];
+  let answerRuns = 0;
+  let thoughtRuns = 0;
+  const stop = createRoot((dispose) => {
+    createComputed(() => {
+      const part = model.thread()?.turns[0].responseParts[0];
+      if (part?.kind === "text") part.text;
+      answerRuns++;
+    });
+    createComputed(() => {
+      const part = model.thread()?.turns[0].responseParts[2];
+      if (part?.kind === "thought") part.text;
+      thoughtRuns++;
+    });
+    return dispose;
+  });
+  receive({
+    kind: "thoughtDelta",
+    threadId: "A",
+    turnId: "turn",
+    partId: "thought",
+    text: " more",
+  });
+  expect(parts?.[2]).toEqual({
+    kind: "thought",
+    id: "thought",
+    text: "Think more",
+  });
+  expect(parts?.[0]).toBe(answer);
+  expect(parts?.[1]).toBe(tool);
+  expect(answerRuns).toBe(1);
+  expect(thoughtRuns).toBe(2);
+  stop();
+});

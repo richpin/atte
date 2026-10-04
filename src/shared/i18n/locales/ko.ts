@@ -42,6 +42,9 @@ export const ko = {
     languageDescription: "Atte 전체에서 사용할 언어를 선택합니다.",
   },
   thread: {
+    thought: {
+      title: "생각 중",
+    },
     plan: {
       title: "작업 계획",
       completed: "{{completed}}/{{total}} 완료",

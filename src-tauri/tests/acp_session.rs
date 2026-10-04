@@ -4140,6 +4140,22 @@ impl TranscriptSubscription {
                 if let Some(atte_lib::thread::ResponsePart::Text { text: previous, .. }) = turn.response_parts.iter_mut().find(|part| matches!(part, atte_lib::thread::ResponsePart::Text { id, .. } if id == &part_id)) { previous.push_str(&text); }
                 else { turn.response_parts.push(atte_lib::thread::ResponsePart::Text { id: part_id, text }); }
             }
+            ThreadUpdate::ThoughtDelta {
+                thread_id,
+                turn_id,
+                text,
+                part_id,
+            } => {
+                let thread = self
+                    .thread
+                    .as_mut()
+                    .expect("initial thread precedes deltas");
+                assert_eq!(thread_id, thread.id);
+                let turn = thread.turns.last_mut().unwrap();
+                assert_eq!(turn_id, turn.id);
+                if let Some(atte_lib::thread::ResponsePart::Thought { text: previous, .. }) = turn.response_parts.iter_mut().find(|part| matches!(part, atte_lib::thread::ResponsePart::Thought { id, .. } if id == &part_id)) { previous.push_str(&text); }
+                else { turn.response_parts.push(atte_lib::thread::ResponsePart::Thought { id: part_id, text, message_id: None }); }
+            }
             ThreadUpdate::ToolUpdate {
                 thread_id,
                 turn_id,
@@ -5660,6 +5676,7 @@ async fn receives_final_tool_results_after_cancellation_without_late_response_te
     let mut agent = mock_agent();
     agent.env.insert("FIXTURE_MODE".into(), "cancel".into());
     agent.env.insert("CANCEL_TOOL".into(), "1".into());
+    agent.env.insert("CANCEL_THOUGHT".into(), "1".into());
     let threads = Threads::new(vec![agent]);
     let draft = threads.create(folder.path()).unwrap();
     threads.connect(draft.id).unwrap();
@@ -5686,6 +5703,9 @@ async fn receives_final_tool_results_after_cancellation_without_late_response_te
     let parts = serde_json::to_value(&cancelled.turns[0].response_parts).unwrap();
     assert_eq!(parts[0]["tool"]["status"], "failed");
     assert_eq!(parts[0]["tool"]["rawOutput"], "Command stopped");
+    assert_eq!(parts[1]["kind"], "thought");
+    assert_eq!(parts[1]["text"], "Before cancellation");
+    assert_eq!(parts.as_array().unwrap().len(), 3);
     threads.shutdown().await;
 }
 
@@ -5743,5 +5763,69 @@ async fn streams_plan_snapshots_and_restores_the_final_plan_at_its_original_posi
     let replayed = serde_json::to_value(&restored.turns[0].response_parts).unwrap();
     assert_eq!(replayed[1]["plan"], value[1]["plan"]);
     assert_eq!(restored.turns[0].response_parts[2], parts[2]);
+    threads.shutdown().await;
+}
+
+#[tokio::test]
+async fn streams_thoughts_and_replays_the_same_interleaving() {
+    let folder = tempfile::tempdir().unwrap();
+    let mut agent = mock_agent();
+    agent
+        .env
+        .insert("FIXTURE_MODE".into(), "thought-stream".into());
+    agent.env.insert(
+        "SESSION_FILE".into(),
+        folder.path().join("history.json").to_string_lossy().into(),
+    );
+    let threads = Threads::new(vec![agent]);
+    let draft = threads.create(folder.path()).unwrap();
+    threads.connect(draft.id).unwrap();
+    assert_eq!(
+        settle(&threads, draft.id).await.status,
+        ThreadStatus::SessionReady
+    );
+    let mut stream = subscribe(&threads, draft.id);
+    threads.send_message(draft.id, "Inspect".into()).unwrap();
+    let completed = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let next = stream.recv().await.unwrap();
+            if next.status == ThreadStatus::SessionReady && !next.turns.is_empty() {
+                break next;
+            }
+        }
+    })
+    .await
+    .unwrap();
+    let parts = serde_json::to_value(&completed.turns[0].response_parts).unwrap();
+    assert_eq!(
+        parts
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|part| part["kind"].as_str().unwrap())
+            .collect::<Vec<_>>(),
+        ["thought", "plan", "thought", "tool", "thought", "thought", "text", "thought"]
+    );
+    assert_eq!(parts[0]["text"], "**Inspect files**");
+    assert_eq!(parts[4]["text"], "Read carefully");
+    assert_eq!(completed.turns[0].response_text(), "Answer");
+    let mut snapshot = threads.subscribe(draft.id).unwrap();
+    let atte_lib::thread::ThreadUpdate::Thread { thread } = snapshot.recv().await.unwrap() else {
+        panic!("snapshot");
+    };
+    assert_eq!(
+        serde_json::to_value(&thread.turns[0].response_parts).unwrap(),
+        parts
+    );
+    threads.reconnect(draft.id).unwrap();
+    let restored = settle(&threads, draft.id).await;
+    let mut replayed = serde_json::to_value(&restored.turns[0].response_parts).unwrap();
+    let mut expected = parts;
+    for list in [&mut expected, &mut replayed] {
+        for part in list.as_array_mut().unwrap() {
+            part.as_object_mut().unwrap().remove("id");
+        }
+    }
+    assert_eq!(replayed, expected);
     threads.shutdown().await;
 }

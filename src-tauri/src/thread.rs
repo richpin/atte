@@ -2483,6 +2483,15 @@ pub enum ThreadUpdate {
         part_id: String,
         text: String,
     },
+    ThoughtDelta {
+        #[serde(rename = "threadId")]
+        thread_id: Uuid,
+        #[serde(rename = "turnId")]
+        turn_id: Uuid,
+        #[serde(rename = "partId")]
+        part_id: String,
+        text: String,
+    },
     ToolUpdate {
         #[serde(rename = "threadId")]
         thread_id: Uuid,
@@ -2967,6 +2976,36 @@ impl RuntimeUpdates {
             .retain(|sender| sender.send(change.clone()).is_ok());
     }
 
+    pub fn append_thought(&self, turn: Uuid, text: String, message_id: Option<String>) {
+        let Ok(mut state) = self.state.lock() else {
+            return;
+        };
+        if state.generation != self.generation
+            || !matches!(
+                state.thread.status,
+                ThreadStatus::Running | ThreadStatus::WaitingForApproval
+            )
+            || state.thread.turns.last().map(|item| item.id) != Some(turn)
+        {
+            return;
+        }
+        let Some(last) = state.thread.turns.last_mut() else {
+            return;
+        };
+        let Some(part_id) = last.append_thought(&text, message_id) else {
+            return;
+        };
+        let change = ThreadUpdate::ThoughtDelta {
+            thread_id: state.thread.id,
+            turn_id: turn,
+            part_id,
+            text,
+        };
+        state
+            .subscribers
+            .retain(|sender| sender.send(change.clone()).is_ok());
+    }
+
     pub fn update_tool(
         &self,
         turn: Uuid,
@@ -3060,6 +3099,56 @@ mod title_tests {
             state,
             generation,
         }
+    }
+
+    #[test]
+    fn thoughts_reject_empty_cancelled_stale_and_foreign_turn_updates() {
+        let folder = tempfile::tempdir().unwrap();
+        let threads = Threads::default();
+        let draft = threads.create(folder.path()).unwrap();
+        let updates = updates_for(&threads, draft.id);
+        let turn_id = Uuid::new_v4();
+        {
+            let mut state = updates.state.lock().unwrap();
+            state.thread.status = ThreadStatus::Running;
+            state.thread.turns.push(Turn {
+                id: turn_id,
+                message: String::new(),
+                attachments: Vec::new(),
+                response_parts: Vec::new(),
+                stop_reason: None,
+            });
+        }
+        let mut stream = threads.subscribe(draft.id).unwrap();
+        stream.try_recv().unwrap();
+        updates.append_thought(turn_id, String::new(), None);
+        updates.append_thought(Uuid::new_v4(), "Wrong turn".into(), None);
+        assert!(stream.try_recv().is_err());
+        for status in [ThreadStatus::Running, ThreadStatus::WaitingForApproval] {
+            updates.state.lock().unwrap().thread.status = status;
+            updates.append_thought(turn_id, "Accepted".into(), None);
+            assert!(matches!(
+                stream.try_recv().unwrap(),
+                ThreadUpdate::ThoughtDelta { .. }
+            ));
+        }
+        for status in [ThreadStatus::Cancelling, ThreadStatus::SessionReady] {
+            updates.state.lock().unwrap().thread.status = status;
+            updates.append_thought(turn_id, "Late".into(), None);
+            assert!(stream.try_recv().is_err());
+        }
+        {
+            let mut state = updates.state.lock().unwrap();
+            state.thread.status = ThreadStatus::Running;
+            state.generation += 1;
+        }
+        updates.append_thought(turn_id, "Stale".into(), None);
+        assert!(stream.try_recv().is_err());
+        assert_eq!(
+            serde_json::to_value(&threads.get(draft.id).unwrap().turns[0]).unwrap()
+                ["responseParts"][0]["text"],
+            "AcceptedAccepted"
+        );
     }
 
     #[test]

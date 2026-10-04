@@ -445,6 +445,37 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 for content in request["params"]["prompt"].as_array().into_iter().flatten() {
                     history.push(json!({"sessionUpdate":"user_message_chunk","content":content}));
                 }
+                if mode == "thought-stream" {
+                    let updates = [
+                        json!({"sessionUpdate":"agent_thought_chunk","messageId":"think-1","content":{"type":"text","text":"**Inspect"}}),
+                        json!({"sessionUpdate":"agent_thought_chunk","messageId":"think-1","content":{"type":"text","text":" files**"}}),
+                        json!({"sessionUpdate":"plan","entries":[{"content":"Inspect","priority":"high","status":"pending"}]}),
+                        json!({"sessionUpdate":"agent_thought_chunk","content":{"type":"text","text":"Plan ready"}}),
+                        json!({"sessionUpdate":"tool_call","toolCallId":"read-1","title":"Read file","status":"in_progress"}),
+                        json!({"sessionUpdate":"agent_thought_chunk","messageId":"think-2","content":{"type":"text","text":"Read"}}),
+                        json!({"sessionUpdate":"tool_call_update","toolCallId":"read-1","status":"completed"}),
+                        json!({"sessionUpdate":"plan","entries":[{"content":"Inspect","priority":"high","status":"completed"}]}),
+                        json!({"sessionUpdate":"agent_thought_chunk","content":{"type":"text","text":" carefully"}}),
+                        json!({"sessionUpdate":"agent_thought_chunk","messageId":"think-3","content":{"type":"text","text":"Decide"}}),
+                        json!({"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"Answer"}}),
+                        json!({"sessionUpdate":"agent_thought_chunk","content":{"type":"text","text":"Review"}}),
+                    ];
+                    for update in updates {
+                        send(
+                            &mut output,
+                            json!({"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"remote-1","update":update}}),
+                        )?;
+                        history.push(update);
+                    }
+                    if let Some(path) = env::var_os("SESSION_FILE") {
+                        fs::write(path, serde_json::to_vec(&history)?)?;
+                    }
+                    send(
+                        &mut output,
+                        json!({"jsonrpc":"2.0","id":request["id"],"result":{"stopReason":"end_turn"}}),
+                    )?;
+                    continue;
+                }
                 if mode == "tool-stream" {
                     let updates = [
                         json!({"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"Before"}}),
@@ -538,6 +569,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         )?;
                     }
 
+                    if env::var_os("CANCEL_THOUGHT").is_some() {
+                        send(
+                            &mut output,
+                            json!({"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"remote-1","update":{"sessionUpdate":"agent_thought_chunk","content":{"type":"text","text":"Before cancellation"}}}}),
+                        )?;
+                    }
                     send(
                         &mut output,
                         json!({"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"remote-1","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"Started"}}}}),
@@ -546,6 +583,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         serde_json::from_str(&input.next().ok_or("missing cancel")??)?;
                     assert_eq!(cancel["method"], "session/cancel");
                     assert_eq!(cancel["params"]["sessionId"], "remote-1");
+                    if env::var_os("CANCEL_THOUGHT").is_some() {
+                        send(
+                            &mut output,
+                            json!({"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"remote-1","update":{"sessionUpdate":"agent_thought_chunk","content":{"type":"text","text":"Late thought"}}}}),
+                        )?;
+                    }
                     if env::var_os("CANCEL_TOOL").is_some() {
                         send(
                             &mut output,

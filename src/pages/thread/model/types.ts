@@ -170,6 +170,7 @@ export interface Plan {
 
 export type ResponsePart =
   | { kind: "text"; id: string; text: string }
+  | { kind: "thought"; id: string; text: string }
   | { kind: "tool"; id: string; tool: ToolCall }
   | { kind: "plan"; id: string; plan: Plan };
 
@@ -207,6 +208,13 @@ export type ThreadUpdate =
     }
   | {
       kind: "textDelta";
+      threadId: string;
+      turnId: string;
+      partId: string;
+      text: string;
+    }
+  | {
+      kind: "thoughtDelta";
       threadId: string;
       turnId: string;
       partId: string;

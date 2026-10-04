@@ -507,20 +507,19 @@ export function createThreadModel(
         );
       return;
     }
+    const kind = update.kind === "thoughtDelta" ? "thought" : "text";
     const index = parts.findIndex(
-      (part) => part.kind === "text" && part.id === update.partId,
+      (part) => part.kind === kind && part.id === update.partId,
     );
     if (index < 0) {
       setState("thread", "turns", turnIndex, "responseParts", parts.length, {
-        kind: "text",
+        kind,
         id: update.partId,
         text: update.text,
       });
     } else {
       setState("thread", "turns", turnIndex, "responseParts", index, (part) =>
-        part.kind === "text"
-          ? { ...part, text: part.text + update.text }
-          : part,
+        part.kind === kind ? { ...part, text: part.text + update.text } : part,
       );
     }
   }

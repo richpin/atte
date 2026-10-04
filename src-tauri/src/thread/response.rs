@@ -11,6 +11,12 @@ pub enum ResponsePart {
         id: String,
         text: String,
     },
+    Thought {
+        id: String,
+        text: String,
+        #[serde(skip)]
+        message_id: Option<String>,
+    },
     Plan {
         id: String,
         plan: Plan,
@@ -34,6 +40,34 @@ impl Turn {
             text: text.to_owned(),
         });
         id
+    }
+
+    /// Append published reasoning, retaining its message identity only in the backend.
+    pub fn append_thought(&mut self, text: &str, message_id: Option<String>) -> Option<String> {
+        if text.is_empty() {
+            return None;
+        }
+        if let Some(ResponsePart::Thought {
+            id,
+            text: previous,
+            message_id: known,
+        }) = self.response_parts.last_mut()
+        {
+            if message_id.is_none() || known.is_none() || message_id == *known {
+                previous.push_str(text);
+                if message_id.is_some() {
+                    *known = message_id;
+                }
+                return Some(id.clone());
+            }
+        }
+        let id = Uuid::new_v4().to_string();
+        self.response_parts.push(ResponsePart::Thought {
+            id: id.clone(),
+            text: text.to_owned(),
+            message_id,
+        });
+        Some(id)
     }
 
     /// Apply a partial ACP update in place, preserving the call's original position.
@@ -102,7 +136,9 @@ impl Turn {
             .iter()
             .filter_map(|part| match part {
                 ResponsePart::Text { text, .. } => Some(text.as_str()),
-                ResponsePart::Tool { .. } | ResponsePart::Plan { .. } => None,
+                ResponsePart::Tool { .. }
+                | ResponsePart::Plan { .. }
+                | ResponsePart::Thought { .. } => None,
             })
             .collect()
     }
@@ -112,6 +148,31 @@ impl Turn {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn thoughts_group_by_known_message_and_do_not_leak_into_answers_or_wire_metadata() {
+        let mut turn = Turn {
+            id: Uuid::new_v4(),
+            message: String::new(),
+            attachments: Vec::new(),
+            response_parts: Vec::new(),
+            stop_reason: None,
+        };
+        assert_eq!(turn.append_thought("", Some("empty".into())), None);
+        let first = turn.append_thought("One", Some("a".into()));
+        assert_eq!(turn.append_thought(" plus", None), first);
+        assert_eq!(turn.append_thought(" more", Some("a".into())), first);
+        let second = turn.append_thought("Two", Some("b".into()));
+        assert_ne!(second, first);
+        turn.append_response_text("Answer");
+        assert_ne!(turn.append_thought("Three", Some("b".into())), second);
+        let value = serde_json::to_value(&turn.response_parts).unwrap();
+        assert_eq!(value[0]["text"], "One plus more");
+        assert!(value[0].get("message_id").is_none());
+        assert!(value[0].get("messageId").is_none());
+        assert_eq!(turn.response_text(), "Answer");
+        assert_eq!(turn.response_parts.len(), 4);
+    }
 
     #[test]
     fn plan_snapshots_replace_entries_at_the_first_position_even_after_clearing() {
