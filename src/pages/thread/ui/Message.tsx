@@ -112,7 +112,7 @@ export function Message(props: {
     <ol aria-label={t("thread.messages")} class="flex flex-col gap-8">
       <Index each={props.turns}>
         {(turn) => (
-          <li class="flex min-w-0 flex-col gap-5">
+          <li class="flex min-w-0 flex-col gap-5 [&>:is([data-tool-call],[data-thought])+:is([data-tool-call],[data-thought])]:-mt-4">
             <UserMessage
               message={turn().message}
               attachments={turn().attachments ?? []}

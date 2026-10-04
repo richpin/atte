@@ -67,7 +67,7 @@ it("distinguishes approval, interrupted and unknown completion without guessing 
   expect(screen.getByText("Interrupted")).toBeTruthy();
 });
 
-it("shows a failed tool summary and marks unsupported result types", () => {
+it("shows failure details only when expanded and marks unsupported result types", () => {
   render(() => (
     <I18nProvider>
       <ToolCall
@@ -85,7 +85,8 @@ it("shows a failed tool summary and marks unsupported result types", () => {
       />
     </I18nProvider>
   ));
-  expect(screen.getByText("Permission denied")).toBeTruthy();
+  expect(screen.getByText("Failed")).toBeTruthy();
+  expect(screen.queryByText(/Permission denied/)).toBeNull();
   fireEvent.click(screen.getByRole("button"));
   expect(screen.getByText("Permission denied Try again")).toBeTruthy();
   expect(screen.getByText("File changes: /project/file.ts")).toBeTruthy();

@@ -84,15 +84,6 @@ export function ToolCall(props: {
     textContent().length
       ? textContent().join("\n\n")
       : plainValue(props.tool.rawOutput);
-  const failureSummary = () => {
-    if (props.tool.status !== "failed") return undefined;
-    const text = textContent().length
-      ? textContent().join("\n")
-      : typeof props.tool.rawOutput === "string"
-        ? props.tool.rawOutput
-        : "";
-    return text.split("\n").find((line) => line.trim());
-  };
   const placeholder = (item: ToolContent) => {
     if (item.type === "diff") return `${t("thread.tool.diff")}: ${item.path}`;
     if (item.type === "terminal") return t("thread.tool.terminal");
@@ -105,19 +96,21 @@ export function ToolCall(props: {
       data-tool-call=""
       class="min-w-0 rounded-lg border border-line text-sm"
     >
-      <CollapsibleTrigger class="flex w-full min-w-0 items-center gap-2 px-3 py-2 text-left focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent">
-        <ChevronDown
-          aria-hidden="true"
-          class="size-3.5 shrink-0 text-muted"
-          classList={{ "-rotate-90": !expanded() }}
-        />
+      <CollapsibleTrigger class="flex w-full min-w-0 items-center gap-2 px-3 py-1 text-left focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent">
         <Dynamic
           component={icon()}
           aria-hidden="true"
           class="size-4 shrink-0 text-muted"
         />
-        <span class="min-w-0 flex-1 truncate" title={props.tool.title}>
-          {props.tool.title || t("thread.tool.fallbackTitle")}
+        <span class="flex min-w-0 flex-1 items-center gap-2">
+          <span class="truncate" title={props.tool.title}>
+            {props.tool.title || t("thread.tool.fallbackTitle")}
+          </span>
+          <ChevronDown
+            aria-hidden="true"
+            class="size-3.5 shrink-0 text-muted"
+            classList={{ "-rotate-90": !expanded() }}
+          />
         </span>
         <Dynamic
           component={statusIcon()}
@@ -131,14 +124,6 @@ export function ToolCall(props: {
         />
         <span class="shrink-0 text-xs text-muted">{status()}</span>
       </CollapsibleTrigger>
-      <Show when={failureSummary()}>
-        <p
-          class="truncate px-3 pb-2 text-xs text-response-warning"
-          title={failureSummary()}
-        >
-          {failureSummary()}
-        </p>
-      </Show>
       <CollapsibleContent class="flex min-w-0 flex-col gap-3 border-t border-line px-3 py-3">
         <Show when={plainValue(props.tool.rawInput)}>
           {(input) => (

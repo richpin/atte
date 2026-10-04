@@ -334,7 +334,16 @@ export function AppSidebar(props: {
                                             aria-current={
                                               selected() ? "page" : undefined
                                             }
-                                            class="h-8 w-full pr-7 text-left"
+                                            class="h-8 w-full text-left group-hover/thread-row:pr-7 group-focus-within/thread-row:pr-7"
+                                            classList={{
+                                              "pr-7":
+                                                menuOpen() ||
+                                                Boolean(
+                                                  status() &&
+                                                    status()?.kind !==
+                                                      "approval",
+                                                ),
+                                            }}
                                             isActive={selected()}
                                             onClick={() =>
                                               props.onSelectThread(entry().id)
