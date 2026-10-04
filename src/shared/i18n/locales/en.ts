@@ -66,7 +66,6 @@ export const en = {
       content: "Content (preview unavailable)",
     },
     errors: "Thread errors",
-    firstResponseWaiting: "Waiting for first response",
     status: {
       disconnected: "Not connected",
       connecting: "Connecting…",

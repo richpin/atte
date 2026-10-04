@@ -101,13 +101,19 @@ export function Message(props: {
   turns: Turn[];
   streamingTurnId?: string;
   thinkingTurnId?: string;
-  waitingTurnId?: string;
+  respondingTurnId?: string;
   agentId?: string;
   approvalPending?: boolean;
   permissionToolIds?: string[];
   interrupted?: boolean;
 }) {
   const { t } = useI18n();
+  const responseStatus = () =>
+    t(
+      props.approvalPending
+        ? "thread.status.waitingForApproval"
+        : "thread.status.running",
+    );
   return (
     <ol aria-label={t("thread.messages")} class="flex flex-col gap-8">
       <Index each={props.turns}>
@@ -117,32 +123,6 @@ export function Message(props: {
               message={turn().message}
               attachments={turn().attachments ?? []}
             />
-            <Show
-              when={
-                turn().id === props.waitingTurnId &&
-                !turn().responseParts.some(
-                  (part) =>
-                    part.kind !== "plan" || part.plan.entries.length > 0,
-                )
-              }
-            >
-              <div
-                role="status"
-                aria-label={t("thread.firstResponseWaiting")}
-                title={t("thread.firstResponseWaiting")}
-                class="grid size-6 place-items-center"
-              >
-                <span
-                  class="inline-flex size-6 items-center justify-center"
-                  classList={{
-                    "animate-agent-waiting motion-reduce:animate-none":
-                      !props.approvalPending,
-                  }}
-                >
-                  <AgentIcon id={props.agentId ?? ""} src={null} waiting />
-                </span>
-              </div>
-            </Show>
             <Index each={turn().responseParts}>
               {(part, index) => (
                 <Switch>
@@ -222,6 +202,24 @@ export function Message(props: {
                 </Switch>
               )}
             </Index>
+            <Show when={turn().id === props.respondingTurnId}>
+              <div
+                role="status"
+                aria-label={responseStatus()}
+                title={responseStatus()}
+                class="grid size-6 place-items-center"
+              >
+                <span
+                  class="inline-flex size-6 items-center justify-center"
+                  classList={{
+                    "animate-agent-waiting motion-reduce:animate-none":
+                      !props.approvalPending,
+                  }}
+                >
+                  <AgentIcon id={props.agentId ?? ""} src={null} waiting />
+                </span>
+              </div>
+            </Show>
             <Show when={turn().stopReason}>
               {(reason) => (
                 <p class="text-xs text-muted">

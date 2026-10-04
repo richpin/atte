@@ -4105,7 +4105,7 @@ it("shows first-message waiting after a history-free resumption without its noti
   expect(screen.queryByRole("alert")).toBeNull();
 });
 
-it("shows first response waiting, approval and running until protocol completion", async () => {
+it("keeps the response indicator through streamed text until protocol completion", async () => {
   const ready = {
     id: "status",
     title: "Status thread",
@@ -4146,13 +4146,13 @@ it("shows first response waiting, approval and running until protocol completion
     ],
   };
   receive(active);
-  expect(
-    await screen.findByRole("status", { name: "첫 응답 대기" }),
-  ).toBeDefined();
+  const indicator = await screen.findByRole("status", { name: "응답 중…" });
+  expect(indicator.querySelector(".animate-agent-waiting")).not.toBeNull();
   expect(await screen.findByRole("status", { name: "실행 중" })).toBeDefined();
   receive({ ...active, status: "waitingForApproval" });
   expect(await screen.findByText("승인 요청")).toBeDefined();
-  expect(screen.getByRole("status", { name: "첫 응답 대기" })).toBeDefined();
+  expect(screen.getByRole("status", { name: "승인 대기" })).toBe(indicator);
+  expect(indicator.querySelector(".animate-agent-waiting")).toBeNull();
   receive(active);
   receiveUpdate({
     kind: "textDelta",
@@ -4162,8 +4162,10 @@ it("shows first response waiting, approval and running until protocol completion
     text: "Hi",
   });
   await waitFor(() =>
-    expect(screen.queryByRole("status", { name: "첫 응답 대기" })).toBeNull(),
+    expect(indicator.previousElementSibling?.textContent).toContain("Hi"),
   );
+  expect(screen.getByRole("status", { name: "응답 중…" })).toBe(indicator);
+  expect(indicator.querySelector(".animate-agent-waiting")).not.toBeNull();
   expect(await screen.findByRole("status", { name: "실행 중" })).toBeDefined();
   const menu = threadMenu(ready.title);
   menu.focus();
@@ -4175,7 +4177,7 @@ it("shows first response waiting, approval and running until protocol completion
   await userEvent.keyboard("{Escape}");
   expect(await screen.findByRole("status", { name: "중단 중" })).toBeDefined();
   expect(getSidebarThreadButton(ready.title).title).toBe("중단 중");
-  expect(screen.queryByRole("status", { name: "첫 응답 대기" })).toBeNull();
+  expect(screen.queryByRole("status", { name: "응답 중…" })).toBeNull();
   receive({ ...active, status: "sessionReady", interrupted: true });
   await waitFor(() =>
     expect(screen.queryByRole("status", { name: "중단 중" })).toBeNull(),
@@ -4186,13 +4188,12 @@ it("shows first response waiting, approval and running until protocol completion
       { id: "followup", message: "again", responseParts: [], stopReason: null },
     ],
   });
-  expect(
-    await screen.findByRole("status", { name: "첫 응답 대기" }),
-  ).toBeDefined();
+  expect(await screen.findByRole("status", { name: "응답 중…" })).toBeDefined();
   fireEvent.contextMenu(getSidebarThreadButton(ready.title));
   expect(await screen.findByRole("menuitem", { name: "삭제" })).toBeDefined();
   await userEvent.keyboard("{Escape}");
   receive({ ...active, status: "sessionReady", completedTurnId: "followup" });
+  expect(screen.queryByRole("status", { name: "응답 중…" })).toBeNull();
   await waitFor(() =>
     expect(screen.queryByRole("status", { name: "미확인 완료" })).toBeNull(),
   );
@@ -4499,7 +4500,7 @@ it("keeps actual errors after list recovery and prioritizes subscription failure
       name: "스레드 상태를 확인할 수 없습니다",
     }),
   ).toBeDefined();
-  expect(screen.queryByRole("status", { name: "첫 응답 대기" })).toBeNull();
+  expect(screen.queryByRole("status", { name: "응답 중…" })).toBeNull();
   receive({
     ...recovered,
     status: "waitingForApproval",

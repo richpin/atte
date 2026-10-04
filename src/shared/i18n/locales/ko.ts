@@ -72,7 +72,6 @@ export const ko = {
       content: "내용 (미리보기 미지원)",
     },
     errors: "스레드 오류",
-    firstResponseWaiting: "첫 응답 대기",
     status: {
       disconnected: "연결 전",
       connecting: "연결 중…",

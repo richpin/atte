@@ -163,16 +163,26 @@ it("updates only the actively streaming message body", () => {
       stopReason: null,
     },
   ]);
-  const [streamingTurnId] = createSignal<string | undefined>("turn-2");
+  const [streamingTurnId, setStreamingTurnId] = createSignal<
+    string | undefined
+  >("turn-2");
   const { container } = render(() => (
     <I18nProvider>
-      <Message turns={turns} streamingTurnId={streamingTurnId()} />
+      <Message
+        turns={turns}
+        streamingTurnId={streamingTurnId()}
+        respondingTurnId={streamingTurnId()}
+      />
     </I18nProvider>
   ));
   const completedBody = container.querySelectorAll<HTMLElement>(
     '[data-markdown-body][data-variant="agent"]',
   )[0];
   const completedParagraph = completedBody?.querySelector("p");
+  const indicator = screen.getByRole("status", { name: "Responding…" });
+  expect(indicator.previousElementSibling?.textContent).toContain(
+    "Streaming response",
+  );
 
   setTurns(1, "responseParts", 0, (part) => ({
     ...part,
@@ -185,6 +195,10 @@ it("updates only the actively streaming message body", () => {
   expect(completedBody?.querySelector("p")).toBe(completedParagraph);
   expect(completedBody?.textContent).toContain("Completed response");
   expect(container.textContent).toContain("Streaming response grows");
+  expect(screen.getByRole("status", { name: "Responding…" })).toBe(indicator);
+
+  setStreamingTurnId(undefined);
+  expect(screen.queryByRole("status")).toBeNull();
 });
 
 it("does not offer expansion when the user message fits within 20 lines", () => {
@@ -239,7 +253,7 @@ it("updates folding when wrapping changes the rendered line count", () => {
   expect(screen.queryByRole("button", { name: "Show more" })).toBeNull();
 });
 
-it("renders tools between text parts and stops waiting on a tool-only response", () => {
+it("renders tools between text parts and keeps the response indicator after them", () => {
   const current: Turn = {
     ...turn("Inspect"),
     responseParts: [
@@ -257,7 +271,7 @@ it("renders tools between text parts and stops waiting on a tool-only response",
       <Message
         turns={[current]}
         streamingTurnId={current.id}
-        waitingTurnId={current.id}
+        respondingTurnId={current.id}
         permissionToolIds={["call"]}
       />
     </I18nProvider>
@@ -266,12 +280,11 @@ it("renders tools between text parts and stops waiting on a tool-only response",
   expect(text.indexOf("Before tool")).toBeLessThan(text.indexOf("Read file"));
   expect(text.indexOf("Read file")).toBeLessThan(text.indexOf("After tool"));
   expect(screen.getByText("Approval required")).toBeTruthy();
-  expect(
-    screen.queryByRole("status", { name: "Waiting for first response" }),
-  ).toBeNull();
+  const indicator = screen.getByRole("status", { name: "Responding…" });
+  expect(indicator.previousElementSibling?.textContent).toContain("After tool");
 });
 
-it("keeps plan expansion when snapshots change and waits only for empty plans", () => {
+it("keeps plan expansion and the response indicator when snapshots change", () => {
   const current = turn("Plan please");
   const [turns, setTurns] = createStore<Turn[]>([
     {
@@ -283,14 +296,12 @@ it("keeps plan expansion when snapshots change and waits only for empty plans", 
     <I18nProvider>
       <Message
         turns={turns}
-        waitingTurnId={current.id}
+        respondingTurnId={current.id}
         streamingTurnId={current.id}
       />
     </I18nProvider>
   ));
-  expect(
-    screen.getByRole("status", { name: "Waiting for first response" }),
-  ).toBeTruthy();
+  const indicator = screen.getByRole("status", { name: "Responding…" });
   setTurns(0, "responseParts", 0, {
     kind: "plan",
     id: "plan",
@@ -298,7 +309,7 @@ it("keeps plan expansion when snapshots change and waits only for empty plans", 
       entries: [{ content: "Initial", priority: "high", status: "pending" }],
     },
   });
-  expect(screen.queryByRole("status")).toBeNull();
+  expect(screen.getByRole("status", { name: "Responding…" })).toBe(indicator);
   fireEvent.click(screen.getByRole("button"));
   setTurns(0, "responseParts", 0, {
     kind: "plan",
@@ -311,25 +322,26 @@ it("keeps plan expansion when snapshots change and waits only for empty plans", 
     "false",
   );
   expect(screen.getByRole("button").textContent).toContain("Updated");
+  expect(screen.getByRole("status", { name: "Responding…" })).toBe(indicator);
 });
 
-it("replaces first-response waiting with thoughts and stops thinking at the next response part", () => {
+it("keeps the response indicator with thoughts and stops thinking at the next response part", () => {
   const [turns, setTurns] = createStore<Turn[]>([turn("Inspect")]);
   const [thinking, setThinking] = createSignal<string | undefined>("turn-1");
   render(() => (
     <I18nProvider>
       <Message
         turns={turns}
-        waitingTurnId="turn-1"
+        respondingTurnId="turn-1"
         thinkingTurnId={thinking()}
       />
     </I18nProvider>
   ));
-  expect(screen.getByRole("status")).toBeTruthy();
+  const indicator = screen.getByRole("status", { name: "Responding…" });
   setTurns(0, "responseParts", [
     { kind: "thought", id: "thought", text: "**Reasoning**" },
   ]);
-  expect(screen.queryByRole("status")).toBeNull();
+  expect(screen.getByRole("status", { name: "Responding…" })).toBe(indicator);
   expect(screen.getByRole("button", { name: "Thinking" })).toBeTruthy();
   fireEvent.click(screen.getByRole("button", { name: "Thinking" }));
   setTurns(0, "responseParts", 1, {

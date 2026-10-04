@@ -246,7 +246,7 @@ export function ThreadPage(props: {
                   interrupted={thread()?.interrupted}
                   agentId={thread()?.agentId}
                   approvalPending={thread()?.status === "waitingForApproval"}
-                  waitingTurnId={
+                  respondingTurnId={
                     !props.model.subscriptionError() &&
                     !thread()?.failure &&
                     ["running", "waitingForApproval"].includes(
