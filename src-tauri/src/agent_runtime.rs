@@ -446,6 +446,39 @@ fn record_auth_status(
     }
 }
 
+enum PromptFailure {
+    Request,
+    Connection(ConnectionFailure),
+}
+
+fn classify_prompt(error: agent_client_protocol::Error) -> PromptFailure {
+    if agent_client_protocol::is_incoming_transport_closed(&error) {
+        PromptFailure::Connection(ConnectionFailure::ConnectionClosed)
+    } else if error.code == ErrorCode::AuthRequired {
+        PromptFailure::Connection(ConnectionFailure::AuthenticationRequired)
+    } else {
+        PromptFailure::Request
+    }
+}
+
+fn report_prompt_failure(
+    updates: &RuntimeUpdates,
+    failure: &PromptFailure,
+    turn: uuid::Uuid,
+    input: crate::thread::UserInput,
+    queued_message: Option<uuid::Uuid>,
+) {
+    match failure {
+        PromptFailure::Request => updates.request_failed(turn, input, queued_message),
+        PromptFailure::Connection(_) => {
+            // connection_failed restores queued input together with the failed connection state.
+            if queued_message.is_none() {
+                updates.direct_prompt_failed(turn, input);
+            }
+        }
+    }
+}
+
 async fn run_session(
     connection: ConnectionTo<Agent>,
     capabilities: AgentCapabilities,
@@ -567,17 +600,17 @@ async fn run_session(
         let turn_session = remote.to_string();
         let prompt_turn = prompt.turn;
         let queued_message = prompt.queued_message;
-        let queued_prompt = queued_message.is_some();
         let prompt_input = prompt.input;
         let content = match prompt_content(updates, &prompt_input) {
             Ok(content) => content,
             Err(failure) => {
-                if let Some(queued_message) = queued_message {
-                    updates.queued_prompt_failed(prompt_turn, queued_message, failure.clone());
-                } else {
-                    updates.direct_prompt_failed(prompt_turn, prompt_input);
+                report_prompt_failure(updates, &failure, prompt_turn, prompt_input, queued_message);
+                if let Ok(mut routes) = routes.lock() {
+                    if let Some(route) = routes.get_mut(&remote.to_string()) {
+                        route.active = None;
+                    }
                 }
-                return failure;
+                continue;
             }
         };
         let completed_input = prompt_input.clone();
@@ -597,16 +630,14 @@ async fn run_session(
                         Ok(turn_updates.complete_turn(prompt_turn, response.stop_reason))
                     }
                     Err(error) => {
-                        let failure = classify(error, ConnectionFailure::PromptFailed);
-                        if let Some(queued_message) = queued_message {
-                            turn_updates.queued_prompt_failed(
-                                prompt_turn,
-                                queued_message,
-                                failure.clone(),
-                            );
-                        } else {
-                            turn_updates.direct_prompt_failed(prompt_turn, completed_input);
-                        }
+                        let failure = classify_prompt(error);
+                        report_prompt_failure(
+                            &turn_updates,
+                            &failure,
+                            prompt_turn,
+                            completed_input,
+                            queued_message,
+                        );
                         Err(failure)
                     }
                 };
@@ -614,16 +645,17 @@ async fn run_session(
                 Ok(())
             })
         {
-            if let Some(queued_message) = queued_message {
-                updates.queued_prompt_failed(
-                    prompt_turn,
-                    queued_message,
-                    ConnectionFailure::PromptFailed,
-                );
-            } else {
-                updates.direct_prompt_failed(prompt_turn, prompt_input);
+            let failure = classify_prompt(error);
+            report_prompt_failure(updates, &failure, prompt_turn, prompt_input, queued_message);
+            if let Ok(mut routes) = routes.lock() {
+                if let Some(route) = routes.get_mut(&remote.to_string()) {
+                    route.active = None;
+                }
             }
-            return classify(error, ConnectionFailure::PromptFailed);
+            match failure {
+                PromptFailure::Request => continue,
+                PromptFailure::Connection(failure) => return failure,
+            }
         }
         if let Some(queued_message) = queued_message {
             updates.queued_prompt_dispatched(queued_message);
@@ -635,9 +667,8 @@ async fn run_session(
                 result = &mut completion => {
                     match result {
                         Ok(Ok(next)) => next_prompt = next,
-                        Ok(Err(failure)) if queued_prompt
-                            && failure == ConnectionFailure::PromptFailed => {}
-                        Ok(Err(failure)) => return failure,
+                        Ok(Err(PromptFailure::Request)) => {}
+                        Ok(Err(PromptFailure::Connection(failure))) => return failure,
                         Err(_) => return ConnectionFailure::ConnectionClosed,
                     }
                     break;
@@ -656,7 +687,7 @@ async fn run_session(
 fn prompt_content(
     updates: &RuntimeUpdates,
     input: &crate::thread::UserInput,
-) -> Result<Vec<ContentBlock>, ConnectionFailure> {
+) -> Result<Vec<ContentBlock>, PromptFailure> {
     let mut content =
         Vec::with_capacity(usize::from(!input.body.trim().is_empty()) + input.attachments.len());
     if !input.body.trim().is_empty() {
@@ -666,22 +697,16 @@ fn prompt_content(
         content.push(match attachment.kind {
             AttachmentKind::File => ContentBlock::ResourceLink(ResourceLink::new(
                 attachment.name.clone(),
-                attachment
-                    .uri
-                    .clone()
-                    .ok_or(ConnectionFailure::PromptFailed)?,
+                attachment.uri.clone().ok_or(PromptFailure::Request)?,
             )),
             AttachmentKind::Image => ContentBlock::Image(
                 ImageContent::new(
                     BASE64.encode(
                         updates
                             .media_bytes(attachment.id)
-                            .map_err(|_| ConnectionFailure::PromptFailed)?,
+                            .map_err(|_| PromptFailure::Request)?,
                     ),
-                    attachment
-                        .mime_type
-                        .clone()
-                        .ok_or(ConnectionFailure::PromptFailed)?,
+                    attachment.mime_type.clone().ok_or(PromptFailure::Request)?,
                 )
                 .meta(attachment_meta(attachment)),
             ),
@@ -690,12 +715,9 @@ fn prompt_content(
                     BASE64.encode(
                         updates
                             .media_bytes(attachment.id)
-                            .map_err(|_| ConnectionFailure::PromptFailed)?,
+                            .map_err(|_| PromptFailure::Request)?,
                     ),
-                    attachment
-                        .mime_type
-                        .clone()
-                        .ok_or(ConnectionFailure::PromptFailed)?,
+                    attachment.mime_type.clone().ok_or(PromptFailure::Request)?,
                 )
                 .meta(attachment_meta(attachment)),
             ),

@@ -66,7 +66,6 @@ mod tests {
             status: ThreadStatus::SessionReady,
             failure: None,
             completed_turn_id: None,
-            request_failure: None,
             interrupted: false,
         }
     }

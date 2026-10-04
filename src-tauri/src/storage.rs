@@ -126,7 +126,6 @@ impl Store {
                 status: decode_enum(status)?,
                 failure: failure.map(decode_enum).transpose()?,
                 completed_turn_id: None,
-                request_failure: None,
                 interrupted,
             })
         })

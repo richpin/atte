@@ -1319,7 +1319,9 @@ it("keeps the saved list accessible without agents and restores on selection onl
       .mock.calls.some(([command]) => command === "connect_thread"),
   ).toBe(false);
   await userEvent.click(screen.getByRole("button", { name: "지난 작업" }));
-  await screen.findByText(/에이전트를 설치한 뒤/);
+  expect(
+    (await screen.findByRole("status", { name: "스레드 오류" })).textContent,
+  ).toContain("에이전트를 설치한 뒤");
   await userEvent.click(
     screen.getByRole("button", { name: "설치·인증 관리 열기" }),
   );
@@ -1462,7 +1464,10 @@ it("keeps authentication discovery failures inline and retries on request", asyn
   );
   expect(
     screen
-      .getAllByRole("button", { name: new RegExp(`^${saved.title}`) })
+      .getAllByRole("button", {
+        name: new RegExp(`^${saved.title}`),
+        hidden: true,
+      })
       .some((button) => button.getAttribute("aria-current") === "page"),
   ).toBe(true);
   expect(
@@ -1690,7 +1695,9 @@ it("keeps the authentication explanation without duplicate timeline actions", as
   render(() => <App />);
   await userEvent.click(screen.getByRole("button", { name: "폴더 선택" }));
   await startNewThreadWithAgent();
-  expect(await screen.findByText(/에이전트 로그인이 필요합니다/)).toBeTruthy();
+  expect(await screen.findByRole("dialog")).toBeTruthy();
+  expect(screen.queryByRole("status", { name: "스레드 오류" })).toBeNull();
+  expect(screen.queryByRole("alert")).toBeNull();
   expect(
     screen.queryByText("인증 상태는 아직 확인되지 않았습니다."),
   ).toBeNull();
@@ -1704,7 +1711,7 @@ it("keeps the authentication explanation without duplicate timeline actions", as
   ).toBeTruthy();
 });
 
-it("replaces the composer with the agent's supported login methods", async () => {
+it("automatically blocks the thread with sign-in while preserving the composer", async () => {
   const authentication = deferred<Record<string, unknown>>();
   const failed = {
     id: "auth-thread",
@@ -1737,9 +1744,18 @@ it("replaces the composer with the agent's supported login methods", async () =>
   const title = await screen.findByText("Private work");
   const threadButton = title.closest("button");
   if (!threadButton) throw new Error("thread title must belong to its button");
+  expect(threadButton.querySelector('[role="status"]')).toBeNull();
+  expect(screen.queryByRole("status", { name: "연결 오류" })).toBeNull();
   await userEvent.click(threadButton);
+  expect(
+    await screen.findByRole("dialog", { name: "Codex 로그인" }),
+  ).toBeTruthy();
+  expect(screen.queryByRole("button", { name: "Sign in" })).toBeNull();
+  expect(screen.getByRole("textbox", { hidden: true })).toBeTruthy();
+  expect(
+    screen.getByRole("button", { name: "전송", hidden: true }),
+  ).toHaveProperty("disabled", true);
   expect(await screen.findByText("로그인 방법을 불러오는 중…")).toBeTruthy();
-  expect(screen.queryByRole("textbox")).toBeNull();
   expect(invoke).toHaveBeenCalledWith("authenticate_agent", {
     id: "codex",
     method: null,
@@ -1776,13 +1792,267 @@ it("replaces the composer with the agent's supported login methods", async () =>
 
   const buttons = await screen.findAllByRole("button", { name: /Continue/ });
   expect(buttons.map((button) => button.textContent)).toEqual([
-    "Continue in browser",
-    "Continue in Terminal",
+    "Continue in browser Use your existing account",
+    "Continue in Terminal ",
   ]);
   expect(screen.getByText("Use your existing account")).toBeTruthy();
   expect(screen.queryByRole("button", { name: "Future protocol" })).toBeNull();
   expect(screen.queryByRole("button", { name: "다시 연결" })).toBeNull();
   expect(screen.queryByRole("button", { name: "로그인 안내 열기" })).toBeNull();
+  await userEvent.keyboard("{Escape}");
+  expect(screen.getByRole("dialog")).toBeTruthy();
+  expect(screen.queryByRole("button", { name: "로그인 창 닫기" })).toBeNull();
+});
+
+function mockSignInThread() {
+  const failed = {
+    id: "dialog-thread",
+    title: "Dialog work",
+    agentId: "codex",
+    workingFolder: "/project",
+    status: "failed",
+    authentication: "required",
+    failure: "authenticationRequired",
+    sessionId: null,
+    createdAt: 1,
+    updatedAt: 1,
+    lastPromptAt: 1,
+    interrupted: false,
+    storageError: null,
+    turns: [],
+    permissions: [],
+    queuedMessages: [],
+  };
+  const ready = {
+    ...failed,
+    status: "sessionReady",
+    failure: null,
+    authentication: "unknown",
+  };
+  const login = deferred<Record<string, unknown>>();
+  const cancellation = deferred<void>();
+  let methods = [
+    {
+      id: "terminal",
+      name: "Terminal account",
+      description: "Use your agent account",
+      terminal: true,
+      supported: true,
+    },
+  ];
+  const original = vi.mocked(invoke).getMockImplementation();
+  vi.mocked(invoke).mockImplementation((command, args) => {
+    if (command === "list_threads") return Promise.resolve([ready]);
+    if (command === "subscribe_thread") return subscribeWith(args, ready);
+    if (command === "authenticate_agent")
+      return (args as { method: string | null }).method
+        ? login.promise
+        : Promise.resolve({ methods });
+    if (command === "cancel_agent_authentication") return cancellation.promise;
+    if (command === "connect_thread") return Promise.resolve();
+    return original?.(command, args) ?? Promise.resolve();
+  });
+  return {
+    failed,
+    requireSignIn: () => receive(failed),
+    login,
+    cancellation,
+    emptyMethods: () => {
+      methods = [];
+    },
+  };
+}
+
+it.each(["escape", "close", "outside"] as const)(
+  "blocks %s dismissal while retaining sign-in progress and the draft",
+  async (dismissal) => {
+    const { login, cancellation, requireSignIn } = mockSignInThread();
+    render(() => <App />);
+    await userEvent.click(
+      await screen.findByRole("button", { name: "Dialog work" }),
+    );
+    await userEvent.type(
+      await screen.findByRole("textbox"),
+      "keep after cancel",
+    );
+    requireSignIn();
+    const method = await screen.findByRole("button", {
+      name: "Terminal account Use your agent account",
+    });
+    method.focus();
+    await userEvent.keyboard("{Enter}");
+    expect(
+      await screen.findByText("터미널에서 로그인을 완료하세요."),
+    ).toBeTruthy();
+    if (dismissal === "escape") await userEvent.keyboard("{Escape}");
+    else if (dismissal === "close")
+      expect(
+        screen.queryByRole("button", { name: "로그인 창 닫기" }),
+      ).toBeNull();
+    else {
+      fireEvent.pointerDown(document.body);
+      fireEvent.pointerUp(document.body);
+      fireEvent.click(document.body);
+    }
+    expect(screen.getByRole("dialog")).toBeTruthy();
+    expect(
+      vi
+        .mocked(invoke)
+        .mock.calls.some(
+          ([command]) => command === "cancel_agent_authentication",
+        ),
+    ).toBe(false);
+    expect(screen.getByRole("textbox", { hidden: true })).toHaveProperty(
+      "value",
+      "keep after cancel",
+    );
+    await userEvent.click(screen.getByRole("button", { name: "로그인 취소" }));
+    expect(await screen.findByText("로그인을 취소하는 중…")).toBeTruthy();
+    expect(
+      screen.queryByRole("button", { name: /Terminal account/ }),
+    ).toBeNull();
+    cancellation.resolve();
+    expect(
+      await screen.findByRole("button", {
+        name: "Terminal account Use your agent account",
+      }),
+    ).toBeTruthy();
+    login.resolve({ authenticated: true });
+    await Promise.resolve();
+    expect(
+      vi
+        .mocked(invoke)
+        .mock.calls.some(
+          ([command]) =>
+            command === "connect_thread" || command === "send_message",
+        ),
+    ).toBe(false);
+  },
+);
+
+it("shows login failure once in the dialog and retries discovery into an empty supported list", async () => {
+  const { login, emptyMethods, requireSignIn } = mockSignInThread();
+  render(() => <App />);
+  await userEvent.click(
+    await screen.findByRole("button", { name: "Dialog work" }),
+  );
+  await userEvent.type(
+    await screen.findByRole("textbox"),
+    "keep after failure",
+  );
+  requireSignIn();
+  await userEvent.click(
+    await screen.findByRole("button", {
+      name: "Terminal account Use your agent account",
+    }),
+  );
+  login.reject("Sign-in service unavailable");
+  expect(await screen.findByRole("alert")).toHaveProperty(
+    "textContent",
+    "Sign-in service unavailable",
+  );
+  expect(screen.getAllByText("Sign-in service unavailable")).toHaveLength(1);
+  emptyMethods();
+  await userEvent.click(screen.getByRole("button", { name: "다시 시도" }));
+  expect(
+    await screen.findByText("지원되는 로그인 방법이 없습니다."),
+  ).toBeTruthy();
+  await userEvent.keyboard("{Escape}");
+  expect(screen.getByRole("textbox", { hidden: true })).toHaveProperty(
+    "value",
+    "keep after failure",
+  );
+});
+
+it("keeps successful login distinct from reconnect failure and retains recovery and the draft", async () => {
+  const { failed, login, requireSignIn } = mockSignInThread();
+  render(() => <App />);
+  await userEvent.click(
+    await screen.findByRole("button", { name: "Dialog work" }),
+  );
+  await userEvent.type(
+    await screen.findByRole("textbox"),
+    "recover this draft",
+  );
+  requireSignIn();
+  await userEvent.click(
+    await screen.findByRole("button", {
+      name: "Terminal account Use your agent account",
+    }),
+  );
+  login.resolve({ authenticated: true });
+  expect(
+    await screen.findByText("로그인 완료. 스레드를 다시 연결하는 중…"),
+  ).toBeTruthy();
+  receive({ ...failed, status: "connecting", failure: null });
+  receive({
+    ...failed,
+    failure: "processExited",
+    authentication: "authenticated",
+  });
+  expect(
+    await screen.findByText("로그인 완료. 스레드를 다시 연결해주세요."),
+  ).toBeTruthy();
+  expect(screen.queryByRole("button", { name: "다시 시도" })).toBeNull();
+  await userEvent.keyboard("{Escape}");
+  expect(screen.getByRole("textbox", { hidden: true })).toHaveProperty(
+    "value",
+    "recover this draft",
+  );
+  expect(screen.getByRole("button", { name: "다시 연결" })).toHaveProperty(
+    "disabled",
+    false,
+  );
+});
+
+it("shows reconnect command failure without turning successful sign-in into a login failure", async () => {
+  const { failed, login, requireSignIn } = mockSignInThread();
+  const original = vi.mocked(invoke).getMockImplementation();
+  vi.mocked(invoke).mockImplementation((command, args) =>
+    command === "connect_thread"
+      ? Promise.reject("Reconnect command unavailable")
+      : (original?.(command, args) ?? Promise.resolve()),
+  );
+  render(() => <App />);
+  await userEvent.click(
+    await screen.findByRole("button", { name: "Dialog work" }),
+  );
+  await userEvent.type(
+    await screen.findByRole("textbox"),
+    "keep after command failure",
+  );
+  requireSignIn();
+  await userEvent.click(
+    await screen.findByRole("button", {
+      name: "Terminal account Use your agent account",
+    }),
+  );
+  login.resolve({ authenticated: true });
+  expect(
+    await screen.findByText("로그인 완료. 스레드를 다시 연결해주세요."),
+  ).toBeTruthy();
+  expect(screen.queryByRole("button", { name: "다시 시도" })).toBeNull();
+  await userEvent.keyboard("{Escape}");
+  expect(screen.getByRole("textbox", { hidden: true })).toHaveProperty(
+    "value",
+    "keep after command failure",
+  );
+  await userEvent.click(screen.getByRole("button", { name: "다시 연결" }));
+  expect(invoke).toHaveBeenCalledWith("reconnect_thread", { id: failed.id });
+  receive({
+    ...failed,
+    status: "sessionReady",
+    failure: null,
+    authentication: "authenticated",
+  });
+  await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  expect(await screen.findByRole("textbox")).toHaveProperty(
+    "value",
+    "keep after command failure",
+  );
+  await waitFor(() =>
+    expect(document.activeElement).toBe(screen.getByRole("textbox")),
+  );
 });
 
 it("shares agent login progress and ignores completion after cancellation", async () => {
@@ -1847,8 +2117,16 @@ it("shares agent login progress and ignores completion after cancellation", asyn
     await screen.findByText("Continue in browser 로그인 진행 중"),
   ).toBeTruthy();
 
-  const secondTitle = screen.getByText("Second private thread");
-  await userEvent.click(secondTitle.closest("button") as HTMLButtonElement);
+  await userEvent.click(
+    await screen.findByRole("button", { name: "Second private thread" }),
+  );
+  expect(await screen.findByRole("dialog")).toBeTruthy();
+  await userEvent.click(getNewThreadButton());
+  await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  await userEvent.click(
+    screen.getByRole("button", { name: "Second private thread" }),
+  );
+  expect(await screen.findByRole("dialog")).toBeTruthy();
   expect(
     await screen.findByText("Continue in browser 로그인 진행 중"),
   ).toBeTruthy();
@@ -1866,7 +2144,7 @@ it("shares agent login progress and ignores completion after cancellation", asyn
   expect(invoke).toHaveBeenCalledWith("cancel_agent_authentication", {
     id: "codex",
   });
-  expect(screen.getByText("Continue in browser 로그인 진행 중")).toBeTruthy();
+  expect(screen.getByText("로그인을 취소하는 중…")).toBeTruthy();
   expect(
     screen.queryByRole("button", { name: "Continue in browser" }),
   ).toBeNull();
@@ -2032,6 +2310,18 @@ it("reconnects the still-selected origin once without sending preserved input", 
         ],
       });
     }
+    if (command === "select_files")
+      return Promise.resolve({
+        attachments: [
+          {
+            id: "kept-file",
+            kind: "linked",
+            name: "notes.txt",
+            path: "/project/notes.txt",
+          },
+        ],
+        errors: [],
+      });
     if (command === "connect_thread") return Promise.resolve();
     return original?.(command, args) ?? Promise.resolve();
   });
@@ -2040,6 +2330,9 @@ it("reconnects the still-selected origin once without sending preserved input", 
   const title = await screen.findByText("Private work");
   await userEvent.click(title.closest("button") as HTMLButtonElement);
   await userEvent.type(await screen.findByRole("textbox"), "keep this draft");
+  await userEvent.click(screen.getByRole("button", { name: "첨부 추가" }));
+  await userEvent.click(await screen.findByRole("menuitem", { name: "파일" }));
+  expect(await screen.findByText("notes.txt")).toBeTruthy();
   receive(failed);
   expect(await screen.findByText("wait for me")).toBeTruthy();
   await userEvent.click(
@@ -2059,12 +2352,21 @@ it("reconnects the still-selected origin once without sending preserved input", 
         .mock.calls.filter(([command]) => command === "connect_thread"),
     ).toHaveLength(1),
   );
+  expect(
+    await screen.findByText("로그인 완료. 스레드를 다시 연결하는 중…"),
+  ).toBeTruthy();
+  expect(screen.getByRole("dialog")).toBeTruthy();
   receive({ ...ready, queuedMessages: failed.queuedMessages });
+  await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
   expect(await screen.findByRole("textbox")).toHaveProperty(
     "value",
     "keep this draft",
   );
   expect(screen.getByText("wait for me")).toBeTruthy();
+  expect(screen.getByText("notes.txt")).toBeTruthy();
+  await waitFor(() =>
+    expect(document.activeElement).toBe(screen.getByRole("textbox")),
+  );
   expect(
     vi
       .mocked(invoke)
@@ -2287,9 +2589,10 @@ it("shows process exit after readiness without reconnecting automatically", asyn
     failure: "processExited",
     turns: [],
   });
-  expect((await screen.findByRole("alert")).textContent).toContain(
-    "프로세스가 종료",
-  );
+  expect(
+    (await screen.findByRole("status", { name: "스레드 오류" })).textContent,
+  ).toContain("프로세스가 종료");
+  expect(screen.queryByRole("alert")).toBeNull();
   expect(
     requests.mock.calls.filter(([command]) => command === "connect_thread"),
   ).toHaveLength(1);
@@ -3474,7 +3777,9 @@ it("keeps thread content after agent removal and offers setup and explicit retry
     ],
   });
   expect(await screen.findByText("삭제 전 응답")).toBeTruthy();
-  expect(screen.getByText(/에이전트를 설치한 뒤/)).toBeTruthy();
+  expect(
+    screen.getByRole("status", { name: "스레드 오류" }).textContent,
+  ).toContain("에이전트를 설치한 뒤");
   await userEvent.click(screen.getByRole("button", { name: "스레드 메뉴" }));
   expect(
     screen
@@ -3794,7 +4099,6 @@ it("shows first response waiting, approval and running until protocol completion
     interrupted: false,
     authentication: "authenticated",
     failure: null,
-    requestFailure: null,
     completedTurnId: null,
     permissions: [],
     queuedMessages: [],
@@ -3888,7 +4192,6 @@ function responseThread(id: string) {
     interrupted: false,
     authentication: "authenticated",
     failure: null,
-    requestFailure: null,
     completedTurnId: null as string | null,
     permissions: [],
     queuedMessages: [],
@@ -3897,6 +4200,141 @@ function responseThread(id: string) {
     turns: [],
   };
 }
+
+it.each([
+  {
+    status: "failed",
+    failure: "processExited",
+    message: "에이전트 프로세스가 종료되었습니다.",
+  },
+  {
+    status: "sessionReady",
+    storageError: "Thread storage unavailable",
+    message: "Thread storage unavailable",
+  },
+])(
+  "shows current thread errors only in the banner and preserves them on reentry: $message",
+  async (error) => {
+    const first = { ...responseThread("failed"), storageError: null, ...error };
+    const second = responseThread("other");
+    const original = vi.mocked(invoke).getMockImplementation();
+    vi.mocked(invoke).mockImplementation((command, args) => {
+      if (command === "list_threads") return Promise.resolve([first, second]);
+      if (command === "subscribe_thread")
+        return subscribeWith(
+          args,
+          (args as { id: string }).id === first.id ? first : second,
+        );
+      return original?.(command, args) ?? Promise.resolve();
+    });
+    render(() => <App />);
+    await userEvent.click(
+      await screen.findByRole("button", { name: first.title }),
+    );
+    await waitFor(() => expect(typeof receiveUpdate).toBe("function"));
+    receiveUpdate({
+      kind: "patch",
+      thread: first,
+      turnUpdates: [],
+      errors: [
+        {
+          id: "failure-1",
+          failure: first.failure,
+          message: first.storageError,
+        },
+      ],
+    });
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(
+      (await screen.findByRole("status", { name: "스레드 오류" })).textContent,
+    ).toContain(error.message);
+
+    await userEvent.click(getSidebarThreadButton(second.title));
+    await waitFor(() =>
+      expect(screen.queryByRole("status", { name: "스레드 오류" })).toBeNull(),
+    );
+    await userEvent.click(getSidebarThreadButton(first.title));
+    expect(
+      (await screen.findByRole("status", { name: "스레드 오류" })).textContent,
+    ).toContain(error.message);
+    expect(screen.queryByRole("alert")).toBeNull();
+
+    if (first.failure) {
+      await userEvent.click(screen.getByRole("button", { name: "다시 연결" }));
+      expect(invoke).toHaveBeenCalledWith("reconnect_thread", { id: first.id });
+    } else {
+      expect(screen.queryByRole("button", { name: "다시 연결" })).toBeNull();
+    }
+
+    receiveUpdate({
+      kind: "patch",
+      thread: {
+        ...first,
+        status: "sessionReady",
+        failure: null,
+        storageError: null,
+      },
+      turnUpdates: [],
+    });
+    await waitFor(() =>
+      expect(screen.queryByRole("status", { name: "스레드 오류" })).toBeNull(),
+    );
+  },
+);
+
+it("reports request failure with one toast and no banner or sidebar error, without replaying it on reentry", async () => {
+  const failed = {
+    ...responseThread("request-failure"),
+  };
+  const other = responseThread("other-request");
+  const original = vi.mocked(invoke).getMockImplementation();
+  vi.mocked(invoke).mockImplementation((command, args) => {
+    if (command === "list_threads") return Promise.resolve([failed, other]);
+    if (command === "subscribe_thread")
+      return subscribeWith(
+        args,
+        (args as { id: string }).id === failed.id ? failed : other,
+      );
+    return original?.(command, args) ?? Promise.resolve();
+  });
+  render(() => <App />);
+  await userEvent.click(
+    await screen.findByRole("button", { name: failed.title }),
+  );
+  await waitFor(() => expect(typeof receiveUpdate).toBe("function"));
+  const event = {
+    kind: "patch",
+    thread: failed,
+    turnUpdates: [],
+    errors: [
+      {
+        id: "request-1",
+        message: "메시지 실행에 실패했습니다. 다시 시도해주세요.",
+      },
+    ],
+  };
+  receiveUpdate(event);
+  receiveUpdate(event);
+  expect((await screen.findByRole("alert")).textContent).toContain(
+    "메시지 실행에 실패했습니다.",
+  );
+  expect(screen.getAllByRole("alert")).toHaveLength(1);
+  expect(screen.queryByRole("status", { name: "스레드 오류" })).toBeNull();
+  expect(screen.queryByRole("status", { name: "요청 실패" })).toBeNull();
+  expect(screen.queryByRole("status", { name: "연결 오류" })).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "알림 닫기" }));
+  await waitFor(() => expect(screen.queryByRole("alert")).toBeNull());
+  await userEvent.click(getSidebarThreadButton(other.title));
+  await userEvent.click(getSidebarThreadButton(failed.title));
+  await waitFor(() =>
+    expect(invoke).toHaveBeenCalledWith(
+      "subscribe_thread",
+      expect.objectContaining({ id: failed.id }),
+    ),
+  );
+  expect(screen.queryByRole("alert")).toBeNull();
+  expect(screen.queryByRole("status", { name: "스레드 오류" })).toBeNull();
+});
 
 it("confirms completion only on the visible thread page and preserves it through cancellation and duplicate updates", async () => {
   const first = { ...responseThread("first"), completedTurnId: "first-turn" };
@@ -3988,7 +4426,7 @@ it("confirms completion only on the visible thread page and preserves it through
 it("keeps actual errors after list recovery and prioritizes subscription failure over progress", async () => {
   const first = {
     ...responseThread("errors"),
-    requestFailure: "promptFailed",
+    failure: "connectionClosed",
     completedTurnId: "old",
   };
   let listUpdate!: (entries: Record<string, unknown>[]) => void;
@@ -4013,15 +4451,15 @@ it("keeps actual errors after list recovery and prioritizes subscription failure
   ).toBeDefined();
   listUpdate([first]);
   expect(
-    await screen.findByRole("status", { name: "요청 실패" }),
+    await screen.findByRole("status", { name: "연결 오류" }),
   ).toBeDefined();
   await userEvent.click(getSidebarThreadButton(first.title));
   expect(
-    await screen.findByRole("status", { name: "요청 실패" }),
+    await screen.findByRole("status", { name: "연결 오류" }),
   ).toBeDefined();
   const recovered = {
     ...first,
-    requestFailure: null,
+    failure: null,
     status: "running",
     turns: [
       { id: "next", message: "try again", responseParts: [], stopReason: null },
@@ -4056,10 +4494,10 @@ it("keeps actual errors after list recovery and prioritizes subscription failure
   expect(await screen.findByRole("menuitem", { name: "삭제" })).toBeDefined();
 });
 
-it("retries the failed list subscription and keeps rows and request errors during recovery", async () => {
+it("retries the failed list subscription and keeps rows and connection errors during recovery", async () => {
   const first = {
     ...responseThread("retry-list"),
-    requestFailure: "promptFailed",
+    failure: "connectionClosed",
   };
   let attempts = 0;
   let deliver!: () => void;
@@ -4092,6 +4530,6 @@ it("retries the failed list subscription and keeps rows and request errors durin
   ).toBeDefined();
   deliver();
   expect(
-    await screen.findByRole("status", { name: "요청 실패" }),
+    await screen.findByRole("status", { name: "연결 오류" }),
   ).toBeDefined();
 });

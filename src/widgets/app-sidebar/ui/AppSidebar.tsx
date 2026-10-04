@@ -53,7 +53,6 @@ type SidebarThread = {
   status: string;
   sessionId?: string | null;
   failure?: string | null;
-  requestFailure?: string | null;
   subscriptionFailed?: boolean;
   unconfirmed?: boolean;
 };
@@ -267,11 +266,11 @@ export function AppSidebar(props: {
                                           kind: "error" as const,
                                           label: t("sidebar.statusUnavailable"),
                                         };
-                                      if (entry().requestFailure)
-                                        return {
-                                          kind: "error" as const,
-                                          label: t("sidebar.requestFailed"),
-                                        };
+                                      if (
+                                        entry().failure ===
+                                        "authenticationRequired"
+                                      )
+                                        return undefined;
                                       if (
                                         entry().failure ||
                                         entry().status === "failed"
@@ -393,7 +392,7 @@ export function AppSidebar(props: {
                                             class={
                                               menuOpen()
                                                 ? "opacity-100"
-                                                : "md:opacity-0 group-hover/thread-row:opacity-100 group-focus-within/thread-row:opacity-100"
+                                                : "opacity-0 group-hover/thread-row:opacity-100 group-focus-within/thread-row:opacity-100"
                                             }
                                           >
                                             <EllipsisVertical

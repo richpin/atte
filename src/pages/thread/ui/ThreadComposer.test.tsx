@@ -35,7 +35,6 @@ function readyThread(): Thread {
     authentication: "authenticated",
     failure: null,
     completedTurnId: null,
-    requestFailure: null,
     turns: [],
     notice: null,
     permissions: [],
@@ -274,7 +273,11 @@ it("selects files and renders removable duplicate basename chips without paths",
   expect(screen.queryByRole("alert")).toBeNull();
 
   fireEvent.click(
-    screen.getAllByRole("button", { name: "Remove attachment: notes.txt" })[1],
+    (
+      await screen.findAllByRole("button", {
+        name: "Remove attachment: notes.txt",
+      })
+    )[1],
   );
   expect(onRemoveAttachment).toHaveBeenCalledWith("two");
   expect(screen.getByRole("button", { name: "Send" })).toHaveProperty(

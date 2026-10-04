@@ -10,6 +10,7 @@ export function PromptInput(props: {
   value: string;
   disabled: boolean;
   focusKey?: string;
+  inputRef?: (element: HTMLTextAreaElement) => void;
   onInput: (value: string) => void;
   onSubmit: () => void;
   onPasteImage?: (image: File) => void;
@@ -69,7 +70,10 @@ export function PromptInput(props: {
 
   return (
     <textarea
-      ref={input}
+      ref={(element) => {
+        input = element;
+        props.inputRef?.(element);
+      }}
       aria-label={t("thread.message")}
       class="max-h-thread-composer-input w-full resize-none overflow-y-auto overscroll-contain bg-transparent text-sm leading-5 outline-none disabled:cursor-not-allowed"
       disabled={props.disabled}

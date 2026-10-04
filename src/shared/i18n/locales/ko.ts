@@ -71,6 +71,7 @@ export const ko = {
       terminal: "터미널 출력 (미리보기 미지원)",
       content: "내용 (미리보기 미지원)",
     },
+    errors: "스레드 오류",
     firstResponseWaiting: "첫 응답 대기",
     status: {
       disconnected: "연결 전",
@@ -92,7 +93,6 @@ export const ko = {
         "에이전트 로그인이 필요합니다. 로그인 후 다시 연결해주세요.",
       processExited: "에이전트 프로세스가 종료되었습니다.",
       connectionClosed: "에이전트와의 연결이 끊어졌습니다.",
-      promptFailed: "메시지 실행에 실패했습니다. 다시 연결해주세요.",
       timedOut: "에이전트 연결 시간이 초과되었습니다.",
       agentRemoved: "에이전트를 설치한 뒤 이 스레드에서 다시 시도해주세요.",
       resumptionUnsupported:
@@ -138,6 +138,15 @@ export const ko = {
     subscriptionFailed: "스레드 상태를 구독할 수 없습니다.",
     openAgentManagement: "설치·인증 관리 열기",
     authentication: {
+      title: "{{ agent }} 로그인",
+      choose: "로그인 방법을 선택하세요.",
+      empty: "지원되는 로그인 방법이 없습니다.",
+      browser: "브라우저에서 로그인을 완료하세요.",
+      terminal: "터미널에서 로그인을 완료하세요.",
+      cancelling: "로그인을 취소하는 중…",
+      reconnecting: "로그인 완료. 스레드를 다시 연결하는 중…",
+      reconnectFailed: "로그인 완료. 스레드를 다시 연결해주세요.",
+
       loading: "로그인 방법을 불러오는 중…",
       discoveryFailed: "로그인 방법을 불러올 수 없습니다. 다시 시도해주세요.",
       loginFailed: "로그인하지 못했습니다. 다시 시도해주세요.",
@@ -203,7 +212,6 @@ export const ko = {
     restoring: "스레드 복원 중",
     stopping: "중단 중",
     unconfirmed: "미확인 완료",
-    requestFailed: "요청 실패",
     statusUnavailable: "스레드 상태를 확인할 수 없습니다",
     threadMenu: "{{ name }} 메뉴",
     deleteFailed: "스레드를 삭제할 수 없습니다. 다시 시도해주세요.",
@@ -241,6 +249,7 @@ export const ko = {
     logoutFailed: "로그아웃하지 못했습니다. 다시 시도해주세요.",
   },
   backend: {
+    requestExecutionFailed: "메시지 실행에 실패했습니다. 다시 시도해주세요.",
     appClosing: "앱을 종료하고 있습니다.",
     openWindowFailed: "창을 열 수 없습니다.",
     storage:

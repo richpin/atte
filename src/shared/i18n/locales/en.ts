@@ -65,6 +65,7 @@ export const en = {
       terminal: "Terminal output (preview unavailable)",
       content: "Content (preview unavailable)",
     },
+    errors: "Thread errors",
     firstResponseWaiting: "Waiting for first response",
     status: {
       disconnected: "Not connected",
@@ -85,7 +86,6 @@ export const en = {
       authenticationRequired: "Sign in to the agent, then reconnect.",
       processExited: "The agent process exited.",
       connectionClosed: "The connection to the agent was lost.",
-      promptFailed: "The message failed. Reconnect and try again.",
       timedOut: "The agent connection timed out.",
       agentRemoved: "Install the agent, then try again in this thread.",
       resumptionUnsupported:
@@ -131,6 +131,15 @@ export const en = {
     subscriptionFailed: "Thread updates are unavailable.",
     openAgentManagement: "Open installation and authentication",
     authentication: {
+      title: "Sign in to {{ agent }}",
+      choose: "Choose a sign-in method.",
+      empty: "No supported sign-in methods are available.",
+      browser: "Complete sign-in in your browser.",
+      terminal: "Complete sign-in in the terminal.",
+      cancelling: "Cancelling sign-in…",
+      reconnecting: "Signed in. Reconnecting the thread…",
+      reconnectFailed: "Signed in. Reconnect to restore the thread.",
+
       loading: "Loading sign-in methods…",
       discoveryFailed: "Sign-in methods could not be loaded. Try again.",
       loginFailed: "Sign-in failed. Try again.",
@@ -198,7 +207,6 @@ export const en = {
     restoring: "Restoring thread",
     stopping: "Stopping",
     unconfirmed: "Unconfirmed completion",
-    requestFailed: "Request failed",
     statusUnavailable: "Thread status unavailable",
     threadMenu: "{{ name }} menu",
     deleteFailed: "The thread could not be deleted. Try again.",
@@ -236,6 +244,7 @@ export const en = {
     logoutFailed: "Logout failed. Try again.",
   },
   backend: {
+    requestExecutionFailed: "The message failed. Please try again.",
     appClosing: "The app is closing.",
     openWindowFailed: "The window could not be opened.",
     storage:

@@ -1960,15 +1960,8 @@ async fn failed_queued_input_blocks_fifo_until_the_user_retries_the_same_input()
     })
     .await
     .unwrap();
-    assert_eq!(
-        failed.request_failure,
-        Some(atte_lib::thread::ConnectionFailure::PromptFailed)
-    );
+
     assert_eq!(failed.completed_turn_id, Some(failed.turns[0].id));
-    assert_eq!(
-        threads.list().unwrap()[0].request_failure,
-        failed.request_failure
-    );
     assert_eq!(failed.queued_messages.len(), 2);
     assert_eq!(failed.queued_messages[0].input.body, "retry me");
     assert_eq!(failed.queued_messages[1].input.body, "after me");
@@ -1990,7 +1983,6 @@ async fn failed_queued_input_blocks_fifo_until_the_user_retries_the_same_input()
         .unwrap();
     let completed = settle(&threads, draft.id).await;
 
-    assert_eq!(completed.request_failure, None);
     assert_eq!(
         completed.completed_turn_id,
         completed.turns.last().map(|turn| turn.id)
@@ -2400,12 +2392,7 @@ async fn failed_restoration_keeps_the_reference_and_never_exposes_partial_replay
         restored.connect(draft.id).unwrap();
         let failed = settle(&restored, draft.id).await;
         assert_eq!(failed.completed_turn_id, None);
-        if mode == "prompt-error" {
-            assert_eq!(
-                failed.request_failure,
-                Some(ConnectionFailure::PromptFailed)
-            );
-        }
+
         assert_eq!(failed.failure, Some(failure), "{mode}");
         assert_eq!(failed.session_id.as_deref(), Some("remote-1"));
         assert!(failed.turns.is_empty());
@@ -3811,6 +3798,53 @@ async fn unsuccessful_turns_preserve_the_queue_without_dispatching() {
 }
 
 #[tokio::test]
+async fn request_errors_are_transient_and_keep_the_session_usable() {
+    use atte_lib::thread::ThreadUpdate;
+    let folder = tempfile::tempdir().unwrap();
+    let mut agent = mock_agent();
+    agent
+        .env
+        .insert("FIXTURE_MODE".into(), "prompt-error".into());
+    let threads = Threads::new(vec![agent]);
+    let draft = threads.create(folder.path()).unwrap();
+    threads.connect(draft.id).unwrap();
+    settle(&threads, draft.id).await;
+    let mut stream = threads.subscribe(draft.id).unwrap();
+    stream.recv().await.unwrap();
+    for _ in 0..2 {
+        threads.send_message(draft.id, "hello".into()).unwrap();
+        let errors = tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                if let Some(ThreadUpdate::Patch { errors, .. }) = stream.recv().await {
+                    if !errors.is_empty() {
+                        break errors;
+                    }
+                }
+            }
+        })
+        .await
+        .unwrap();
+        let current = threads.get(draft.id).unwrap();
+        assert_eq!(current.status, ThreadStatus::SessionReady);
+        assert_eq!(current.failure, None);
+        assert_eq!(current.completed_turn_id, None);
+        assert_eq!(current.turns.last().unwrap().response_text(), "Hello world");
+        assert_eq!(errors.len(), 1);
+        assert_eq!(errors[0].failure, None);
+        assert!(errors[0].message.is_some());
+        assert!(serde_json::to_value(&current)
+            .unwrap()
+            .get("requestFailure")
+            .is_none());
+        assert!(serde_json::to_value(&threads.list().unwrap()[0])
+            .unwrap()
+            .get("requestFailure")
+            .is_none());
+    }
+    threads.shutdown().await;
+}
+
+#[tokio::test]
 async fn prompt_failures_preserve_partial_output_and_reject_stale_updates() {
     use atte_lib::thread::ConnectionFailure;
     for (mode, failure) in [
@@ -3819,7 +3853,6 @@ async fn prompt_failures_preserve_partial_output_and_reject_stale_updates() {
             "prompt-auth-exit",
             ConnectionFailure::AuthenticationRequired,
         ),
-        ("prompt-error", ConnectionFailure::PromptFailed),
         ("prompt-exit", ConnectionFailure::ProcessExited),
     ] {
         let folder = tempfile::tempdir().unwrap();
@@ -3855,7 +3888,7 @@ async fn prompt_failures_preserve_partial_output_and_reject_stale_updates() {
         threads.connect(draft.id).unwrap();
         let reconnected = settle(&threads, draft.id).await;
         assert_eq!(reconnected.status, ThreadStatus::SessionReady);
-        assert_eq!(reconnected.request_failure, None);
+
         assert_eq!(reconnected.completed_turn_id, None);
         assert_eq!(reconnected.turns[0].response_text(), "Hello world");
         threads.shutdown().await;
@@ -5553,7 +5586,7 @@ async fn completion_is_reset_on_restart_without_reconstructing_from_remote_histo
     drop(threads);
     let restored = Threads::with_store(vec![agent], store).unwrap();
     assert_eq!(restored.list().unwrap()[0].completed_turn_id, None);
-    assert_eq!(restored.get(draft.id).unwrap().request_failure, None);
+
     restored.connect(draft.id).unwrap();
     let ready = settle(&restored, draft.id).await;
     assert_eq!(ready.turns[0].response_text(), "Hello world");

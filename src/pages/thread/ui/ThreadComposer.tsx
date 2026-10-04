@@ -1,4 +1,3 @@
-import type { AgentAuthenticationState } from "features/agent-authentication";
 import {
   ArrowUp,
   AudioLines,
@@ -24,7 +23,7 @@ import {
   SwitchThumb,
   Switch as ToggleSwitch,
 } from "shared/ui";
-import { createSignal, For, Match, Show, Switch } from "solid-js";
+import { createSignal, For, Show } from "solid-js";
 import type {
   Attachment,
   MediaKind,
@@ -50,7 +49,8 @@ export function ThreadComposer(props: {
   stopping: boolean;
   actionsEnabled: boolean;
   canSend: boolean;
-  authentication?: AgentAuthenticationState;
+  signInOpen?: boolean;
+  promptRef?: (element: HTMLTextAreaElement) => void;
   onDraftChange: (message: string) => void;
   onSelectFiles?: () => void;
   onSelectMedia?: (kind: MediaKind) => void;
@@ -63,22 +63,12 @@ export function ThreadComposer(props: {
   onConfigure: (configId: string, value: ThreadConfigurationValue) => void;
   onDeleteQueued: (id: string) => Promise<void>;
   onRetryQueued: (id: string) => Promise<void>;
-  onRetryAuthentication?: () => void;
-  onAuthenticate?: (method: string) => void;
-  onCancelAuthentication?: () => void;
 }) {
   const { t } = useI18n();
-  const authentication = (): AgentAuthenticationState =>
-    props.authentication ?? { status: "idle" };
-  const authenticationState = <
-    Status extends AgentAuthenticationState["status"],
-  >(
-    status: Status,
-  ) => {
-    const current = authentication();
-    return current.status === status
-      ? (current as Extract<AgentAuthenticationState, { status: Status }>)
-      : undefined;
+  const authenticationRequired = () =>
+    props.thread.failure === "authenticationRequired";
+  const submit = () => {
+    if (props.canSend && !authenticationRequired()) props.onSend();
   };
 
   return (
@@ -89,214 +79,150 @@ export function ThreadComposer(props: {
         onDelete={props.onDeleteQueued}
         onRetry={props.onRetryQueued}
       />
-      <Show
-        when={props.thread.failure === "authenticationRequired"}
-        fallback={
-          <form
-            class="max-h-thread-composer-form shrink-0 overflow-y-auto overscroll-contain rounded-3xl border border-line bg-input-surface p-4 shadow-sm"
-            onSubmit={(event) => {
-              event.preventDefault();
-              props.onSend();
-            }}
-          >
-            <Show
-              when={props.thread.permissions?.[0]}
-              fallback={
-                <>
-                  <Show when={(props.draftAttachments?.length ?? 0) > 0}>
-                    <div class="mb-3 flex flex-wrap gap-2">
-                      <For each={props.draftAttachments}>
-                        {(attachment) => (
-                          <AttachmentChip
-                            name={attachment.name}
-                            kind={attachment.kind}
-                            onRemove={() =>
-                              props.onRemoveAttachment?.(attachment.id)
-                            }
-                          />
-                        )}
-                      </For>
-                    </div>
-                  </Show>
-                  <PromptInput
-                    value={props.draft}
-                    disabled={!props.canSend}
-                    focusKey={
-                      props.active && props.thread.status === "sessionReady"
-                        ? props.thread.id
-                        : undefined
-                    }
-                    onInput={props.onDraftChange}
-                    onSubmit={props.onSend}
-                    onPasteImage={
-                      props.thread.promptCapabilities?.image
-                        ? props.onPasteImage
-                        : undefined
-                    }
-                    onUnsupportedImagePaste={props.onUnsupportedImagePaste}
-                  />
-                </>
-              }
-            >
-              {(request) => (
-                <PermissionInput
-                  request={request()}
-                  workingFolder={props.thread.workingFolder}
-                  disabled={
-                    !props.actionsEnabled ||
-                    props.answerPending ||
-                    props.cancelPending
-                  }
-                  onAnswer={props.onAnswer}
-                />
-              )}
-            </Show>
-            <div class="mt-3 flex items-end justify-between gap-3 text-xs text-muted">
-              <div class="flex min-w-0 flex-wrap items-center gap-2">
-                <DropdownMenu placement="top-start">
-                  <DropdownMenuTrigger
-                    aria-label={t("thread.addAttachment")}
-                    disabled={!props.canSend}
-                    class="grid size-7 shrink-0 place-items-center rounded-full text-muted transition-colors hover:bg-panel focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent disabled:opacity-40"
-                  >
-                    <Plus
-                      aria-hidden="true"
-                      size={16}
-                      style={{ "stroke-width": "2.5px" }}
-                    />
-                  </DropdownMenuTrigger>
-                  <DropdownMenuContent>
-                    <DropdownMenuItem
-                      class="px-3 py-2"
-                      onSelect={() => props.onSelectFiles?.()}
-                    >
-                      <FileIcon aria-hidden="true" class="size-3.5" />
-                      {t("thread.file")}
-                    </DropdownMenuItem>
-                    <Show when={props.thread.promptCapabilities?.image}>
-                      <DropdownMenuItem
-                        class="px-3 py-2"
-                        onSelect={() => props.onSelectMedia?.("image")}
-                      >
-                        <ImageIcon aria-hidden="true" class="size-3.5" />
-                        {t("thread.image")}
-                      </DropdownMenuItem>
-                    </Show>
-                    <Show when={props.thread.promptCapabilities?.audio}>
-                      <DropdownMenuItem
-                        class="px-3 py-2"
-                        onSelect={() => props.onSelectMedia?.("audio")}
-                      >
-                        <AudioLines aria-hidden="true" class="size-3.5" />
-                        {t("thread.audio")}
-                      </DropdownMenuItem>
-                    </Show>
-                  </DropdownMenuContent>
-                </DropdownMenu>
-                <For each={props.thread.configuration}>
-                  {(configuration) => (
-                    <ThreadConfigurationControl
-                      configuration={configuration}
-                      disabled={!props.actionsEnabled}
-                      onChange={(value) =>
-                        props.onConfigure(configuration.id, value)
-                      }
-                    />
-                  )}
-                </For>
-              </div>
-              <button
-                type={props.showStop ? "button" : "submit"}
-                aria-label={
-                  props.showStop ? t("thread.stop") : t("thread.send")
-                }
-                class="grid size-8 shrink-0 place-items-center rounded-full bg-primary text-primary-foreground focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-accent disabled:opacity-40"
-                disabled={
-                  props.showStop
-                    ? !props.actionsEnabled || props.stopping
-                    : !props.canSend ||
-                      (!props.draft.trim() &&
-                        !(props.draftAttachments?.length ?? 0))
-                }
-                onClick={() => {
-                  if (props.showStop) props.onCancel();
-                }}
-              >
-                <Show
-                  when={props.showStop}
-                  fallback={<ArrowUp aria-hidden="true" class="size-[18px]" />}
-                >
-                  <span
-                    aria-hidden="true"
-                    class="size-3 rounded-[2px] bg-current"
-                  />
-                </Show>
-              </button>
-            </div>
-          </form>
-        }
+      <form
+        class="max-h-thread-composer-form shrink-0 overflow-y-auto overscroll-contain rounded-3xl border border-line bg-input-surface p-4 shadow-sm"
+        onSubmit={(event) => {
+          event.preventDefault();
+          submit();
+        }}
       >
-        <section class="shrink-0 rounded-3xl border border-line bg-input-surface p-4 shadow-sm">
-          <Switch>
-            <Match when={authenticationState("loading")}>
-              <p role="status">{t("thread.authentication.loading")}</p>
-            </Match>
-            <Match when={authenticationState("error")}>
-              <button
-                type="button"
-                class="mt-3 rounded-lg bg-primary px-4 py-2 text-primary-foreground text-sm focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-accent"
-                onClick={() => props.onRetryAuthentication?.()}
-              >
-                {t("common.retry")}
-              </button>
-            </Match>
-            <Match when={authenticationState("ready")}>
-              {(state) => (
-                <div class="space-y-3">
-                  <For each={state().methods}>
-                    {(method) => (
-                      <div>
-                        <button
-                          type="button"
-                          class="w-full rounded-lg bg-primary px-4 py-2 text-primary-foreground text-sm focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-accent"
-                          onClick={() => props.onAuthenticate?.(method.id)}
-                        >
-                          {method.name}
-                        </button>
-                        <Show when={method.description}>
-                          {(description) => (
-                            <p class="mt-1 text-xs text-muted">
-                              {description()}
-                            </p>
-                          )}
-                        </Show>
-                      </div>
+        <Show
+          when={props.thread.permissions?.[0]}
+          fallback={
+            <>
+              <Show when={(props.draftAttachments?.length ?? 0) > 0}>
+                <div class="mb-3 flex flex-wrap gap-2">
+                  <For each={props.draftAttachments}>
+                    {(attachment) => (
+                      <AttachmentChip
+                        name={attachment.name}
+                        kind={attachment.kind}
+                        onRemove={() =>
+                          props.onRemoveAttachment?.(attachment.id)
+                        }
+                      />
                     )}
                   </For>
                 </div>
-              )}
-            </Match>
-            <Match when={authenticationState("authenticating")}>
-              {(state) => (
-                <div class="flex items-center justify-between gap-4">
-                  <p role="status">
-                    {t("thread.authentication.inProgress", {
-                      method: state().method.name,
-                    })}
-                  </p>
-                  <button
-                    type="button"
-                    class="rounded-lg border border-line px-4 py-2 text-sm focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-accent"
-                    onClick={() => props.onCancelAuthentication?.()}
+              </Show>
+              <PromptInput
+                value={props.draft}
+                disabled={!props.canSend && !authenticationRequired()}
+                inputRef={props.promptRef}
+                focusKey={
+                  props.active &&
+                  !props.signInOpen &&
+                  props.thread.status === "sessionReady"
+                    ? props.thread.id
+                    : undefined
+                }
+                onInput={props.onDraftChange}
+                onSubmit={submit}
+                onPasteImage={
+                  props.thread.promptCapabilities?.image
+                    ? props.onPasteImage
+                    : undefined
+                }
+                onUnsupportedImagePaste={props.onUnsupportedImagePaste}
+              />
+            </>
+          }
+        >
+          {(request) => (
+            <PermissionInput
+              request={request()}
+              workingFolder={props.thread.workingFolder}
+              disabled={
+                !props.actionsEnabled ||
+                props.answerPending ||
+                props.cancelPending
+              }
+              onAnswer={props.onAnswer}
+            />
+          )}
+        </Show>
+        <div class="mt-3 flex items-end justify-between gap-3 text-xs text-muted">
+          <div class="flex min-w-0 flex-wrap items-center gap-2">
+            <DropdownMenu placement="top-start">
+              <DropdownMenuTrigger
+                aria-label={t("thread.addAttachment")}
+                disabled={!props.canSend}
+                class="grid size-7 shrink-0 place-items-center rounded-full text-muted transition-colors hover:bg-panel focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent disabled:opacity-40"
+              >
+                <Plus
+                  aria-hidden="true"
+                  size={16}
+                  style={{ "stroke-width": "2.5px" }}
+                />
+              </DropdownMenuTrigger>
+              <DropdownMenuContent>
+                <DropdownMenuItem
+                  class="px-3 py-2"
+                  onSelect={() => props.onSelectFiles?.()}
+                >
+                  <FileIcon aria-hidden="true" class="size-3.5" />
+                  {t("thread.file")}
+                </DropdownMenuItem>
+                <Show when={props.thread.promptCapabilities?.image}>
+                  <DropdownMenuItem
+                    class="px-3 py-2"
+                    onSelect={() => props.onSelectMedia?.("image")}
                   >
-                    {t("thread.authentication.cancel")}
-                  </button>
-                </div>
+                    <ImageIcon aria-hidden="true" class="size-3.5" />
+                    {t("thread.image")}
+                  </DropdownMenuItem>
+                </Show>
+                <Show when={props.thread.promptCapabilities?.audio}>
+                  <DropdownMenuItem
+                    class="px-3 py-2"
+                    onSelect={() => props.onSelectMedia?.("audio")}
+                  >
+                    <AudioLines aria-hidden="true" class="size-3.5" />
+                    {t("thread.audio")}
+                  </DropdownMenuItem>
+                </Show>
+              </DropdownMenuContent>
+            </DropdownMenu>
+            <For each={props.thread.configuration}>
+              {(configuration) => (
+                <ThreadConfigurationControl
+                  configuration={configuration}
+                  disabled={!props.actionsEnabled}
+                  onChange={(value) =>
+                    props.onConfigure(configuration.id, value)
+                  }
+                />
               )}
-            </Match>
-          </Switch>
-        </section>
-      </Show>
+            </For>
+          </div>
+          <button
+            type={props.showStop ? "button" : "submit"}
+            aria-label={props.showStop ? t("thread.stop") : t("thread.send")}
+            class="grid size-8 shrink-0 place-items-center rounded-full bg-primary text-primary-foreground focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-accent disabled:opacity-40"
+            disabled={
+              props.showStop
+                ? !props.actionsEnabled || props.stopping
+                : !props.canSend ||
+                  authenticationRequired() ||
+                  (!props.draft.trim() &&
+                    !(props.draftAttachments?.length ?? 0))
+            }
+            onClick={() => {
+              if (props.showStop) props.onCancel();
+            }}
+          >
+            <Show
+              when={props.showStop}
+              fallback={<ArrowUp aria-hidden="true" class="size-[18px]" />}
+            >
+              <span
+                aria-hidden="true"
+                class="size-3 rounded-[2px] bg-current"
+              />
+            </Show>
+          </button>
+        </div>
+      </form>
     </div>
   );
 }
