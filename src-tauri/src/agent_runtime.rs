@@ -52,6 +52,7 @@ use uuid::Uuid;
 pub(crate) struct Session {
     pub id: Uuid,
     pub remote_session: Option<String>,
+    pub initial_configuration: Vec<ThreadConfiguration>,
     pub updates: RuntimeUpdates,
     pub prompts: mpsc::UnboundedReceiver<Prompt>,
     pub cancellations: mpsc::UnboundedReceiver<Uuid>,
@@ -534,7 +535,10 @@ async fn run_session(
             } else {
                 return Err(ConnectionFailure::ResumptionUnsupported);
             };
-            Ok((SessionId::new(id.clone()), configuration))
+            Ok((
+                SessionId::new(id.clone()),
+                thread_configuration(configuration),
+            ))
         } else {
             let response = connection
                 .send_request(NewSessionRequest::new(&folder))
@@ -552,10 +556,42 @@ async fn run_session(
                     },
                 );
             }
-            Ok((
-                response.session_id,
-                response.config_options.unwrap_or_default(),
-            ))
+            let remote = response.session_id;
+            let mut configuration =
+                thread_configuration(response.config_options.unwrap_or_default());
+            for remembered in &session.initial_configuration {
+                let value = remembered.value();
+                let Some(option) = configuration
+                    .iter()
+                    .find(|option| option.id == remembered.id)
+                else {
+                    continue;
+                };
+                if !option.accepts(&value) || option.has_value(&value) {
+                    continue;
+                }
+                let value = match value {
+                    ThreadConfigurationValue::Select { value } => {
+                        SessionConfigOptionValue::value_id(value)
+                    }
+                    ThreadConfigurationValue::Boolean { value } => {
+                        SessionConfigOptionValue::boolean(value)
+                    }
+                };
+                match connection
+                    .send_request(SetSessionConfigOptionRequest::new(
+                        remote.clone(),
+                        remembered.id.clone(),
+                        value,
+                    ))
+                    .block_task()
+                    .await
+                {
+                    Ok(response) => configuration = thread_configuration(response.config_options),
+                    Err(_) => updates.configuration_inheritance_failed(),
+                }
+            }
+            Ok((remote, configuration))
         }
     };
     let (remote, configuration) =
@@ -572,7 +608,7 @@ async fn run_session(
     ));
     let mut next_prompt = updates.session_ready(
         remote.to_string(),
-        thread_configuration(configuration),
+        configuration,
         crate::thread::PromptCapabilities {
             image: capabilities.prompt_capabilities.image,
             audio: capabilities.prompt_capabilities.audio,

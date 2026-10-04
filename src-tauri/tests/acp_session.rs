@@ -2742,6 +2742,213 @@ async fn thread_configuration_round_trips_opaque_typed_agent_values() {
 }
 
 #[tokio::test]
+async fn recent_configuration_is_inherited_across_working_folders_before_ready() {
+    let first_folder = tempfile::tempdir().unwrap();
+    let next_folder = tempfile::tempdir().unwrap();
+    let mut agent = mock_agent();
+    agent.env.insert("CONFIGURATION".into(), "1".into());
+    agent
+        .env
+        .insert("RESPONSIVE_CONFIGURATION".into(), "1".into());
+    let threads = Threads::new(vec![agent]);
+    let first = threads.create(first_folder.path()).unwrap();
+    threads.connect(first.id).unwrap();
+    settle(&threads, first.id).await;
+    threads
+        .set_configuration(
+            first.id,
+            "opaque-effort".into(),
+            ThreadConfigurationValue::Select {
+                value: "high".into(),
+            },
+        )
+        .await
+        .unwrap();
+    threads
+        .set_configuration(
+            first.id,
+            "opaque-thinking".into(),
+            ThreadConfigurationValue::Boolean { value: false },
+        )
+        .await
+        .unwrap();
+    let next = threads.create(next_folder.path()).unwrap();
+    threads.connect(next.id).unwrap();
+    let ready = settle(&threads, next.id).await;
+    assert_eq!(ready.status, ThreadStatus::SessionReady);
+    assert_eq!(
+        serde_json::to_value(&ready.configuration).unwrap()[1]["currentValue"],
+        "high"
+    );
+    assert_eq!(
+        serde_json::to_value(&ready.configuration).unwrap()[2]["currentValue"],
+        false
+    );
+    threads.shutdown().await;
+}
+
+#[tokio::test]
+async fn recent_configuration_revalidates_dependent_options_after_model_change() {
+    let first_folder = tempfile::tempdir().unwrap();
+    let next_folder = tempfile::tempdir().unwrap();
+    let mut agent = mock_agent();
+    agent.env.insert("CONFIGURATION".into(), "1".into());
+    agent
+        .env
+        .insert("RESPONSIVE_CONFIGURATION".into(), "1".into());
+    let threads = Threads::new(vec![agent]);
+    let first = threads.create(first_folder.path()).unwrap();
+    threads.connect(first.id).unwrap();
+    settle(&threads, first.id).await;
+    threads
+        .set_configuration(
+            first.id,
+            "opaque-model".into(),
+            ThreadConfigurationValue::Select {
+                value: "model-b".into(),
+            },
+        )
+        .await
+        .unwrap();
+    let next = threads.create(next_folder.path()).unwrap();
+    threads.connect(next.id).unwrap();
+    let ready = settle(&threads, next.id).await;
+    assert_eq!(ready.status, ThreadStatus::SessionReady);
+    assert_eq!(
+        serde_json::to_value(&ready.configuration).unwrap()[0]["currentValue"],
+        "model-b"
+    );
+    assert_eq!(
+        serde_json::to_value(&ready.configuration).unwrap()[1]["currentValue"],
+        "low"
+    );
+    threads.shutdown().await;
+}
+
+#[tokio::test]
+async fn recent_configuration_is_scoped_to_agent_and_app_lifetime() {
+    let first_folder = tempfile::tempdir().unwrap();
+    let other_folder = tempfile::tempdir().unwrap();
+    let mut agent = mock_agent();
+    agent.env.insert("CONFIGURATION".into(), "1".into());
+    let mut other = agent.clone();
+    other.id = "other".into();
+    let threads = Threads::new(vec![agent.clone(), other]);
+    let first = threads
+        .create_for_agent(first_folder.path(), "fixture")
+        .unwrap();
+    threads.connect(first.id).unwrap();
+    settle(&threads, first.id).await;
+    threads
+        .set_configuration(
+            first.id,
+            "opaque-thinking".into(),
+            ThreadConfigurationValue::Boolean { value: false },
+        )
+        .await
+        .unwrap();
+    let next = threads
+        .create_for_agent(other_folder.path(), "other")
+        .unwrap();
+    threads.connect(next.id).unwrap();
+    let ready = settle(&threads, next.id).await;
+    assert_eq!(
+        serde_json::to_value(&ready.configuration).unwrap()[2]["currentValue"],
+        true
+    );
+    threads.shutdown().await;
+    let restarted = Threads::new(vec![agent]);
+    let next = restarted.create(first_folder.path()).unwrap();
+    restarted.connect(next.id).unwrap();
+    let ready = settle(&restarted, next.id).await;
+    assert_eq!(
+        serde_json::to_value(&ready.configuration).unwrap()[2]["currentValue"],
+        true
+    );
+    restarted.shutdown().await;
+}
+
+#[tokio::test]
+async fn recent_configuration_does_not_override_resumed_threads() {
+    let first_folder = tempfile::tempdir().unwrap();
+    let other_folder = tempfile::tempdir().unwrap();
+    let mut agent = mock_agent();
+    agent.env.insert("CONFIGURATION".into(), "1".into());
+    let threads = Threads::new(vec![agent]);
+    let original = threads.create(first_folder.path()).unwrap();
+    threads.connect(original.id).unwrap();
+    settle(&threads, original.id).await;
+    let other = threads.create(other_folder.path()).unwrap();
+    threads.connect(other.id).unwrap();
+    settle(&threads, other.id).await;
+    threads
+        .set_configuration(
+            other.id,
+            "opaque-thinking".into(),
+            ThreadConfigurationValue::Boolean { value: false },
+        )
+        .await
+        .unwrap();
+    threads.reconnect(original.id).unwrap();
+    let ready = settle(&threads, original.id).await;
+    assert_eq!(ready.status, ThreadStatus::SessionReady);
+    assert_eq!(
+        serde_json::to_value(&ready.configuration).unwrap()[2]["currentValue"],
+        true
+    );
+    threads.shutdown().await;
+}
+
+#[tokio::test]
+async fn recent_configuration_excludes_rejected_selections() {
+    let first_folder = tempfile::tempdir().unwrap();
+    let next_folder = tempfile::tempdir().unwrap();
+    let mut agent = mock_agent();
+    agent.env.insert("CONFIGURATION".into(), "1".into());
+    agent
+        .env
+        .insert("RESPONSIVE_CONFIGURATION".into(), "1".into());
+    agent
+        .env
+        .insert("CONFIGURATION_FAIL_CONFIG".into(), "opaque-thinking".into());
+    let threads = Threads::new(vec![agent]);
+    let first = threads.create(first_folder.path()).unwrap();
+    threads.connect(first.id).unwrap();
+    settle(&threads, first.id).await;
+    threads
+        .set_configuration(
+            first.id,
+            "opaque-effort".into(),
+            ThreadConfigurationValue::Select {
+                value: "high".into(),
+            },
+        )
+        .await
+        .unwrap();
+    assert!(threads
+        .set_configuration(
+            first.id,
+            "opaque-thinking".into(),
+            ThreadConfigurationValue::Boolean { value: false }
+        )
+        .await
+        .is_err());
+    let next = threads.create(next_folder.path()).unwrap();
+    threads.connect(next.id).unwrap();
+    let ready = settle(&threads, next.id).await;
+    assert_eq!(ready.status, ThreadStatus::SessionReady);
+    assert_eq!(
+        serde_json::to_value(&ready.configuration).unwrap()[1]["currentValue"],
+        "high"
+    );
+    assert_eq!(
+        serde_json::to_value(&ready.configuration).unwrap()[2]["currentValue"],
+        true
+    );
+    threads.shutdown().await;
+}
+
+#[tokio::test]
 async fn configuration_selection_is_published_before_the_request_completes() {
     let folder = tempfile::tempdir().unwrap();
     let requests = folder.path().join("configuration-requests.jsonl");

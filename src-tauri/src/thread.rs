@@ -152,7 +152,7 @@ pub struct ThreadConfiguration {
 }
 
 impl ThreadConfiguration {
-    fn accepts(&self, value: &ThreadConfigurationValue) -> bool {
+    pub(crate) fn accepts(&self, value: &ThreadConfigurationValue) -> bool {
         match (&self.control, value) {
             (
                 ThreadConfigurationControl::Select { options, .. },
@@ -174,7 +174,7 @@ impl ThreadConfiguration {
         }
     }
 
-    fn has_value(&self, value: &ThreadConfigurationValue) -> bool {
+    pub(crate) fn has_value(&self, value: &ThreadConfigurationValue) -> bool {
         match (&self.control, value) {
             (
                 ThreadConfigurationControl::Select { current_value, .. },
@@ -185,6 +185,21 @@ impl ThreadConfiguration {
                 ThreadConfigurationValue::Boolean { value },
             ) => current_value == value,
             _ => false,
+        }
+    }
+
+    pub(crate) fn value(&self) -> ThreadConfigurationValue {
+        match &self.control {
+            ThreadConfigurationControl::Select { current_value, .. } => {
+                ThreadConfigurationValue::Select {
+                    value: current_value.clone(),
+                }
+            }
+            ThreadConfigurationControl::Boolean { current_value } => {
+                ThreadConfigurationValue::Boolean {
+                    value: *current_value,
+                }
+            }
         }
     }
 
@@ -504,6 +519,7 @@ pub struct Threads {
     lifecycle: tokio::sync::Mutex<()>,
     shutdown: CancellationToken,
     runtime_stop_failures: AtomicU64,
+    recent_configuration: Arc<Mutex<HashMap<String, Vec<ThreadConfiguration>>>>,
     authentication: Arc<Mutex<HashMap<String, AuthenticationStatus>>>,
     authentication_observations: Arc<Mutex<HashMap<String, AuthenticationObservation>>>,
     state: Mutex<State>,
@@ -637,6 +653,7 @@ impl Threads {
             lifecycle: tokio::sync::Mutex::new(()),
             shutdown: CancellationToken::new(),
             runtime_stop_failures: AtomicU64::new(0),
+            recent_configuration: Arc::default(),
             authentication: Arc::default(),
             authentication_observations: Arc::default(),
             state: Mutex::new(State::default()),
@@ -1410,6 +1427,7 @@ impl Threads {
         let thread = current.thread.clone();
         let updates = RuntimeUpdates {
             authentication: self.authentication.clone(),
+            recent_configuration: self.recent_configuration.clone(),
             state: entry.state.clone(),
             generation: current.generation,
         };
@@ -1421,6 +1439,13 @@ impl Threads {
         let session = crate::agent_runtime::Session {
             id,
             remote_session: thread.session_id.clone(),
+            initial_configuration: self
+                .recent_configuration
+                .lock()
+                .map_err(|_| unavailable())?
+                .get(&thread.agent_id)
+                .cloned()
+                .unwrap_or_default(),
             updates,
             prompts: requests,
             cancellations: cancelled,
@@ -2538,6 +2563,7 @@ pub enum TurnUpdate {
 /// A connection-scoped writer. Retired runtimes cannot overwrite a replacement.
 #[derive(Clone)]
 pub(crate) struct RuntimeUpdates {
+    recent_configuration: Arc<Mutex<HashMap<String, Vec<ThreadConfiguration>>>>,
     authentication: Arc<Mutex<HashMap<String, AuthenticationStatus>>>,
     state: Arc<Mutex<ThreadState>>,
     generation: u64,
@@ -2748,6 +2774,10 @@ impl RuntimeUpdates {
         configuration: Vec<ThreadConfiguration>,
     ) {
         self.modify_state(|state| {
+            // Only confirmed user changes become defaults; opening or restoring a thread does not.
+            if let Ok(mut recent) = self.recent_configuration.lock() {
+                recent.insert(state.thread.agent_id.clone(), configuration.clone());
+            }
             state.confirmed_configuration = configuration;
             if state
                 .desired_configuration
@@ -2757,6 +2787,14 @@ impl RuntimeUpdates {
                 state.desired_configuration.remove(config_id);
             }
             state.reconcile_configuration();
+        });
+    }
+
+    pub fn configuration_inheritance_failed(&self) {
+        self.modify_state(|state| {
+            state.report_notice(
+                "일부 최근 설정을 적용하지 못했습니다. 스레드 설정을 확인해주세요.".into(),
+            );
         });
     }
 
@@ -3105,6 +3143,7 @@ mod title_tests {
         let generation = state.lock().unwrap().generation;
         RuntimeUpdates {
             authentication: threads.authentication.clone(),
+            recent_configuration: threads.recent_configuration.clone(),
             state,
             generation,
         }
