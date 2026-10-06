@@ -28,19 +28,19 @@ export function ThreadInfoCard(props: { usage: ContextUsage | null }) {
   };
 
   return (
-    <Card class="absolute top-6 right-4 hidden h-32 w-60 rounded-3xl border-line bg-input-surface p-5 text-ink shadow-sm @min-[1440px]/thread:block">
+    <Card class="absolute top-6 right-4 h-32 w-60 rounded-3xl border-line bg-input-surface p-5 text-ink shadow-sm">
       <h2 class="text-sm font-medium">{t("thread.context")}</h2>
       <Show
         when={usage()}
         fallback={
-          <p class="mt-3 text-sm text-muted">
+          <p class="mt-3 text-xs text-muted">
             {t("thread.contextUsageUnavailable")}
           </p>
         }
       >
         {(current) => (
           <>
-            <p class="mt-3 mb-3 text-sm tabular-nums" title={exactUsage()}>
+            <p class="mt-3 mb-3 text-xs tabular-nums" title={exactUsage()}>
               {Math.round(percentage())}% ({formatTokens(current().used)}/
               {formatTokens(current().size)})
             </p>

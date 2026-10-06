@@ -1,4 +1,4 @@
-import { ChevronDown } from "lucide-solid";
+import { ChevronDown, Lightbulb } from "lucide-solid";
 import { useI18n } from "shared/i18n";
 import {
   Collapsible,
@@ -46,15 +46,20 @@ export function PlanContent(props: {
         open={expanded()}
         onOpenChange={setExpanded}
         data-plan-content=""
-        class="min-w-0 rounded-lg border border-line text-sm"
+        class="min-w-0 rounded-xl border border-line text-sm"
       >
-        <CollapsibleTrigger class="flex w-full min-w-0 items-center gap-2 px-3 py-2 text-left focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent">
-          <ChevronDown
-            aria-hidden="true"
-            class="size-3.5 shrink-0 text-muted"
-            classList={{ "-rotate-90": !expanded() }}
-          />
-          <span class="flex-1">{t("thread.planContent.title")}</span>
+        <CollapsibleTrigger class="flex w-full min-w-0 items-center gap-2 px-3 py-3 text-left focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent">
+          <Lightbulb aria-hidden="true" class="size-4 shrink-0 text-muted" />
+          <span class="flex min-w-0 flex-1 items-center gap-2">
+            <span class="text-base font-bold">
+              {t("thread.planContent.title")}
+            </span>
+            <ChevronDown
+              aria-hidden="true"
+              class="size-3.5 shrink-0 text-muted"
+              classList={{ "-rotate-90": !expanded() }}
+            />
+          </span>
           <Show when={items()}>
             {(plan) => (
               <span class="shrink-0 text-xs text-muted">

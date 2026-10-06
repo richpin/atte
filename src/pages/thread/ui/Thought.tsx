@@ -21,9 +21,9 @@ export function Thought(props: {
       open={expanded()}
       onOpenChange={setExpanded}
       data-thought=""
-      class="min-w-0 rounded-lg border border-line text-sm"
+      class="min-w-0 rounded-xl border border-line text-sm"
     >
-      <CollapsibleTrigger class="flex w-full items-center gap-2 px-3 py-1 text-left text-muted focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent">
+      <CollapsibleTrigger class="flex w-full items-center gap-2 px-3 py-[4.5px] text-left text-muted focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent">
         <Show
           when={props.active}
           fallback={<Brain aria-hidden="true" class="size-4 shrink-0" />}

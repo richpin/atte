@@ -1,7 +1,8 @@
+import * as ToggleButtonPrimitive from "@kobalte/core/toggle-button";
 import { makeResizeObserver } from "@solid-primitives/resize-observer";
 import { QueryClient, QueryClientProvider } from "@tanstack/solid-query";
 import { AgentAuthenticationProvider } from "features/agent-authentication";
-import { Bot, Ellipsis, RotateCcw, Settings } from "lucide-solid";
+import { Bot, Ellipsis, List, RotateCcw, Settings } from "lucide-solid";
 import { AgentManagementPage } from "pages/agent-management";
 import { GeneralPage } from "pages/general";
 import { NewThreadPage } from "pages/new-thread";
@@ -10,6 +11,7 @@ import { I18nProvider, useI18n } from "shared/i18n";
 import { ThemeProvider } from "shared/theme";
 import {
   AgentIcon,
+  Button,
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
@@ -20,10 +22,13 @@ import {
   SidebarProvider,
   SidebarTrigger,
   ToastHost,
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
   useResizable,
   useSidebar,
 } from "shared/ui";
-import { onMount, Show } from "solid-js";
+import { type ComponentProps, createSignal, onMount, Show } from "solid-js";
 import { AppSidebar } from "widgets/app-sidebar";
 import { createAppShellModel } from "./model/app-shell";
 import "./styles.css";
@@ -209,6 +214,7 @@ function ShellContent(props: { shell: AppShellModel }) {
   const { threads } = shell;
   const { t, content } = useI18n();
   const { state, isMobile, openMobile } = useSidebar();
+  const [showInfoCard, setShowInfoCard] = createSignal(true);
   const showSidebarTrigger = () =>
     isMobile() ? !openMobile() : state() === "collapsed";
   const title = () => {
@@ -267,23 +273,46 @@ function ShellContent(props: { shell: AppShellModel }) {
           </h1>
         </Show>
         <Show when={shell.view() === "thread" && threads.selectedThreadId()}>
-          <DropdownMenu placement="bottom-end">
-            <DropdownMenuTrigger
-              aria-label={t("thread.menu")}
-              class="pointer-events-auto relative grid size-7 shrink-0 place-items-center rounded-md text-muted hover:bg-panel hover:text-ink focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
-            >
-              <Ellipsis aria-hidden="true" class="size-4" />
-            </DropdownMenuTrigger>
-            <DropdownMenuContent>
-              <DropdownMenuItem
-                disabled={!threads.canReconnect()}
-                onSelect={() => void threads.reconnect()}
+          <div class="relative flex shrink-0 items-center gap-1">
+            <Tooltip placement="bottom">
+              <TooltipTrigger
+                aria-label={t("thread.information")}
+                as={(triggerProps: ComponentProps<"button">) => (
+                  <ToggleButtonPrimitive.Root
+                    as={Button}
+                    {...triggerProps}
+                    pressed={showInfoCard()}
+                    onChange={setShowInfoCard}
+                    variant="ghost"
+                    size="icon"
+                    class="pointer-events-auto relative size-7 shrink-0 text-muted hover:bg-menu focus-visible:ring-1 focus-visible:ring-line focus-visible:ring-offset-0 data-[pressed]:bg-menu data-[pressed]:text-ink"
+                  >
+                    <List aria-hidden="true" class="size-4" />
+                  </ToggleButtonPrimitive.Root>
+                )}
+              />
+              <TooltipContent class="border-0 bg-menu text-ink">
+                {t("thread.information")}
+              </TooltipContent>
+            </Tooltip>
+            <DropdownMenu placement="bottom-end">
+              <DropdownMenuTrigger
+                aria-label={t("thread.menu")}
+                class="pointer-events-auto relative grid size-7 shrink-0 place-items-center rounded-md text-muted hover:bg-menu hover:text-ink focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-line"
               >
-                <RotateCcw aria-hidden="true" class="size-4" />
-                {t("thread.reconnect")}
-              </DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
+                <Ellipsis aria-hidden="true" class="size-4" />
+              </DropdownMenuTrigger>
+              <DropdownMenuContent>
+                <DropdownMenuItem
+                  disabled={!threads.canReconnect()}
+                  onSelect={() => void threads.reconnect()}
+                >
+                  <RotateCcw aria-hidden="true" class="size-4" />
+                  {t("thread.reconnect")}
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </div>
         </Show>
       </header>
       <div hidden={shell.view() !== "new-thread"} class="min-h-0 flex-1">
@@ -303,6 +332,7 @@ function ShellContent(props: { shell: AppShellModel }) {
       <div hidden={shell.view() !== "thread"} class="min-h-0 flex-1">
         <ThreadPage
           active={shell.view() === "thread"}
+          showInfoCard={showInfoCard()}
           model={threads}
           agents={shell.agents()}
           onManage={shell.showAgents}

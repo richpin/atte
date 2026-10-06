@@ -383,6 +383,149 @@ it("starts on new thread and preserves a thread draft across that navigation", a
   );
 });
 
+it("toggles thread information with pointer and keyboard and reveals the latest usage", async () => {
+  const saved = {
+    id: "context-usage",
+    title: "Context usage thread",
+    workingFolder: "/work/project",
+    agentId: "codex",
+    status: "sessionReady",
+    authentication: "authenticated",
+    turns: [],
+    permissions: [],
+    queuedMessages: [],
+    contextUsage: { used: 32_000, size: 100_000 },
+  };
+  const original = vi.mocked(invoke).getMockImplementation();
+  vi.mocked(invoke).mockImplementation((command, args) => {
+    if (command === "list_threads") return Promise.resolve([saved]);
+    if (command === "subscribe_thread") return subscribeWith(args, saved);
+    return original?.(command, args) ?? Promise.resolve();
+  });
+
+  render(() => <App />);
+  expect(screen.queryByRole("button", { name: "스레드 정보" })).toBeNull();
+  await userEvent.click(
+    await screen.findByRole("button", { name: saved.title }),
+  );
+  const toggle = await screen.findByRole("button", { name: "스레드 정보" });
+  expect(toggle.getAttribute("aria-pressed")).toBe("true");
+  expect(screen.getByText("32% (32K/100K)")).toBeTruthy();
+  toggle.focus();
+  expect((await screen.findByRole("tooltip")).textContent).toBe("스레드 정보");
+
+  await userEvent.click(toggle);
+  expect(toggle.getAttribute("aria-pressed")).toBe("false");
+  expect(screen.queryByRole("heading", { name: "Context" })).toBeNull();
+  receiveUpdate({
+    kind: "patch",
+    thread: { ...saved, contextUsage: { used: 12_000, size: 100_000 } },
+    turnUpdates: [],
+  });
+  expect(screen.queryByText("12% (12K/100K)")).toBeNull();
+
+  toggle.focus();
+  await userEvent.keyboard("{Enter}");
+  expect(toggle.getAttribute("aria-pressed")).toBe("true");
+  expect(screen.getByText("12% (12K/100K)")).toBeTruthy();
+  expect(document.activeElement).toBe(toggle);
+  await userEvent.keyboard(" ");
+  expect(toggle.getAttribute("aria-pressed")).toBe("false");
+  expect(screen.queryByRole("heading", { name: "Context" })).toBeNull();
+
+  receiveUpdate({
+    kind: "patch",
+    thread: { ...saved, contextUsage: null },
+    turnUpdates: [],
+  });
+  await userEvent.click(toggle);
+  expect(screen.getByText("사용량 정보 없음")).toBeTruthy();
+  expect(screen.queryByRole("progressbar", { name: "Context" })).toBeNull();
+});
+
+it("shares thread information visibility across navigation and resets for each app run", async () => {
+  const first = {
+    id: "first-context",
+    title: "First context thread",
+    workingFolder: "/work/project",
+    agentId: "codex",
+    status: "sessionReady",
+    authentication: "authenticated",
+    turns: [],
+    permissions: [],
+    queuedMessages: [],
+    contextUsage: { used: 32_000, size: 100_000 },
+  };
+  const second = {
+    ...first,
+    id: "second-context",
+    title: "Second context thread",
+    contextUsage: null,
+  };
+  const original = vi.mocked(invoke).getMockImplementation();
+  vi.mocked(invoke).mockImplementation((command, args) => {
+    if (command === "list_threads") return Promise.resolve([first, second]);
+    if (command === "subscribe_thread")
+      return subscribeWith(
+        args,
+        (args as { id: string }).id === first.id ? first : second,
+      );
+    return original?.(command, args) ?? Promise.resolve();
+  });
+
+  const application = render(() => <App />);
+  await userEvent.click(
+    await screen.findByRole("button", { name: first.title }),
+  );
+  expect(screen.getByText("32% (32K/100K)")).toBeTruthy();
+  await userEvent.click(screen.getByRole("button", { name: "스레드 정보" }));
+
+  await userEvent.click(screen.getByRole("button", { name: second.title }));
+  expect(
+    screen
+      .getByRole("button", { name: "스레드 정보" })
+      .getAttribute("aria-pressed"),
+  ).toBe("false");
+  expect(screen.queryByRole("heading", { name: "Context" })).toBeNull();
+
+  await userEvent.click(screen.getByRole("button", { name: "설정 메뉴 열기" }));
+  await userEvent.click(screen.getByRole("menuitem", { name: "일반" }));
+  await screen.findByRole("heading", { name: "일반" });
+  expect(screen.queryByRole("button", { name: "스레드 정보" })).toBeNull();
+  await userEvent.click(screen.getByRole("button", { name: first.title }));
+  expect(
+    screen
+      .getByRole("button", { name: "스레드 정보" })
+      .getAttribute("aria-pressed"),
+  ).toBe("false");
+  expect(screen.queryByRole("heading", { name: "Context" })).toBeNull();
+
+  await userEvent.click(getNewThreadButton());
+  expect(screen.queryByRole("button", { name: "스레드 정보" })).toBeNull();
+  await userEvent.click(screen.getByRole("button", { name: second.title }));
+  expect(
+    screen
+      .getByRole("button", { name: "스레드 정보" })
+      .getAttribute("aria-pressed"),
+  ).toBe("false");
+
+  application.unmount();
+  localStorage.setItem("atte.locale", "en");
+  render(() => <App />);
+  await userEvent.click(
+    await screen.findByRole("button", { name: second.title }),
+  );
+  const toggle = await screen.findByRole("button", {
+    name: "Thread information",
+  });
+  expect(toggle.getAttribute("aria-pressed")).toBe("true");
+  expect(screen.getByText("Usage unavailable")).toBeTruthy();
+  toggle.focus();
+  expect((await screen.findByRole("tooltip")).textContent).toBe(
+    "Thread information",
+  );
+});
+
 it("shows the thread agent icon beside both titles and keeps the composer free of agent identity", async () => {
   const images: HTMLImageElement[] = [];
   vi.spyOn(window, "Image").mockImplementation(function ImageFixture() {

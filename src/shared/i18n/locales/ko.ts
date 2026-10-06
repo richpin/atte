@@ -42,6 +42,7 @@ export const ko = {
     languageDescription: "Atte 전체에서 사용할 언어를 선택합니다.",
   },
   thread: {
+    information: "스레드 정보",
     context: "Context",
     contextUsageUnavailable: "사용량 정보 없음",
     contextUsageExact: "{{used}} / {{size}} 토큰",

@@ -19,6 +19,7 @@ const timelineComposerGap = 48;
 
 export function ThreadPage(props: {
   active: boolean;
+  showInfoCard: boolean;
   model: ThreadModel;
   agents: PreparedAgent[];
   onManage: () => void;
@@ -191,7 +192,7 @@ export function ThreadPage(props: {
     (!thread() || connecting() || thread()?.status === "connecting");
 
   return (
-    <main class="@container/thread relative flex h-full min-h-0 flex-col overflow-hidden bg-canvas text-ink">
+    <main class="relative flex h-full min-h-0 flex-col overflow-hidden bg-canvas text-ink">
       <div inert={signInOpen()} class="flex h-full min-h-0 flex-col">
         <Show when={selectedThreadId()}>
           <Show when={!signInOpen()}>
@@ -284,7 +285,7 @@ export function ThreadPage(props: {
                 </h2>
               </div>
             </Show>
-            <Show when={thread()}>
+            <Show when={thread() && props.showInfoCard}>
               <ThreadInfoCard usage={thread()?.contextUsage ?? null} />
             </Show>
             <div

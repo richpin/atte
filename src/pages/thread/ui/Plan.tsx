@@ -1,4 +1,10 @@
-import { Check, ChevronDown, Circle, LoaderCircle } from "lucide-solid";
+import {
+  Check,
+  ChevronDown,
+  Circle,
+  Lightbulb,
+  LoaderCircle,
+} from "lucide-solid";
 import { useI18n } from "shared/i18n";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "shared/ui";
 import { createSignal, For, Show } from "solid-js";
@@ -19,15 +25,18 @@ export function Plan(props: { plan: PlanData; active: boolean }) {
         open={expanded()}
         onOpenChange={setExpanded}
         data-plan=""
-        class="min-w-0 rounded-lg border border-line text-sm"
+        class="min-w-0 rounded-xl border border-line text-sm"
       >
-        <CollapsibleTrigger class="flex w-full min-w-0 items-center gap-2 px-3 py-2 text-left focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent">
+        <CollapsibleTrigger class="flex w-full min-w-0 items-center gap-2 px-3 py-3 text-left focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent">
+          <Lightbulb aria-hidden="true" class="size-4 shrink-0 text-muted" />
+          <span class="shrink-0 text-base font-bold">
+            {t("thread.plan.title")}
+          </span>
           <ChevronDown
             aria-hidden="true"
             class="size-3.5 shrink-0 text-muted"
             classList={{ "-rotate-90": !expanded() }}
           />
-          <span class="shrink-0">{t("thread.plan.title")}</span>
           <span class="min-w-0 flex-1 truncate text-muted" title={current()}>
             {!expanded() ? current() : ""}
           </span>

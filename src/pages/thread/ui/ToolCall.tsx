@@ -94,9 +94,9 @@ export function ToolCall(props: {
       open={expanded()}
       onOpenChange={setExpanded}
       data-tool-call=""
-      class="min-w-0 rounded-lg border border-line text-sm"
+      class="min-w-0 rounded-xl border border-line text-sm"
     >
-      <CollapsibleTrigger class="flex w-full min-w-0 items-center gap-2 px-3 py-1 text-left focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent">
+      <CollapsibleTrigger class="flex w-full min-w-0 items-center gap-2 px-3 py-[4.5px] text-left focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent">
         <Dynamic
           component={icon()}
           aria-hidden="true"

@@ -36,6 +36,7 @@ export const en = {
     languageDescription: "Choose the language used throughout Atte.",
   },
   thread: {
+    information: "Thread information",
     context: "Context",
     contextUsageUnavailable: "Usage unavailable",
     contextUsageExact: "{{used}} / {{size}} tokens",
