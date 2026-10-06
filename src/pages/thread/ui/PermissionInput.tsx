@@ -5,6 +5,7 @@ import type { PermissionRequest } from "../model/types";
 export function PermissionInput(props: {
   request: PermissionRequest;
   workingFolder: string;
+  hideDetails?: boolean;
   disabled: boolean;
   onAnswer: (request: string, option: string) => void;
 }) {
@@ -13,7 +14,7 @@ export function PermissionInput(props: {
     <section aria-label={t("thread.permission")}>
       <p class="mb-2 text-xs text-muted">{t("thread.permission")}</p>
       <h2 class="break-words text-sm font-medium">{props.request.title}</h2>
-      <Show when={props.request.details}>
+      <Show when={!props.hideDetails && props.request.details}>
         <pre class="mt-2 max-h-48 overflow-auto whitespace-pre-wrap break-words text-xs text-muted">
           {props.request.details}
         </pre>

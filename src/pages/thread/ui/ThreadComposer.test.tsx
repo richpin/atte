@@ -7,16 +7,22 @@ import {
 } from "@solidjs/testing-library";
 import userEvent from "@testing-library/user-event";
 import { I18nProvider } from "shared/i18n";
+import { ThemeProvider } from "shared/theme";
 import { createSignal } from "solid-js";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import type { Thread } from "../model/types";
+import type { ResponsePart, Thread } from "../model/types";
 import { ThreadComposer } from "./ThreadComposer";
 
 beforeEach(() => {
   localStorage.setItem("atte.locale", "en");
 });
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  localStorage.removeItem("atte.theme");
+  delete document.documentElement.dataset.theme;
+  document.documentElement.style.removeProperty("color-scheme");
+});
 
 function readyThread(): Thread {
   return {
@@ -188,9 +194,150 @@ it("switches from PromptInput to PermissionInput when approval is requested", ()
   expect(
     screen.getByRole("region", { name: "Permission request" }),
   ).toBeTruthy();
+  expect(screen.getByText("pnpm test")).toBeTruthy();
   fireEvent.click(screen.getByRole("button", { name: "Allow" }));
   expect(onAnswer).toHaveBeenCalledWith("permission-1", "allow");
 });
+
+it.each(["light", "dark"])(
+  "hides only displayed plan approval details in %s theme",
+  (theme) => {
+    localStorage.setItem("atte.theme", theme);
+    const content = "# Greeting CLI\n- Add the command";
+    const [thread, setThread] = createSignal<Thread>({
+      ...readyThread(),
+      status: "waitingForApproval",
+      permissions: [
+        {
+          id: "permission-plan",
+          toolCallId: "plan-review:document",
+          title: "Implement this plan?",
+          details: content,
+          planReview: { planId: "document", content },
+          options: [
+            { id: "implement_plan", name: "Implement" },
+            { id: "revise_plan", name: "Revise" },
+          ],
+        },
+      ],
+    });
+    const onAnswer = vi.fn();
+    render(() => (
+      <ThemeProvider>
+        <I18nProvider>
+          <ThreadComposer
+            active={false}
+            thread={thread()}
+            draft=""
+            answerPending={false}
+            cancelPending={false}
+            showStop={false}
+            stopping={false}
+            actionsEnabled={true}
+            canSend={true}
+            onDraftChange={() => {}}
+            onSend={() => {}}
+            onCancel={() => {}}
+            onAnswer={onAnswer}
+            onConfigure={() => {}}
+            onDeleteQueued={async () => {}}
+            onRetryQueued={async () => {}}
+          />
+        </I18nProvider>
+      </ThemeProvider>
+    ));
+
+    expect(document.documentElement.dataset.theme).toBe(theme);
+    expect(screen.getByText(/Greeting CLI/)).toBeTruthy();
+    setThread((current) => ({
+      ...current,
+      turns: [
+        {
+          id: "turn",
+          message: "Plan the CLI",
+          stopReason: null,
+          responseParts: [
+            {
+              kind: "planContent",
+              id: "plan-part",
+              planId: "document",
+              content: { type: "markdown", content },
+            },
+          ],
+        },
+      ],
+    }));
+    expect(screen.queryByText(/Greeting CLI/)).toBeNull();
+    expect(
+      screen.getByRole("heading", { name: "Implement this plan?" }),
+    ).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Implement" }));
+    fireEvent.click(screen.getByRole("button", { name: "Revise" }));
+    expect(onAnswer.mock.calls).toEqual([
+      ["permission-plan", "implement_plan"],
+      ["permission-plan", "revise_plan"],
+    ]);
+
+    for (const part of [
+      {
+        kind: "planContent",
+        id: "plan-part",
+        planId: "other-document",
+        content: { type: "markdown", content },
+      },
+      {
+        kind: "planContent",
+        id: "plan-part",
+        planId: "document",
+        content: { type: "markdown", content: "# Updated plan" },
+      },
+      {
+        kind: "planContent",
+        id: "plan-part",
+        planId: "document",
+        content: { type: "markdown", content: " " },
+      },
+      {
+        kind: "planContent",
+        id: "plan-part",
+        planId: "document",
+        content: null,
+      },
+      {
+        kind: "planContent",
+        id: "plan-part",
+        planId: "document",
+        content: { type: "file", uri: "file:///tmp/plan.md" },
+      },
+      { kind: "text", id: "message-part", text: content },
+    ] satisfies ResponsePart[]) {
+      setThread((current) => ({
+        ...current,
+        turns: [{ ...current.turns[0], responseParts: [part] }],
+      }));
+      expect(screen.getByText(/Greeting CLI/)).toBeTruthy();
+    }
+
+    setThread((current) => ({
+      ...current,
+      permissions: [{ ...current.permissions[0], planReview: null }],
+      turns: [
+        {
+          ...current.turns[0],
+          responseParts: [
+            {
+              kind: "planContent",
+              id: "plan-part",
+              planId: "document",
+              content: { type: "markdown", content },
+            },
+          ],
+        },
+      ],
+    }));
+    expect(screen.getByText(/Greeting CLI/)).toBeTruthy();
+  },
+);
 
 it("submits PromptInput with Enter", () => {
   const onSend = vi.fn();

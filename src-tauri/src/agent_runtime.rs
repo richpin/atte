@@ -181,6 +181,7 @@ pub(crate) async fn run(
                     fields.locations.as_ref().filter(|locations| !locations.is_empty()).and_then(|value| serde_json::to_string_pretty(value).ok()),
                 ].into_iter().flatten().collect::<Vec<_>>().join("\n");
                 route.updates.request_permission(turn, PermissionRequest {
+                    plan_review: plan::plan_review(&tool_id, &fields, &request.options),
                     id: Uuid::new_v4(), tool_call_id: tool_id.clone(), title: fields.title.clone().unwrap_or(tool_id), details,
                     options: request.options.into_iter().map(|option| PermissionOption { id: option.option_id.to_string(), name: option.name }).collect(),
                 })

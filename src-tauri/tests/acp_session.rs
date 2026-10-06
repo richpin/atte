@@ -4136,6 +4136,7 @@ async fn permission_preserves_agent_choices_and_answers_exactly_once() {
         assert_eq!(tool[0]["id"], permission.tool_call_id);
         assert_eq!(tool[0]["tool"]["title"], permission.title);
         assert!(permission.details.contains("fixture.txt"));
+        assert_eq!(permission.plan_review, None);
         assert_eq!(
             permission
                 .options
@@ -6152,6 +6153,66 @@ async fn context_usage_routes_without_a_turn_and_resets_then_updates_during_repl
     );
     assert_eq!(restored.turns.len(), 1);
     threads.shutdown().await;
+}
+
+#[tokio::test]
+async fn plan_review_permissions_link_the_document_and_preserve_both_choices() {
+    use atte_lib::thread::{PermissionPlanReview, PlanContent, ResponsePart};
+    for option in ["implement_plan", "revise_plan"] {
+        let folder = tempfile::tempdir().unwrap();
+        let mut agent = mock_agent();
+        agent
+            .env
+            .insert("FIXTURE_MODE".into(), "plan-review-permission".into());
+        let threads = Threads::new(vec![agent]);
+        let draft = threads.create(folder.path()).unwrap();
+        threads.connect(draft.id).unwrap();
+        settle(&threads, draft.id).await;
+        let mut stream = subscribe(&threads, draft.id);
+        threads
+            .send_message(draft.id, "Plan the CLI".into())
+            .unwrap();
+        let waiting = tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                let next = stream.recv().await.unwrap();
+                if next.status == ThreadStatus::WaitingForApproval {
+                    break next;
+                }
+            }
+        })
+        .await
+        .unwrap();
+        let permission = &waiting.permissions[0];
+        let content = "# Greeting CLI\n- Add the command";
+        assert_eq!(
+            permission.plan_review,
+            Some(PermissionPlanReview {
+                plan_id: "document".into(),
+                content: content.into(),
+            })
+        );
+        assert!(permission.details.contains("Greeting CLI"));
+        assert!(waiting.turns[0].response_parts.iter().any(|part| matches!(
+            part,
+            ResponsePart::PlanContent {
+                plan_id,
+                content: Some(PlanContent::Markdown { content: document }),
+                ..
+            } if plan_id == "document" && document == content
+        )));
+        let serialized = serde_json::to_value(permission).unwrap();
+        assert_eq!(serialized["planReview"]["planId"], "document");
+        assert_eq!(serialized["planReview"]["content"], content);
+        threads
+            .answer_permission(draft.id, permission.id, option.into())
+            .unwrap();
+        let completed = settle(&threads, draft.id).await;
+        assert!(completed.permissions.is_empty());
+        assert!(completed.turns[0]
+            .response_text()
+            .contains(&format!("selected:{option}")));
+        threads.shutdown().await;
+    }
 }
 
 #[tokio::test]

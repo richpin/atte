@@ -443,7 +443,16 @@ pub struct PermissionRequest {
     pub tool_call_id: String,
     pub title: String,
     pub details: String,
+    pub plan_review: Option<PermissionPlanReview>,
     pub options: Vec<PermissionOption>,
+}
+
+/// The exact Markdown document targeted by a recognized plan approval request.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PermissionPlanReview {
+    pub plan_id: String,
+    pub content: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]

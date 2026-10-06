@@ -205,7 +205,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let result = match method {
             "initialize" => {
                 let capabilities = &request["params"]["clientCapabilities"];
-                if mode == "plan-content" {
+                if matches!(mode.as_str(), "plan-content" | "plan-review-permission") {
                     assert!(capabilities["plan"].is_object());
                 }
                 assert_ne!(capabilities["terminal"], true);
@@ -659,8 +659,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         "sessionId": "foreign", "update": {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "wrong session"}}
                     }}),
                 )?;
-                if matches!(mode.as_str(), "prompt-permission" | "partial-permission")
-                    || (mode == "permission-cancel" && prompts == 1)
+                if mode == "plan-review-permission" {
+                    send(
+                        &mut output,
+                        json!({"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"remote-1","update":{"sessionUpdate":"plan_update","plan":{"type":"markdown","planId":"document","content":"# Greeting CLI\n- Add the command"}}}}),
+                    )?;
+                }
+                if matches!(
+                    mode.as_str(),
+                    "prompt-permission" | "partial-permission" | "plan-review-permission"
+                ) || (mode == "permission-cancel" && prompts == 1)
                 {
                     if mode == "partial-permission" {
                         send(
@@ -675,7 +683,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     send(
                         &mut output,
                         json!({"jsonrpc": "2.0", "id": "permission", "method": "session/request_permission", "params": {
-                            "sessionId": "remote-1", "toolCall": if mode == "partial-permission" { json!({"toolCallId":"tool-1"}) } else { json!({"toolCallId": "tool-1", "title": "Write fixture.txt", "rawInput": {"path": "fixture.txt"}}) }, "options": [{"optionId": "deny-927", "name": "Do not write", "kind": "reject_once"}, {"optionId": "arbitrary-allow", "name": "Write once", "kind": "allow_once"}]
+                            "sessionId": "remote-1",
+                            "toolCall": if mode == "plan-review-permission" {
+                                json!({"toolCallId":"plan-review:document","title":"Implement this plan?","kind":"switch_mode","rawInput":{"plan":"# Greeting CLI\n- Add the command"}})
+                            } else if mode == "partial-permission" {
+                                json!({"toolCallId":"tool-1"})
+                            } else {
+                                json!({"toolCallId":"tool-1","title":"Write fixture.txt","rawInput":{"path":"fixture.txt"}})
+                            },
+                            "options": if mode == "plan-review-permission" {
+                                json!([{"optionId":"implement_plan","name":"Implement","kind":"allow_once"},{"optionId":"revise_plan","name":"Revise","kind":"reject_once"}])
+                            } else {
+                                json!([{"optionId":"deny-927","name":"Do not write","kind":"reject_once"},{"optionId":"arbitrary-allow","name":"Write once","kind":"allow_once"}])
+                            }
                         }}),
                     )?;
                     if mode == "permission-cancel" {

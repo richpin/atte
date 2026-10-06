@@ -134,6 +134,7 @@ export interface PermissionRequest {
   title: string;
   toolCallId: string;
   details: string;
+  planReview?: { planId: string; content: string } | null;
   options: { id: string; name: string }[];
 }
 

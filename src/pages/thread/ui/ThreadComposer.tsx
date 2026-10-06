@@ -70,6 +70,22 @@ export function ThreadComposer(props: {
   const submit = () => {
     if (props.canSend && !authenticationRequired()) props.onSend();
   };
+  const planReviewDisplayed = () => {
+    const review = props.thread.permissions?.[0]?.planReview;
+    return (
+      !!review &&
+      review.content.trim().length > 0 &&
+      props.thread.turns.some((turn) =>
+        turn.responseParts.some(
+          (part) =>
+            part.kind === "planContent" &&
+            part.planId === review.planId &&
+            part.content?.type === "markdown" &&
+            part.content.content === review.content,
+        ),
+      )
+    );
+  };
 
   return (
     <div class="max-h-thread-composer mx-auto flex w-full max-w-4xl flex-col overflow-hidden px-6">
@@ -132,6 +148,7 @@ export function ThreadComposer(props: {
             <PermissionInput
               request={request()}
               workingFolder={props.thread.workingFolder}
+              hideDetails={planReviewDisplayed()}
               disabled={
                 !props.actionsEnabled ||
                 props.answerPending ||
