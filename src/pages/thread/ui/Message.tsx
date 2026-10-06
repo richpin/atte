@@ -14,6 +14,7 @@ import {
 import type { Attachment, ResponsePart, Turn } from "../model/types";
 import { AttachmentChip } from "./AttachmentChip";
 import { Plan } from "./Plan";
+import { PlanContent } from "./PlanContent";
 import { Thought } from "./Thought";
 import { ToolCall } from "./ToolCall";
 
@@ -151,6 +152,19 @@ export function Message(props: {
                     {(plan) => (
                       <Plan
                         plan={plan().plan}
+                        active={turn().id === props.streamingTurnId}
+                      />
+                    )}
+                  </Match>
+                  <Match
+                    when={
+                      part().kind === "planContent" &&
+                      (part() as Extract<ResponsePart, { kind: "planContent" }>)
+                    }
+                  >
+                    {(plan) => (
+                      <PlanContent
+                        part={plan()}
                         active={turn().id === props.streamingTurnId}
                       />
                     )}

@@ -205,6 +205,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let result = match method {
             "initialize" => {
                 let capabilities = &request["params"]["clientCapabilities"];
+                if mode == "plan-content" {
+                    assert!(capabilities["plan"].is_object());
+                }
                 assert_ne!(capabilities["terminal"], true);
                 if let Some(fs) = capabilities["fs"].as_object() {
                     assert!(!fs.values().any(|value| value == true));
@@ -496,6 +499,40 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         json!({"sessionUpdate":"tool_call_update","toolCallId":"execute-1","status":"failed","rawOutput":"Test failure"}),
                         json!({"sessionUpdate":"tool_call_update","toolCallId":"read-1","status":"completed","content":[{"type":"content","content":{"type":"text","text":"File contents"}}],"locations":[{"path":"/fixture.txt","line":2}]}),
                     ];
+                    for update in updates {
+                        send(
+                            &mut output,
+                            json!({"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"remote-1","update":update}}),
+                        )?;
+                        history.push(update);
+                    }
+                    if let Some(path) = env::var_os("SESSION_FILE") {
+                        fs::write(path, serde_json::to_vec(&history)?)?;
+                    }
+                    send(
+                        &mut output,
+                        json!({"jsonrpc":"2.0","id":request["id"],"result":{"stopReason":"end_turn"}}),
+                    )?;
+                    continue;
+                }
+                if mode == "plan-content" {
+                    let updates = if prompts == 1 {
+                        vec![
+                            json!({"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"Before"}}),
+                            json!({"sessionUpdate":"plan_update","plan":{"type":"markdown","planId":"document","content":"# Initial"}}),
+                            json!({"sessionUpdate":"plan_update","plan":{"type":"items","planId":"steps","entries":[{"content":"Inspect","priority":"high","status":"completed"}]}}),
+                            json!({"sessionUpdate":"plan_update","plan":{"type":"file","planId":"file","uri":"file:///tmp/plan.md"}}),
+                            json!({"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"After"}}),
+                            json!({"sessionUpdate":"plan_removed","planId":"document"}),
+                            json!({"sessionUpdate":"plan_removed","planId":"unknown"}),
+                            json!({"sessionUpdate":"plan_update","plan":{"type":"markdown","planId":"document","content":"# Restored"}}),
+                        ]
+                    } else {
+                        vec![
+                            json!({"sessionUpdate":"plan_update","plan":{"type":"markdown","planId":"document","content":"# Updated in next turn"}}),
+                            json!({"sessionUpdate":"plan_removed","planId":"file"}),
+                        ]
+                    };
                     for update in updates {
                         send(
                             &mut output,

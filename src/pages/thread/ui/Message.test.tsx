@@ -369,3 +369,97 @@ it("keeps the response indicator with thoughts and stops thinking at the next re
   expect(document.querySelector("[data-thought] .animate-spin")).toBeNull();
   expect(screen.getAllByRole("button", { name: "Thinking" })).toHaveLength(2);
 });
+
+it("renders plan documents in a persistent card without reclassifying ordinary text", () => {
+  const [turns, setTurns] = createStore<Turn[]>([
+    {
+      ...turn("Plan please"),
+      responseParts: [
+        { kind: "text", id: "before", text: "Ordinary plan explanation" },
+        {
+          kind: "planContent",
+          id: "doc",
+          planId: "p",
+          content: {
+            type: "markdown",
+            content: "# Proposed changes\n\n**Inspect** the code",
+          },
+        },
+        { kind: "text", id: "after", text: "After the plan" },
+      ],
+    },
+  ]);
+  const { container } = render(() => (
+    <I18nProvider>
+      <Message turns={turns} />
+    </I18nProvider>
+  ));
+  const card = container.querySelector("[data-plan-content]");
+  expect(card?.querySelector("h3")?.textContent).toBe("Proposed changes");
+  expect(card?.querySelector("strong")?.textContent).toBe("Inspect");
+  expect(container.querySelectorAll("[data-plan-content]")).toHaveLength(1);
+  fireEvent.click(screen.getByRole("button", { name: "Plan" }));
+  setTurns(0, "responseParts", 1, {
+    kind: "planContent",
+    id: "doc",
+    planId: "p",
+    content: null,
+  });
+  expect(container.querySelector("[data-plan-content]")).toBeNull();
+  setTurns(0, "responseParts", 1, {
+    kind: "planContent",
+    id: "doc",
+    planId: "p",
+    content: { type: "markdown", content: "# Updated" },
+  });
+  expect(
+    screen.getByRole("button", { name: "Plan" }).getAttribute("aria-expanded"),
+  ).toBe("false");
+  fireEvent.click(screen.getByRole("button", { name: "Plan" }));
+  expect(screen.getByRole("heading", { name: "Updated" })).toBeTruthy();
+  expect(
+    [
+      ...container.querySelectorAll(
+        "[data-message-participant=agent], [data-plan-content]",
+      ),
+    ].map((part) => part.textContent?.trim()),
+  ).toEqual(["Ordinary plan explanation", "PlanUpdated", "After the plan"]);
+});
+
+it("shows item plans and file references without loading or linking files", () => {
+  const current = turn("Plan");
+  current.responseParts = [
+    {
+      kind: "planContent",
+      id: "items",
+      planId: "items",
+      content: {
+        type: "items",
+        entries: [
+          { content: "Inspect", priority: "high", status: "completed" },
+        ],
+      },
+    },
+    {
+      kind: "planContent",
+      id: "file",
+      planId: "file",
+      content: { type: "file", uri: "file:///tmp/plan.md" },
+    },
+    {
+      kind: "planContent",
+      id: "empty",
+      planId: "empty",
+      content: { type: "markdown", content: "  " },
+    },
+  ];
+  const { container } = render(() => (
+    <I18nProvider>
+      <Message turns={[current]} />
+    </I18nProvider>
+  ));
+  expect(container.querySelectorAll("[data-plan-content]")).toHaveLength(2);
+  expect(screen.getByText("1/1 completed")).toBeTruthy();
+  expect(screen.getByText("file:///tmp/plan.md").tagName).toBe("P");
+  expect(container.querySelector("a")).toBeNull();
+});

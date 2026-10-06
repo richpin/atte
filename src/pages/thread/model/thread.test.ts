@@ -1374,3 +1374,48 @@ it("keeps context usage scoped to selected snapshots and patches", async () => {
   });
   expect(model.thread()?.contextUsage).toBeNull();
 });
+
+it("updates and removes plans in earlier turns without disturbing neighboring responses", async () => {
+  const model = setup();
+  const initial = running("A");
+  initial.turns[0].responseParts = [
+    { kind: "text", id: "before", text: "Before" },
+    {
+      kind: "planContent",
+      id: "doc",
+      planId: "p",
+      content: { type: "markdown", content: "# Initial" },
+    },
+    { kind: "text", id: "after", text: "After" },
+  ];
+  initial.turns.push({
+    id: "next",
+    message: "Next",
+    responseParts: [],
+    stopReason: null,
+  });
+  await open(model, "A", initial);
+  const receive = stream("A");
+  for (const content of [
+    null,
+    { type: "markdown" as const, content: "# Updated" },
+  ]) {
+    receive({
+      kind: "planContentUpdate",
+      threadId: "A",
+      turnId: "turn",
+      part: { kind: "planContent", id: "doc", planId: "p", content },
+    });
+  }
+  expect(model.thread()?.turns[0].responseParts).toEqual([
+    { kind: "text", id: "before", text: "Before" },
+    {
+      kind: "planContent",
+      id: "doc",
+      planId: "p",
+      content: { type: "markdown", content: "# Updated" },
+    },
+    { kind: "text", id: "after", text: "After" },
+  ]);
+  expect(model.thread()?.turns[1].responseParts).toEqual([]);
+});

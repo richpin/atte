@@ -39,44 +39,54 @@ export function Plan(props: { plan: PlanData; active: boolean }) {
           </span>
         </CollapsibleTrigger>
         <CollapsibleContent class="border-t border-line px-3 py-3">
-          <ol class="flex flex-col gap-2">
-            <For each={props.plan.entries}>
-              {(entry) => (
-                <li class="flex min-w-0 items-start gap-2">
-                  <Dynamic
-                    component={
-                      entry.status === "completed"
-                        ? Check
-                        : entry.status === "in_progress"
-                          ? LoaderCircle
-                          : Circle
-                    }
-                    aria-hidden="true"
-                    class="mt-0.5 size-4 shrink-0 text-muted"
-                    classList={{
-                      "animate-spin motion-reduce:animate-none":
-                        props.active && entry.status === "in_progress",
-                    }}
-                  />
-                  <span class="sr-only">
-                    {t(
-                      entry.status === "completed"
-                        ? "thread.plan.done"
-                        : `thread.plan.${entry.status}`,
-                    )}
-                  </span>
-                  <span
-                    class="min-w-0 whitespace-pre-wrap break-words"
-                    classList={{ "text-muted": entry.status === "completed" }}
-                  >
-                    {entry.content}
-                  </span>
-                </li>
-              )}
-            </For>
-          </ol>
+          <PlanEntries entries={props.plan.entries} active={props.active} />
         </CollapsibleContent>
       </Collapsible>
     </Show>
+  );
+}
+
+export function PlanEntries(props: {
+  entries: PlanData["entries"];
+  active: boolean;
+}) {
+  const { t } = useI18n();
+  return (
+    <ol class="flex flex-col gap-2">
+      <For each={props.entries}>
+        {(entry) => (
+          <li class="flex min-w-0 items-start gap-2">
+            <Dynamic
+              component={
+                entry.status === "completed"
+                  ? Check
+                  : entry.status === "in_progress"
+                    ? LoaderCircle
+                    : Circle
+              }
+              aria-hidden="true"
+              class="mt-0.5 size-4 shrink-0 text-muted"
+              classList={{
+                "animate-spin motion-reduce:animate-none":
+                  props.active && entry.status === "in_progress",
+              }}
+            />
+            <span class="sr-only">
+              {t(
+                entry.status === "completed"
+                  ? "thread.plan.done"
+                  : `thread.plan.${entry.status}`,
+              )}
+            </span>
+            <span
+              class="min-w-0 whitespace-pre-wrap break-words"
+              classList={{ "text-muted": entry.status === "completed" }}
+            >
+              {entry.content}
+            </span>
+          </li>
+        )}
+      </For>
+    </ol>
   );
 }

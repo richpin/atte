@@ -48,6 +48,10 @@ export const ko = {
     thought: {
       title: "생각 중",
     },
+    planContent: {
+      title: "계획",
+      file: "계획 파일",
+    },
     plan: {
       title: "작업 계획",
       completed: "{{completed}}/{{total}} 완료",

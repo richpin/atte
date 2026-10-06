@@ -20,6 +20,36 @@ impl Replay {
 
     pub fn update(&mut self, update: SessionUpdate) {
         match update {
+            SessionUpdate::PlanUpdate(update) => {
+                if let Some((plan_id, content)) = super::plan::plan_content(update) {
+                    if self.turns.is_empty() {
+                        self.turns.push(Turn {
+                            id: Uuid::new_v4(),
+                            message: String::new(),
+                            attachments: Vec::new(),
+                            response_parts: Vec::new(),
+                            stop_reason: None,
+                        });
+                    }
+                    let current = self.turns.last().map(|turn| turn.id);
+                    crate::thread::update_plan_content(
+                        &mut self.turns,
+                        current,
+                        plan_id,
+                        Some(content),
+                    );
+                    self.user_chunk = false;
+                }
+            }
+            SessionUpdate::PlanRemoved(removed) => {
+                crate::thread::update_plan_content(
+                    &mut self.turns,
+                    None,
+                    removed.plan_id.to_string(),
+                    None,
+                );
+                self.user_chunk = false;
+            }
             SessionUpdate::UserMessageChunk(chunk) => {
                 let message_id = chunk.message_id.map(|id| id.to_string());
                 if !self.user_chunk

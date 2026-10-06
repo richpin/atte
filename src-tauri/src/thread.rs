@@ -5,7 +5,8 @@ use crate::agent::{prepared_codex, AgentDefinition, PreparedAgent};
 use crate::agent_management::authentication::AuthenticationObservation;
 use crate::file_selection::MediaStore;
 use crate::storage::{StorageError, Store};
-pub use response::ResponsePart;
+pub(crate) use response::update_plan_content;
+pub use response::{PlanContent, ResponsePart};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{HashMap, HashSet},
@@ -2531,6 +2532,13 @@ pub enum ThreadUpdate {
         turn_id: Uuid,
         part: ResponsePart,
     },
+    PlanContentUpdate {
+        #[serde(rename = "threadId")]
+        thread_id: Uuid,
+        #[serde(rename = "turnId")]
+        turn_id: Uuid,
+        part: ResponsePart,
+    },
 }
 
 /// A transient failure occurrence, delivered only with live updates, never snapshots.
@@ -3111,6 +3119,42 @@ impl RuntimeUpdates {
             .retain(|sender| sender.send(change.clone()).is_ok());
     }
 
+    pub fn update_plan_content(
+        &self,
+        current_turn: Option<Uuid>,
+        plan_id: String,
+        content: Option<PlanContent>,
+    ) {
+        let Ok(mut state) = self.state.lock() else {
+            return;
+        };
+        if state.generation != self.generation {
+            return;
+        }
+        if let Some(turn) = current_turn {
+            if !matches!(
+                state.thread.status,
+                ThreadStatus::Running | ThreadStatus::WaitingForApproval | ThreadStatus::Cancelling
+            ) || state.thread.turns.last().map(|item| item.id) != Some(turn)
+            {
+                return;
+            }
+        }
+        let Some((turn_id, part)) =
+            update_plan_content(&mut state.thread.turns, current_turn, plan_id, content)
+        else {
+            return;
+        };
+        let change = ThreadUpdate::PlanContentUpdate {
+            thread_id: state.thread.id,
+            turn_id,
+            part,
+        };
+        state
+            .subscribers
+            .retain(|sender| sender.send(change.clone()).is_ok());
+    }
+
     fn modify(&self, update: impl FnOnce(&mut Thread)) {
         self.modify_state(|state| update(&mut state.thread));
     }
@@ -3185,6 +3229,63 @@ mod title_tests {
         assert_eq!(
             threads.get(draft.id).unwrap().context_usage.unwrap().used,
             12_000
+        );
+    }
+
+    #[test]
+    fn plan_documents_preserve_identity_and_accept_cancel_but_reject_stale_turns() {
+        let folder = tempfile::tempdir().unwrap();
+        let threads = Threads::default();
+        let draft = threads.create(folder.path()).unwrap();
+        let updates = updates_for(&threads, draft.id);
+        let turn = Uuid::new_v4();
+        {
+            let mut state = updates.state.lock().unwrap();
+            state.thread.status = ThreadStatus::Running;
+            state.thread.turns.push(Turn {
+                id: turn,
+                message: String::new(),
+                attachments: Vec::new(),
+                response_parts: Vec::new(),
+                stop_reason: None,
+            });
+        }
+        let mut stream = threads.subscribe(draft.id).unwrap();
+        stream.try_recv().unwrap();
+        let content = || {
+            Some(PlanContent::Markdown {
+                content: "# Plan".into(),
+            })
+        };
+        updates.update_plan_content(Some(Uuid::new_v4()), "p".into(), content());
+        updates.update_plan_content(Some(turn), "unknown".into(), None);
+        assert!(stream.try_recv().is_err());
+        updates.update_plan_content(Some(turn), "p".into(), content());
+        let ThreadUpdate::PlanContentUpdate { part: initial, .. } = stream.try_recv().unwrap()
+        else {
+            panic!("plan content");
+        };
+        updates.state.lock().unwrap().thread.status = ThreadStatus::Cancelling;
+        updates.update_plan_content(Some(turn), "p".into(), None);
+        assert!(matches!(
+            stream.try_recv().unwrap(),
+            ThreadUpdate::PlanContentUpdate {
+                part: ResponsePart::PlanContent { content: None, .. },
+                ..
+            }
+        ));
+        updates.update_plan_content(Some(turn), "p".into(), content());
+        let ThreadUpdate::PlanContentUpdate { part: restored, .. } = stream.try_recv().unwrap()
+        else {
+            panic!("plan content");
+        };
+        assert_eq!(restored, initial);
+        updates.state.lock().unwrap().generation += 1;
+        updates.update_plan_content(Some(turn), "p".into(), None);
+        assert!(stream.try_recv().is_err());
+        assert_eq!(
+            threads.get(draft.id).unwrap().turns[0].response_parts,
+            vec![initial]
         );
     }
 

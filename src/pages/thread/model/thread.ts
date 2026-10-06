@@ -476,13 +476,20 @@ export function createThreadModel(
       return;
     }
     if (update.threadId !== current.id) return;
-    if (current.turns.at(-1)?.id !== update.turnId) {
+    const turnIndex =
+      update.kind === "planContentUpdate"
+        ? current.turns.findIndex((turn) => turn.id === update.turnId)
+        : current.turns.length - 1;
+    if (turnIndex < 0 || current.turns[turnIndex]?.id !== update.turnId) {
       subscriptionFailed();
       return;
     }
-    const turnIndex = current.turns.length - 1;
     const parts = current.turns[turnIndex].responseParts;
-    if (update.kind === "toolUpdate" || update.kind === "planUpdate") {
+    if (
+      update.kind === "toolUpdate" ||
+      update.kind === "planUpdate" ||
+      update.kind === "planContentUpdate"
+    ) {
       const index = parts.findIndex(
         (part) => part.kind === update.part.kind && part.id === update.part.id,
       );

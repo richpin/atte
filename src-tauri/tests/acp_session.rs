@@ -4411,6 +4411,24 @@ impl TranscriptSubscription {
                 if let Some(previous) = turn.response_parts.iter_mut().find(|previous| matches!(previous, atte_lib::thread::ResponsePart::Tool { id: existing, .. } if existing == id)) { *previous = part; }
                 else { turn.response_parts.push(part); }
             }
+            ThreadUpdate::PlanContentUpdate {
+                thread_id,
+                turn_id,
+                part,
+            } => {
+                let thread = self.thread.as_mut().unwrap();
+                assert_eq!(thread_id, thread.id);
+                let turn = thread
+                    .turns
+                    .iter_mut()
+                    .find(|turn| turn.id == turn_id)
+                    .unwrap();
+                let atte_lib::thread::ResponsePart::PlanContent { id, .. } = &part else {
+                    panic!("plan content update");
+                };
+                if let Some(previous) = turn.response_parts.iter_mut().find(|previous| matches!(previous, atte_lib::thread::ResponsePart::PlanContent { id: existing, .. } if existing == id)) { *previous = part; }
+                else { turn.response_parts.push(part); }
+            }
             ThreadUpdate::PlanUpdate {
                 thread_id,
                 turn_id,
@@ -6134,4 +6152,113 @@ async fn context_usage_routes_without_a_turn_and_resets_then_updates_during_repl
     );
     assert_eq!(restored.turns.len(), 1);
     threads.shutdown().await;
+}
+
+#[tokio::test]
+async fn streams_plan_documents_across_turns_and_replays_the_same_positions() {
+    let folder = tempfile::tempdir().unwrap();
+    let mut agent = mock_agent();
+    agent
+        .env
+        .insert("FIXTURE_MODE".into(), "plan-content".into());
+    agent.env.insert(
+        "SESSION_FILE".into(),
+        folder.path().join("history.json").to_string_lossy().into(),
+    );
+    let threads = Threads::new(vec![agent]);
+    let draft = threads.create(folder.path()).unwrap();
+    threads.connect(draft.id).unwrap();
+    assert_eq!(
+        settle(&threads, draft.id).await.status,
+        ThreadStatus::SessionReady
+    );
+    let mut stream = subscribe(&threads, draft.id);
+    for (index, message) in ["Inspect", "Revise"].into_iter().enumerate() {
+        threads.send_message(draft.id, message.into()).unwrap();
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                let next = stream.recv().await.unwrap();
+                if next.status == ThreadStatus::SessionReady && next.turns.len() == index + 1 {
+                    break;
+                }
+            }
+        })
+        .await
+        .unwrap();
+    }
+    let completed = threads.get(draft.id).unwrap();
+    let value = serde_json::to_value(&completed.turns).unwrap();
+    let parts = &value[0]["responseParts"];
+    assert_eq!(parts.as_array().unwrap().len(), 5);
+    assert_eq!(parts[0]["text"], "Before");
+    assert_eq!(parts[1]["content"]["content"], "# Updated in next turn");
+    assert_eq!(parts[2]["content"]["entries"][0]["status"], "completed");
+    assert!(parts[3]["content"].is_null());
+    assert_eq!(parts[4]["text"], "After");
+    assert_eq!(value[1]["responseParts"], serde_json::json!([]));
+    threads.reconnect(draft.id).unwrap();
+    let restored = settle(&threads, draft.id).await;
+    let replayed = serde_json::to_value(&restored.turns).unwrap();
+    for index in [1, 2, 3] {
+        assert_eq!(
+            replayed[0]["responseParts"][index]["content"],
+            parts[index]["content"]
+        );
+        assert_eq!(
+            replayed[0]["responseParts"][index]["planId"],
+            parts[index]["planId"]
+        );
+    }
+    assert_eq!(restored.turns[0].response_text(), "BeforeAfter");
+    threads.shutdown().await;
+}
+
+#[tokio::test]
+#[ignore = "requires ATTE_CODEX_ACP and existing login; creates and approves a plan in a temporary folder"]
+async fn real_codex_plan_document_survives_approval_and_reconnection() {
+    use atte_lib::thread::ResponsePart;
+    let folder = tempfile::tempdir().unwrap();
+    let threads = Threads::new(vec![atte_lib::agent::prepared_codex()]);
+    let draft = threads.create(folder.path()).unwrap();
+    let result = tokio::time::timeout(Duration::from_secs(120), async {
+        let mut stream = subscribe(&threads, draft.id);
+        threads.connect(draft.id).unwrap();
+        loop {
+            let next = stream.recv().await.unwrap();
+            assert_ne!(next.status, ThreadStatus::Failed, "connection failed: {:?}", next.failure);
+            if next.status == ThreadStatus::SessionReady { break; }
+        }
+        threads.set_configuration(draft.id, "collaboration_mode".into(), ThreadConfigurationValue::Select { value: "plan".into() }).await.unwrap();
+        threads.send_message(draft.id, "Create a short Markdown plan for a TypeScript greeting CLI. This is a plan UI verification. Do not use tools, read or write files, or implement anything. After I approve the plan, just reply PLAN-APPROVED without implementing or accessing files.".into()).unwrap();
+        let waiting = loop {
+            let next = stream.recv().await.unwrap();
+            assert_ne!(next.status, ThreadStatus::Failed, "plan failed: {:?}", next.failure);
+            if next.status == ThreadStatus::WaitingForApproval { break next; }
+            if !next.turns.is_empty() { assert_ne!(next.status, ThreadStatus::SessionReady, "plan completed without review"); }
+        };
+        let document = waiting.turns.iter().flat_map(|turn| &turn.response_parts).find_map(|part| match part {
+            ResponsePart::PlanContent { plan_id, content: Some(atte_lib::thread::PlanContent::Markdown { content }), .. } if !content.is_empty() => Some((plan_id.clone(), content.clone())),
+            _ => None,
+        }).expect("typed Markdown plan");
+        let permission = waiting.permissions.iter().find(|permission| permission.tool_call_id.starts_with("plan-review:")).expect("plan review");
+        threads.answer_permission(draft.id, permission.id, "implement_plan".into()).unwrap();
+        loop {
+            let next = stream.recv().await.unwrap();
+            assert_ne!(next.status, ThreadStatus::Failed);
+            if next.status == ThreadStatus::SessionReady { break; }
+        }
+        threads.reconnect(draft.id).unwrap();
+        loop {
+            let next = stream.recv().await.unwrap();
+            assert_ne!(next.status, ThreadStatus::Failed);
+            if next.status == ThreadStatus::SessionReady {
+                assert!(next.turns.iter().flat_map(|turn| &turn.response_parts).any(|part| matches!(part, ResponsePart::PlanContent { plan_id, content: Some(atte_lib::thread::PlanContent::Markdown { content }), .. } if plan_id == &document.0 && content == &document.1)));
+                println!("Verified Markdown plan, approval and replay; {} characters", document.1.len());
+                break;
+            }
+        }
+        assert_eq!(std::fs::read_dir(folder.path()).unwrap().count(), 0);
+    }).await;
+    threads.shutdown().await;
+    result.unwrap();
 }

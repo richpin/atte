@@ -6,6 +6,7 @@
   --color-response-info: #2563eb;
   --color-response-info-soft: #eff6ff;
   --color-response-warning: #c2410c;
+  --color-response-success: #15803d;
   --animate-agent-waiting: agent-waiting 1.4s ease-in-out infinite;
   --animate-waiting-ellipsis: waiting-ellipsis 1.6s step-end infinite;
   --color-canvas: #ffffff;
@@ -79,6 +80,7 @@
   --color-response-info: #3b82f6;
   --color-response-info-soft: #172554;
   --color-response-warning: #fb923c;
+  --color-response-success: #4ade80;
   --color-canvas: #171717;
   --color-input-surface: #262626;
   --color-user-bubble: #2a2a2a;

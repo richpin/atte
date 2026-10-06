@@ -171,11 +171,22 @@ export interface Plan {
   _meta?: Record<string, unknown> | null;
 }
 
+export type PlanContent =
+  | { type: "items"; entries: Plan["entries"] }
+  | { type: "markdown"; content: string }
+  | { type: "file"; uri: string };
+
 export type ResponsePart =
   | { kind: "text"; id: string; text: string }
   | { kind: "thought"; id: string; text: string }
   | { kind: "tool"; id: string; tool: ToolCall }
-  | { kind: "plan"; id: string; plan: Plan };
+  | { kind: "plan"; id: string; plan: Plan }
+  | {
+      kind: "planContent";
+      id: string;
+      planId: string;
+      content: PlanContent | null;
+    };
 
 export interface Turn {
   id: string;
@@ -228,6 +239,12 @@ export type ThreadUpdate =
       threadId: string;
       turnId: string;
       part: Extract<ResponsePart, { kind: "plan" }>;
+    }
+  | {
+      kind: "planContentUpdate";
+      threadId: string;
+      turnId: string;
+      part: Extract<ResponsePart, { kind: "planContent" }>;
     }
   | {
       kind: "toolUpdate";

@@ -119,7 +119,10 @@ export function ToolCall(props: {
           classList={{
             "animate-spin motion-reduce:animate-none": spinning(),
             "text-response-warning": props.tool.status === "failed",
-            "text-muted": props.tool.status !== "failed",
+            "text-response-success": props.tool.status === "completed",
+            "text-muted":
+              props.tool.status !== "failed" &&
+              props.tool.status !== "completed",
           }}
         />
         <span class="shrink-0 text-xs text-muted">{status()}</span>

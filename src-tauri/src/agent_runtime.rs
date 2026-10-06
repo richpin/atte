@@ -1,4 +1,5 @@
 //! Shared ACP stdio connection with independent, session-scoped execution.
+mod plan;
 mod process;
 mod replay;
 use crate::{
@@ -19,7 +20,7 @@ use agent_client_protocol::{
             AgentCapabilities, AudioContent, BooleanConfigOptionCapabilities, CancelNotification,
             ClientCapabilities, ClientSessionCapabilities, ContentBlock, DeleteSessionRequest,
             ImageContent, InitializeRequest, LoadSessionRequest, Meta, NewSessionRequest,
-            PromptRequest, RequestPermissionOutcome, RequestPermissionRequest,
+            PlanCapabilities, PromptRequest, RequestPermissionOutcome, RequestPermissionRequest,
             RequestPermissionResponse, ResourceLink, ResumeSessionRequest,
             SelectedPermissionOutcome, SessionConfigKind, SessionConfigOption,
             SessionConfigOptionValue, SessionConfigOptionsCapabilities, SessionConfigSelectOption,
@@ -214,6 +215,12 @@ pub(crate) async fn run(
                                 replay.update(update);
                             }
                         }
+                        SessionUpdate::PlanUpdate(update) => {
+                            if let Some((plan_id, content)) = plan::plan_content(update) {
+                                route.updates.update_plan_content(route.active.as_ref().map(|active| active.turn), plan_id, Some(content));
+                            }
+                        }
+                        SessionUpdate::PlanRemoved(removed) => route.updates.update_plan_content(route.active.as_ref().map(|active| active.turn), removed.plan_id.to_string(), None),
                         update if route.active.is_some() => {
                             if let Some(active) = &mut route.active {
                                 match update {
@@ -249,7 +256,7 @@ pub(crate) async fn run(
         }, agent_client_protocol::on_receive_notification!())
         .connect_with(ByteStreams::new(stdin.compat_write(), stdout.compat()), async |connection: ConnectionTo<Agent>| {
             let initialize = InitializeRequest::new(ProtocolVersion::V1).client_capabilities(
-                ClientCapabilities::new().session(
+                ClientCapabilities::new().plan(PlanCapabilities::new()).session(
                     ClientSessionCapabilities::new().config_options(
                         SessionConfigOptionsCapabilities::new()
                             .boolean(BooleanConfigOptionCapabilities::new()),

@@ -4,6 +4,52 @@ use agent_client_protocol::schema::v1::{Plan, ToolCallUpdate, ToolCallUpdateFiel
 use serde::Serialize;
 use uuid::Uuid;
 
+/// Application-owned representation of the ACP v1 draft plan formats.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+#[serde(tag = "type", rename_all = "camelCase")]
+pub enum PlanContent {
+    Items {
+        entries: Vec<agent_client_protocol::schema::v1::PlanEntry>,
+    },
+    Markdown {
+        content: String,
+    },
+    File {
+        uri: String,
+    },
+}
+
+/// Replace a session-scoped plan at its original transcript position.
+/// Removed plans retain their slot so restoration preserves identity.
+pub(crate) fn update_plan_content(
+    turns: &mut [Turn],
+    current_turn: Option<Uuid>,
+    plan_id: String,
+    content: Option<PlanContent>,
+) -> Option<(Uuid, ResponsePart)> {
+    for turn in turns.iter_mut() {
+        if let Some(part) = turn.response_parts.iter_mut().find(|part| {
+            matches!(part, ResponsePart::PlanContent { plan_id: existing, .. } if existing == &plan_id)
+        }) {
+            if let ResponsePart::PlanContent { content: previous, .. } = part {
+                *previous = content;
+            }
+            return Some((turn.id, part.clone()));
+        }
+    }
+    let content = content?;
+    let turn = turns
+        .iter_mut()
+        .find(|turn| Some(turn.id) == current_turn)?;
+    let part = ResponsePart::PlanContent {
+        id: Uuid::new_v4().to_string(),
+        plan_id,
+        content: Some(content),
+    };
+    turn.response_parts.push(part.clone());
+    Some((turn.id, part))
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum ResponsePart {
@@ -20,6 +66,12 @@ pub enum ResponsePart {
     Plan {
         id: String,
         plan: Plan,
+    },
+    PlanContent {
+        id: String,
+        #[serde(rename = "planId")]
+        plan_id: String,
+        content: Option<PlanContent>,
     },
     Tool {
         id: String,
@@ -138,6 +190,7 @@ impl Turn {
                 ResponsePart::Text { text, .. } => Some(text.as_str()),
                 ResponsePart::Tool { .. }
                 | ResponsePart::Plan { .. }
+                | ResponsePart::PlanContent { .. }
                 | ResponsePart::Thought { .. } => None,
             })
             .collect()

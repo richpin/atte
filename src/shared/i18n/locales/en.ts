@@ -42,6 +42,10 @@ export const en = {
     thought: {
       title: "Thinking",
     },
+    planContent: {
+      title: "Plan",
+      file: "Plan file",
+    },
     plan: {
       title: "Work plan",
       completed: "{{completed}}/{{total}} completed",
