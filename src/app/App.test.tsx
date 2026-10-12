@@ -127,6 +127,78 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
+it("keeps project tabs independent per thread, folds without clearing and resets on a new app run", async () => {
+  const one = {
+    id: "panel-one",
+    title: "First panel thread",
+    workingFolder: "/work/project",
+    agentId: "codex",
+    status: "sessionReady",
+    authentication: "authenticated",
+    turns: [],
+    permissions: [],
+    queuedMessages: [],
+  };
+  const two = { ...one, id: "panel-two", title: "Second panel thread" };
+  const original = vi.mocked(invoke).getMockImplementation();
+  vi.mocked(invoke).mockImplementation((command, args) => {
+    if (command === "list_threads") return Promise.resolve([one, two]);
+    if (command === "subscribe_thread")
+      return subscribeWith(
+        args,
+        (args as { id: string }).id === one.id ? one : two,
+      );
+    return original?.(command, args) ?? Promise.resolve();
+  });
+  render(() => <App />);
+  expect(
+    screen.queryByRole("button", { name: "프로젝트 패널 열기" }),
+  ).toBeNull();
+  await userEvent.click(await screen.findByRole("button", { name: one.title }));
+  const toggle = screen.getByRole("button", { name: "프로젝트 패널 열기" });
+  expect(toggle.getAttribute("aria-expanded")).toBe("false");
+  expect(
+    screen.queryByRole("complementary", { name: "프로젝트 패널" }),
+  ).toBeNull();
+  await userEvent.click(toggle);
+  expect(toggle.getAttribute("aria-expanded")).toBe("true");
+  expect(screen.getAllByRole("tab")).toHaveLength(1);
+  await userEvent.click(screen.getByRole("button", { name: "새 탭" }));
+  expect(screen.getAllByRole("tab")).toHaveLength(2);
+  await userEvent.click(toggle);
+  expect(screen.queryByRole("tab")).toBeNull();
+  await userEvent.click(toggle);
+  expect(screen.getByRole("tab", { selected: true }).textContent).toBe(
+    "새 탭 2",
+  );
+  await userEvent.click(getSidebarThreadButton(two.title));
+  expect(toggle.getAttribute("aria-expanded")).toBe("false");
+  await userEvent.click(toggle);
+  expect(screen.getAllByRole("tab")).toHaveLength(1);
+  await userEvent.click(screen.getByRole("button", { name: "새 탭" }));
+  await userEvent.click(getSidebarThreadButton(one.title));
+  expect(screen.getAllByRole("tab")).toHaveLength(2);
+  expect(screen.getByRole("tab", { selected: true }).textContent).toBe(
+    "새 탭 2",
+  );
+  await openAgentManagement();
+  expect(screen.queryByRole("tab")).toBeNull();
+  await userEvent.click(await waitFor(() => getSidebarThreadButton(one.title)));
+  expect(screen.getAllByRole("tab")).toHaveLength(2);
+  cleanup();
+  render(() => <App />);
+  await userEvent.click(await screen.findByRole("button", { name: one.title }));
+  expect(
+    screen
+      .getByRole("button", { name: "프로젝트 패널 열기" })
+      .getAttribute("aria-expanded"),
+  ).toBe("false");
+  await userEvent.click(
+    screen.getByRole("button", { name: "프로젝트 패널 열기" }),
+  );
+  expect(screen.getAllByRole("tab")).toHaveLength(1);
+});
+
 it("shows registry icons and falls back for missing or failed images", async () => {
   const images: HTMLImageElement[] = [];
   const imageConstructor = vi
@@ -1291,6 +1363,10 @@ it("keeps confirmation open while deleting the selected thread and ignores late 
     await screen.findByRole("button", { name: "현재 스레드" }),
   );
   await userEvent.type(screen.getByRole("textbox"), "작성 중인 입력");
+  await userEvent.click(
+    screen.getByRole("button", { name: "프로젝트 패널 열기" }),
+  );
+  await userEvent.click(screen.getByRole("button", { name: "새 탭" }));
   await userEvent.click(threadMenu("현재 스레드"));
   await userEvent.click(screen.getByRole("menuitem", { name: "삭제" }));
   await userEvent.click(screen.getByRole("button", { name: "삭제" }));
@@ -1306,6 +1382,7 @@ it("keeps confirmation open while deleting the selected thread and ignores late 
   ).toBeTruthy();
   expect(screen.queryByRole("button", { name: "현재 스레드" })).toBeNull();
   expect(screen.getByRole("button", { name: "남은 스레드" })).toBeTruthy();
+  expect(screen.queryByRole("tab", { hidden: true })).toBeNull();
   receiveList([selected, other]);
   expect(screen.queryByRole("button", { name: "현재 스레드" })).toBeNull();
   expect(

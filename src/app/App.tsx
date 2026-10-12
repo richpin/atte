@@ -2,7 +2,14 @@ import * as ToggleButtonPrimitive from "@kobalte/core/toggle-button";
 import { makeResizeObserver } from "@solid-primitives/resize-observer";
 import { QueryClient, QueryClientProvider } from "@tanstack/solid-query";
 import { AgentAuthenticationProvider } from "features/agent-authentication";
-import { Bot, Ellipsis, List, RotateCcw, Settings } from "lucide-solid";
+import {
+  Bot,
+  Ellipsis,
+  List,
+  PanelRight,
+  RotateCcw,
+  Settings,
+} from "lucide-solid";
 import { AgentManagementPage } from "pages/agent-management";
 import { GeneralPage } from "pages/general";
 import { NewThreadPage } from "pages/new-thread";
@@ -28,8 +35,15 @@ import {
   useResizable,
   useSidebar,
 } from "shared/ui";
-import { type ComponentProps, createSignal, onMount, Show } from "solid-js";
+import {
+  type ComponentProps,
+  createSignal,
+  createUniqueId,
+  onMount,
+  Show,
+} from "solid-js";
 import { AppSidebar } from "widgets/app-sidebar";
+import { ThreadPanelLayout } from "widgets/thread-panel";
 import { createAppShellModel } from "./model/app-shell";
 import "./styles.css";
 
@@ -215,6 +229,11 @@ function ShellContent(props: { shell: AppShellModel }) {
   const { t, content } = useI18n();
   const { state, isMobile, openMobile } = useSidebar();
   const [showInfoCard, setShowInfoCard] = createSignal(true);
+  const threadPanelId = createUniqueId();
+  const panelOpen = () =>
+    shell.threadPanels.panel(threads.selectedThreadId())?.open ?? false;
+  const panelToggleLabel = () =>
+    t(panelOpen() ? "threadPanel.collapse" : "threadPanel.expand");
   const showSidebarTrigger = () =>
     isMobile() ? !openMobile() : state() === "collapsed";
   const title = () => {
@@ -276,6 +295,27 @@ function ShellContent(props: { shell: AppShellModel }) {
           <div class="relative flex shrink-0 items-center gap-1">
             <Tooltip placement="bottom">
               <TooltipTrigger
+                as={Button}
+                variant="ghost"
+                size="icon"
+                aria-label={panelToggleLabel()}
+                aria-expanded={panelOpen()}
+                aria-controls={threadPanelId}
+                class="pointer-events-auto relative size-7 shrink-0 text-muted hover:bg-menu focus-visible:ring-1 focus-visible:ring-line focus-visible:ring-offset-0"
+                classList={{ "bg-menu text-ink": panelOpen() }}
+                onClick={() => {
+                  const id = threads.selectedThreadId();
+                  if (id) shell.threadPanels.setOpen(id, !panelOpen());
+                }}
+              >
+                <PanelRight aria-hidden="true" class="size-4" />
+              </TooltipTrigger>
+              <TooltipContent class="border-0 bg-menu text-ink">
+                {panelToggleLabel()}
+              </TooltipContent>
+            </Tooltip>
+            <Tooltip placement="bottom">
+              <TooltipTrigger
                 aria-label={t("thread.information")}
                 as={(triggerProps: ComponentProps<"button">) => (
                   <ToggleButtonPrimitive.Root
@@ -330,13 +370,20 @@ function ShellContent(props: { shell: AppShellModel }) {
         />
       </div>
       <div hidden={shell.view() !== "thread"} class="min-h-0 flex-1">
-        <ThreadPage
+        <ThreadPanelLayout
+          model={shell.threadPanels}
+          threadId={threads.selectedThreadId()}
           active={shell.view() === "thread"}
-          showInfoCard={showInfoCard()}
-          model={threads}
-          agents={shell.agents()}
-          onManage={shell.showAgents}
-        />
+          panelId={threadPanelId}
+        >
+          <ThreadPage
+            active={shell.view() === "thread"}
+            showInfoCard={showInfoCard()}
+            model={threads}
+            agents={shell.agents()}
+            onManage={shell.showAgents}
+          />
+        </ThreadPanelLayout>
       </div>
       <div hidden={shell.view() !== "general"} class="min-h-0 flex-1">
         <GeneralPage />

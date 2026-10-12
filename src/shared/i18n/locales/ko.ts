@@ -41,6 +41,17 @@ export const ko = {
     themeDescription: "이 기기에서 사용할 Atte의 화면 모드를 선택합니다.",
     languageDescription: "Atte 전체에서 사용할 언어를 선택합니다.",
   },
+  threadPanel: {
+    label: "프로젝트 패널",
+    expand: "프로젝트 패널 열기",
+    collapse: "프로젝트 패널 접기",
+    resize: "프로젝트 패널 너비 조절",
+    tabs: "프로젝트 탭",
+    newTab: "새 탭",
+    newTabTitle: "새 탭 {{number}}",
+    closeTab: "{{title}} 닫기",
+    newTabDescription: "여기에서 프로젝트를 탐색할 수 있습니다.",
+  },
   thread: {
     information: "스레드 정보",
     context: "Context",

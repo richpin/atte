@@ -1,0 +1,119 @@
+import { makeResizeObserver } from "@solid-primitives/resize-observer";
+import { useI18n } from "shared/i18n";
+import { Resizable, ResizableHandle, ResizablePanel } from "shared/ui";
+import { createMemo, createSignal, For, type JSX, onMount } from "solid-js";
+import {
+  THREAD_CONTENT_MIN_WIDTH,
+  THREAD_PANEL_MAX_WIDTH,
+  THREAD_PANEL_MIN_WIDTH,
+  type ThreadPanelModel,
+} from "../model/thread-panel";
+import { ThreadPanel } from "./ThreadPanel";
+
+export function ThreadPanelLayout(props: {
+  model: ThreadPanelModel;
+  threadId: string | undefined;
+  active: boolean;
+  panelId: string;
+  children: JSX.Element;
+}) {
+  const { t } = useI18n();
+  const [rootWidth, setRootWidth] = createSignal(0);
+  let root: HTMLDivElement | undefined;
+  const panel = () => props.model.panel(props.threadId);
+  const availableWidth = () =>
+    Math.max(0, rootWidth() - THREAD_CONTENT_MIN_WIDTH);
+  const panelWidth = () =>
+    props.active && panel()?.open && availableWidth() >= THREAD_PANEL_MIN_WIDTH
+      ? Math.min(panel()?.width ?? 0, availableWidth())
+      : 0;
+  const sizes = createMemo(() => {
+    const right = rootWidth() > 0 ? panelWidth() / rootWidth() : 0;
+    return [1 - right, right];
+  });
+  const panels = createMemo(() => Object.values(props.model.panels));
+  const { observe } = makeResizeObserver((entries) => {
+    const entry = entries.find(({ target }) => target === root);
+    if (entry) setRootWidth(entry.contentRect.width);
+  });
+
+  onMount(() => {
+    if (!root) return;
+    setRootWidth(root.offsetWidth);
+    observe(root);
+  });
+
+  function resize(nextSizes: number[]) {
+    const threadId = props.threadId;
+    const right = nextSizes[1];
+    // Corvu also reports controlled sizes and panel registration. Only user
+    // changes should replace the remembered width or open state.
+    if (
+      !props.active ||
+      !threadId ||
+      rootWidth() === 0 ||
+      right === undefined ||
+      Math.abs(right - sizes()[1]) < 0.000001
+    )
+      return;
+    if (right === 0) {
+      props.model.setOpen(threadId, false);
+    } else if (!panel()?.open) {
+      props.model.setOpen(threadId, true);
+    } else {
+      props.model.setWidth(threadId, right * rootWidth());
+    }
+  }
+
+  return (
+    <Resizable
+      ref={root}
+      sizes={sizes()}
+      onSizesChange={resize}
+      class="min-h-0 min-w-0 overflow-hidden"
+    >
+      <ResizablePanel
+        minSize={`${THREAD_CONTENT_MIN_WIDTH}px`}
+        class="min-w-0 overflow-hidden"
+      >
+        {props.children}
+      </ResizablePanel>
+      <ResizableHandle
+        aria-label={t("threadPanel.resize")}
+        class="before:pointer-events-none before:absolute before:inset-y-0 before:left-1/2 before:w-px before:-translate-x-1/2 hover:before:bg-line data-[dragging]:before:bg-line"
+      />
+      <ResizablePanel
+        minSize={`${THREAD_PANEL_MIN_WIDTH}px`}
+        maxSize={`${THREAD_PANEL_MAX_WIDTH}px`}
+        collapsible
+        collapsedSize={0}
+        collapseThreshold={0.05}
+        class="min-w-0 overflow-hidden"
+      >
+        <aside
+          id={props.panelId}
+          aria-label={t("threadPanel.label")}
+          hidden={panelWidth() === 0}
+          class="h-full min-w-0 border-l border-line"
+        >
+          <For each={panels()}>
+            {(entry) => (
+              <div
+                hidden={entry.threadId !== props.threadId}
+                class="h-full min-h-0"
+              >
+                <ThreadPanel
+                  model={props.model}
+                  panel={entry}
+                  visible={
+                    panelWidth() > 0 && entry.threadId === props.threadId
+                  }
+                />
+              </div>
+            )}
+          </For>
+        </aside>
+      </ResizablePanel>
+    </Resizable>
+  );
+}

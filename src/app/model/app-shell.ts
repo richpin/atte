@@ -2,12 +2,14 @@ import { createThreadModel, preparedAgents } from "pages/thread";
 import { useI18n } from "shared/i18n";
 import { showErrorToast } from "shared/ui";
 import { createEffect, createResource, createSignal } from "solid-js";
+import { createThreadPanelModel } from "widgets/thread-panel";
 
 export type AppView = "new-thread" | "thread" | "general" | "agents";
 
 export function createAppShellModel() {
   const { t } = useI18n();
   const threads = createThreadModel(undefined, showErrorToast);
+  const threadPanels = createThreadPanelModel();
   const [view, setView] = createSignal<AppView>("new-thread");
   const [agentsRevision, setAgentsRevision] = createSignal(0);
   const [agentsFailed, setAgentsFailed] = createSignal(false);
@@ -72,6 +74,7 @@ export function createAppShellModel() {
   async function removeThread(id: string) {
     const selected = threads.selectedThreadId() === id;
     await threads.removeThread(id);
+    threadPanels.forget(id);
     if (selected) showNewThread();
   }
 
@@ -97,6 +100,7 @@ export function createAppShellModel() {
   return {
     view,
     threads,
+    threadPanels,
     agents: () => agents() ?? [],
     agentsLoading: () => agents.loading,
     agentsFailed,

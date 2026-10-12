@@ -35,6 +35,17 @@ export const en = {
     themeDescription: "Choose how Atte looks on this device.",
     languageDescription: "Choose the language used throughout Atte.",
   },
+  threadPanel: {
+    label: "Project panel",
+    expand: "Open project panel",
+    collapse: "Collapse project panel",
+    resize: "Resize project panel",
+    tabs: "Project tabs",
+    newTab: "New tab",
+    newTabTitle: "New tab {{number}}",
+    closeTab: "Close {{title}}",
+    newTabDescription: "Explore your project here.",
+  },
   thread: {
     information: "Thread information",
     context: "Context",
