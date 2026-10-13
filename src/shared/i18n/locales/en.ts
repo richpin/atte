@@ -35,6 +35,21 @@ export const en = {
     themeDescription: "Choose how Atte looks on this device.",
     languageDescription: "Choose the language used throughout Atte.",
   },
+  webBrowser: {
+    title: "Web",
+    address: "Web address",
+    addressPlaceholder: "Enter a URL",
+    back: "Back",
+    forward: "Forward",
+    reload: "Reload",
+    external: "Open in browser",
+    invalidAddress: "Enter a valid HTTP or HTTPS address.",
+    empty: "Enter an address to open a web page.",
+    loading: "Opening web page…",
+    error:
+      "The web page could not be opened. Try again or open it in your browser.",
+    retry: "Try again",
+  },
   threadPanel: {
     label: "Project panel",
     expand: "Open project panel",

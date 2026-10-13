@@ -1,14 +1,19 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Capability for the main window",
-  "windows": [
+  "description": "Capability for the trusted main webview",
+  "webviews": [
     "main"
   ],
   "permissions": [
     "core:default",
     "core:window:allow-start-dragging",
     "core:window:allow-set-theme",
+    "core:webview:allow-set-webview-position",
+    "core:webview:allow-set-webview-size",
+    "core:webview:allow-webview-show",
+    "core:webview:allow-webview-hide",
+    "core:webview:allow-webview-close",
     {
       "identifier": "opener:allow-open-url",
       "allow": [

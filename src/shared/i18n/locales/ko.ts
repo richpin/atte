@@ -41,6 +41,21 @@ export const ko = {
     themeDescription: "이 기기에서 사용할 Atte의 화면 모드를 선택합니다.",
     languageDescription: "Atte 전체에서 사용할 언어를 선택합니다.",
   },
+  webBrowser: {
+    title: "웹",
+    address: "웹 주소",
+    addressPlaceholder: "URL 입력",
+    back: "뒤로",
+    forward: "앞으로",
+    reload: "새로고침",
+    external: "브라우저에서 열기",
+    invalidAddress: "올바른 HTTP 또는 HTTPS 주소를 입력해주세요.",
+    empty: "주소를 입력해 웹 페이지를 열어보세요.",
+    loading: "웹 페이지 여는 중…",
+    error:
+      "웹 페이지를 열 수 없습니다. 다시 시도하거나 브라우저에서 열어주세요.",
+    retry: "다시 시도",
+  },
   threadPanel: {
     label: "프로젝트 패널",
     expand: "프로젝트 패널 열기",

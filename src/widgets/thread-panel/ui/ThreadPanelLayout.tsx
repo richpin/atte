@@ -4,7 +4,6 @@ import { Resizable, ResizableHandle, ResizablePanel } from "shared/ui";
 import { createMemo, createSignal, For, type JSX, onMount } from "solid-js";
 import {
   THREAD_CONTENT_MIN_WIDTH,
-  THREAD_PANEL_MAX_WIDTH,
   THREAD_PANEL_MIN_WIDTH,
   type ThreadPanelModel,
 } from "../model/thread-panel";
@@ -23,10 +22,16 @@ export function ThreadPanelLayout(props: {
   const panel = () => props.model.panel(props.threadId);
   const availableWidth = () =>
     Math.max(0, rootWidth() - THREAD_CONTENT_MIN_WIDTH);
-  const panelWidth = () =>
-    props.active && panel()?.open && availableWidth() >= THREAD_PANEL_MIN_WIDTH
-      ? Math.min(panel()?.width ?? 0, availableWidth())
-      : 0;
+  const narrow = () => availableWidth() < THREAD_PANEL_MIN_WIDTH;
+  const panelVisible = () =>
+    Boolean(props.active && panel()?.open && !narrow());
+  const fullWidth = () => panelVisible() && Boolean(panel()?.fullWidth);
+  const panelWidth = () => {
+    if (!panelVisible()) return 0;
+    return fullWidth()
+      ? rootWidth()
+      : Math.min(panel()?.width ?? 0, availableWidth());
+  };
   const sizes = createMemo(() => {
     const right = rootWidth() > 0 ? panelWidth() / rootWidth() : 0;
     return [1 - right, right];
@@ -52,12 +57,16 @@ export function ThreadPanelLayout(props: {
       !props.active ||
       !threadId ||
       rootWidth() === 0 ||
+      narrow() ||
       right === undefined ||
       Math.abs(right - sizes()[1]) < 0.000001
     )
       return;
     if (right === 0) {
       props.model.setOpen(threadId, false);
+    } else if (right === 1) {
+      props.model.setFullWidth(threadId, true);
+      props.model.setOpen(threadId, true);
     } else if (!panel()?.open) {
       props.model.setOpen(threadId, true);
     } else {
@@ -73,18 +82,28 @@ export function ThreadPanelLayout(props: {
       class="min-h-0 min-w-0 overflow-hidden"
     >
       <ResizablePanel
-        minSize={`${THREAD_CONTENT_MIN_WIDTH}px`}
+        minSize={narrow() ? 0 : `${THREAD_CONTENT_MIN_WIDTH}px`}
+        collapsible
+        collapsedSize={0}
+        collapseThreshold={0.05}
+        hidden={fullWidth()}
+        inert={fullWidth()}
         class="min-w-0 overflow-hidden"
       >
         {props.children}
       </ResizablePanel>
       <ResizableHandle
         aria-label={t("threadPanel.resize")}
+        disabled={narrow()}
+        onKeyDown={(event) => {
+          if (event.key !== "Enter" || !props.active || !props.threadId) return;
+          event.preventDefault();
+          props.model.setOpen(props.threadId, !panel()?.open);
+        }}
         class="before:pointer-events-none before:absolute before:inset-y-0 before:left-1/2 before:w-px before:-translate-x-1/2 hover:before:bg-line data-[dragging]:before:bg-line"
       />
       <ResizablePanel
-        minSize={`${THREAD_PANEL_MIN_WIDTH}px`}
-        maxSize={`${THREAD_PANEL_MAX_WIDTH}px`}
+        minSize={`${Math.min(THREAD_PANEL_MIN_WIDTH, rootWidth())}px`}
         collapsible
         collapsedSize={0}
         collapseThreshold={0.05}

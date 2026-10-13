@@ -1,7 +1,9 @@
 import * as ToggleButtonPrimitive from "@kobalte/core/toggle-button";
 import { makeResizeObserver } from "@solid-primitives/resize-observer";
 import { QueryClient, QueryClientProvider } from "@tanstack/solid-query";
+import { isTauri } from "@tauri-apps/api/core";
 import { AgentAuthenticationProvider } from "features/agent-authentication";
+import { listenForWebTabs } from "features/web-browser";
 import {
   Bot,
   Ellipsis,
@@ -34,11 +36,13 @@ import {
   TooltipTrigger,
   useResizable,
   useSidebar,
+  WebLinkProvider,
 } from "shared/ui";
 import {
   type ComponentProps,
   createSignal,
   createUniqueId,
+  onCleanup,
   onMount,
   Show,
 } from "solid-js";
@@ -230,6 +234,24 @@ function ShellContent(props: { shell: AppShellModel }) {
   const { state, isMobile, openMobile } = useSidebar();
   const [showInfoCard, setShowInfoCard] = createSignal(true);
   const threadPanelId = createUniqueId();
+  onMount(() => {
+    if (!isTauri()) return;
+    let disposed = false;
+    let unlisten: (() => void) | undefined;
+    void listenForWebTabs((threadId, url) => {
+      if (threads.history().some((thread) => thread.id === threadId))
+        shell.threadPanels.openWebTab(threadId, url);
+    })
+      .then((stop) => {
+        if (disposed) stop();
+        else unlisten = stop;
+      })
+      .catch(() => undefined);
+    onCleanup(() => {
+      disposed = true;
+      unlisten?.();
+    });
+  });
   const panelOpen = () =>
     shell.threadPanels.panel(threads.selectedThreadId())?.open ?? false;
   const panelToggleLabel = () =>
@@ -376,13 +398,20 @@ function ShellContent(props: { shell: AppShellModel }) {
           active={shell.view() === "thread"}
           panelId={threadPanelId}
         >
-          <ThreadPage
-            active={shell.view() === "thread"}
-            showInfoCard={showInfoCard()}
-            model={threads}
-            agents={shell.agents()}
-            onManage={shell.showAgents}
-          />
+          <WebLinkProvider
+            onOpen={(url) => {
+              const id = threads.selectedThreadId();
+              if (id) shell.threadPanels.openWebTab(id, url);
+            }}
+          >
+            <ThreadPage
+              active={shell.view() === "thread"}
+              showInfoCard={showInfoCard()}
+              model={threads}
+              agents={shell.agents()}
+              onManage={shell.showAgents}
+            />
+          </WebLinkProvider>
         </ThreadPanelLayout>
       </div>
       <div hidden={shell.view() !== "general"} class="min-h-0 flex-1">

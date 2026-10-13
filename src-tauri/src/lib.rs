@@ -2,6 +2,7 @@
 pub mod agent;
 pub mod agent_management;
 mod agent_runtime;
+mod browser;
 mod file_selection;
 mod installation;
 mod installation_files;
@@ -63,7 +64,7 @@ async fn select_files(
     app: tauri::AppHandle,
     id: Uuid,
     dialog_title: String,
-    window: tauri::WebviewWindow,
+    window: tauri::Webview,
 ) -> Result<FileSelection, ThreadError> {
     tauri::async_runtime::spawn_blocking(move || {
         let selections = app
@@ -100,7 +101,7 @@ async fn select_media(
     id: Uuid,
     kind: MediaKind,
     dialog_title: String,
-    window: tauri::WebviewWindow,
+    window: tauri::Webview,
 ) -> Result<FileSelection, ThreadError> {
     if !app
         .state::<Threads>()
@@ -164,7 +165,7 @@ async fn snapshot_clipboard_image(
     name: String,
     mime_type: String,
     bytes: Vec<u8>,
-    window: tauri::WebviewWindow,
+    window: tauri::Webview,
     threads: State<'_, Threads>,
     selected_files: State<'_, SelectedFiles>,
 ) -> Result<FileSelection, ThreadError> {
@@ -225,7 +226,7 @@ async fn reconnect_thread(id: Uuid, threads: State<'_, Threads>) -> Result<(), T
 async fn send_message(
     id: Uuid,
     input: SubmittedInput,
-    window: tauri::WebviewWindow,
+    window: tauri::Webview,
     threads: State<'_, Threads>,
     selected_files: State<'_, SelectedFiles>,
 ) -> Result<(), ThreadError> {
@@ -238,7 +239,7 @@ async fn send_message(
 #[tauri::command]
 fn release_files(
     attachments: Vec<Uuid>,
-    window: tauri::WebviewWindow,
+    window: tauri::Webview,
     selected_files: State<'_, SelectedFiles>,
 ) {
     let forgotten = selected_files.forget(window.label(), &attachments);
@@ -303,7 +304,7 @@ async fn set_thread_configuration(
 async fn subscribe_thread(
     id: Uuid,
     channel: tauri::ipc::Channel<ThreadUpdate>,
-    window: tauri::WebviewWindow,
+    window: tauri::Webview,
     threads: State<'_, Threads>,
     subscriptions: State<'_, Subscriptions>,
 ) -> Result<Uuid, ThreadError> {
@@ -318,7 +319,7 @@ async fn subscribe_thread(
 #[tauri::command]
 async fn subscribe_thread_list(
     channel: tauri::ipc::Channel<Vec<ThreadMetadata>>,
-    window: tauri::WebviewWindow,
+    window: tauri::Webview,
     threads: State<'_, Threads>,
     subscriptions: State<'_, Subscriptions>,
 ) -> Result<Uuid, ThreadError> {
@@ -333,7 +334,7 @@ async fn subscribe_thread_list(
 fn forward_subscription<T: serde::Serialize + Send + 'static>(
     mut receiver: tokio::sync::mpsc::UnboundedReceiver<T>,
     channel: tauri::ipc::Channel<T>,
-    window: tauri::WebviewWindow,
+    window: tauri::Webview,
     subscriptions: Subscriptions,
 ) -> Result<Uuid, ThreadError> {
     let subscription = Uuid::new_v4();
@@ -369,7 +370,7 @@ fn forward_subscription<T: serde::Serialize + Send + 'static>(
 #[tauri::command]
 fn unsubscribe_thread(
     subscription: Uuid,
-    window: tauri::WebviewWindow,
+    window: tauri::Webview,
     subscriptions: State<'_, Subscriptions>,
 ) {
     if let Ok(mut entries) = subscriptions.0.lock() {
@@ -387,7 +388,13 @@ fn unsubscribe_thread(
 pub fn run() {
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
-        .plugin(tauri_plugin_opener::init())
+        // Remote web tabs handle new-window requests themselves. The opener's
+        // automatic click interceptor would swallow their target="_blank" links.
+        .plugin(
+            tauri_plugin_opener::Builder::new()
+                .open_js_links_on_click(false)
+                .build(),
+        )
         .setup(|app| {
             let management = agent_management::AgentManagement::open(&app.path().app_data_dir()?)?;
             let threads = management.restore_threads()?;
@@ -426,35 +433,47 @@ pub fn run() {
                 }
             }
         })
-        .invoke_handler(tauri::generate_handler![
-            agent_catalog,
-            refresh_agent_catalog,
-            install_agent,
-            uninstall_agent,
-            authenticate_agent,
-            cancel_agent_authentication,
-            logout_agent,
-            select_working_folder,
-            select_files,
-            select_media,
-            snapshot_clipboard_image,
-            delete_thread,
-            list_threads,
-            create_thread,
-            delete_queued_message,
-            retry_queued_message,
-            subscribe_thread_list,
-            prepared_agents,
-            connect_thread,
-            reconnect_thread,
-            send_message,
-            release_files,
-            cancel_turn,
-            answer_permission,
-            set_thread_configuration,
-            subscribe_thread,
-            unsubscribe_thread
-        ])
+        .invoke_handler(|invoke| {
+            if invoke.message.webview_ref().label() != "main" {
+                invoke
+                    .resolver
+                    .reject("Application commands are restricted to the main webview");
+                return true;
+            }
+            let handler: fn(tauri::ipc::Invoke) -> bool = tauri::generate_handler![
+                browser::create_web_tab,
+                browser::web_tab_action,
+                browser::web_tab_state,
+                agent_catalog,
+                refresh_agent_catalog,
+                install_agent,
+                uninstall_agent,
+                authenticate_agent,
+                cancel_agent_authentication,
+                logout_agent,
+                select_working_folder,
+                select_files,
+                select_media,
+                snapshot_clipboard_image,
+                delete_thread,
+                list_threads,
+                create_thread,
+                delete_queued_message,
+                retry_queued_message,
+                subscribe_thread_list,
+                prepared_agents,
+                connect_thread,
+                reconnect_thread,
+                send_message,
+                release_files,
+                cancel_turn,
+                answer_permission,
+                set_thread_configuration,
+                subscribe_thread,
+                unsubscribe_thread
+            ];
+            handler(invoke)
+        })
         .build(tauri::generate_context!());
     match app {
         Ok(app) => app.run(lifecycle::on_event),

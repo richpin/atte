@@ -6,6 +6,7 @@ import { useI18n } from "../i18n";
 import { useTheme } from "../theme";
 import { renderMarkdown, safeWebUrl } from "./markdown-parser";
 import { type HighlightedCode, highlightCode } from "./syntax-highlighter";
+import { useWebLink } from "./web-link";
 
 const maximumFormattedSourceLength = 100_000;
 const copyFeedbackDuration = 2_000;
@@ -19,6 +20,7 @@ export type MarkdownProps = {
 
 export function Markdown(props: MarkdownProps) {
   const { locale, t } = useI18n();
+  const openWebLink = useWebLink();
   const { resolvedTheme } = useTheme();
   let body!: HTMLDivElement;
   let disposed = false;
@@ -218,7 +220,8 @@ export function Markdown(props: MarkdownProps) {
     const destination = link && safeWebUrl(link.getAttribute("href") ?? "");
     if (!destination) return;
     event.preventDefault();
-    void openUrl(destination).catch(() => undefined);
+    if (openWebLink) openWebLink(destination);
+    else void openUrl(destination).catch(() => undefined);
   }
 
   function openLinkFromKeyboard(event: KeyboardEvent) {

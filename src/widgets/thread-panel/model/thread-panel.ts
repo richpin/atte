@@ -2,8 +2,7 @@ import type { Accessor, Component } from "solid-js";
 import { createStore, produce } from "solid-js/store";
 
 export const THREAD_PANEL_DEFAULT_WIDTH = 360;
-export const THREAD_PANEL_MIN_WIDTH = 240;
-export const THREAD_PANEL_MAX_WIDTH = 600;
+export const THREAD_PANEL_MIN_WIDTH = 320;
 export const THREAD_CONTENT_MIN_WIDTH = 320;
 
 export type ThreadPanelContentProps = {
@@ -21,23 +20,25 @@ export type ThreadPanelState = {
   threadId: string;
   open: boolean;
   width: number;
+  fullWidth: boolean;
   tabs: ThreadPanelTab[];
   selectedTabId: string;
   nextTabNumber: number;
 };
 
 export function createThreadPanelModel(
-  createNewTab: (number: number) => ThreadPanelTab,
+  createNewTab: (number: number, threadId: string) => ThreadPanelTab,
 ) {
   const [panels, setPanels] = createStore<Record<string, ThreadPanelState>>({});
 
   function ensure(threadId: string, initialTab?: ThreadPanelTab) {
     if (!panels[threadId]) {
-      const tab = initialTab ?? createNewTab(1);
+      const tab = initialTab ?? createNewTab(1, threadId);
       setPanels(threadId, {
         threadId,
         open: false,
         width: THREAD_PANEL_DEFAULT_WIDTH,
+        fullWidth: false,
         tabs: [tab],
         selectedTabId: tab.id,
         nextTabNumber: initialTab ? 1 : 2,
@@ -65,7 +66,7 @@ export function createThreadPanelModel(
       setOpen(threadId, true);
       return;
     }
-    const tab = createNewTab(panel.nextTabNumber);
+    const tab = createNewTab(panel.nextTabNumber, threadId);
     setPanels(threadId, "nextTabNumber", panel.nextTabNumber + 1);
     openTab(threadId, tab);
   }
@@ -81,11 +82,11 @@ export function createThreadPanelModel(
     const index = panel.tabs.findIndex((tab) => tab.id === tabId);
     if (index < 0) return;
     if (panel.tabs.length === 1) {
-      const tab = createNewTab(panel.nextTabNumber);
+      const tab = createNewTab(1, threadId);
       setPanels(threadId, {
         tabs: [tab],
         selectedTabId: tab.id,
-        nextTabNumber: panel.nextTabNumber + 1,
+        nextTabNumber: 2,
       });
       return;
     }
@@ -101,11 +102,10 @@ export function createThreadPanelModel(
   function setWidth(threadId: string, width: number) {
     if (!Number.isFinite(width)) return;
     ensure(threadId);
-    setPanels(
-      threadId,
-      "width",
-      Math.min(THREAD_PANEL_MAX_WIDTH, Math.max(THREAD_PANEL_MIN_WIDTH, width)),
-    );
+    setPanels(threadId, {
+      width: Math.max(THREAD_PANEL_MIN_WIDTH, width),
+      fullWidth: false,
+    });
   }
 
   return {
@@ -118,6 +118,10 @@ export function createThreadPanelModel(
     selectTab,
     closeTab,
     setWidth,
+    setFullWidth: (threadId: string, fullWidth: boolean) => {
+      ensure(threadId);
+      setPanels(threadId, "fullWidth", fullWidth);
+    },
     forget: (threadId: string) =>
       setPanels(
         produce((panels) => {

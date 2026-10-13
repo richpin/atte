@@ -2,6 +2,7 @@ import { cleanup, render, screen } from "@solidjs/testing-library";
 import { batch, createSignal } from "solid-js";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { Markdown } from "./markdown";
+import { WebLinkProvider } from "./web-link";
 
 const openUrl = vi.hoisted(() => vi.fn(() => Promise.resolve()));
 
@@ -339,4 +340,56 @@ it("shows the complete source as plain text above the rendering safety limit", (
   expect(body?.dataset.fallback).toBe("true");
   expect(body?.textContent).toBe(source);
   expect(body?.querySelector("strong")).toBeNull();
+});
+
+it("routes mouse and keyboard links to the supplied web tab handler", () => {
+  const openWeb = vi.fn();
+  render(() => (
+    <WebLinkProvider onOpen={openWeb}>
+      <Markdown source="[Web](https://example.com/web)" variant="agent" />
+    </WebLinkProvider>
+  ));
+  const link = screen.getByRole("link");
+  link.dispatchEvent(
+    new MouseEvent("click", { bubbles: true, cancelable: true }),
+  );
+  link.dispatchEvent(
+    new KeyboardEvent("keydown", {
+      key: "Enter",
+      bubbles: true,
+      cancelable: true,
+    }),
+  );
+  expect(openWeb.mock.calls).toEqual([
+    ["https://example.com/web"],
+    ["https://example.com/web"],
+  ]);
+  expect(openUrl).not.toHaveBeenCalled();
+});
+
+it("inherits web link routing inside a thread without changing other Markdown", () => {
+  const openWeb = vi.fn();
+  render(() => (
+    <>
+      <WebLinkProvider onOpen={openWeb}>
+        <Markdown
+          source="[Thread](https://example.com/thread)"
+          variant="user"
+        />
+      </WebLinkProvider>
+      <Markdown source="[Other](https://example.com/other)" variant="agent" />
+    </>
+  ));
+  screen
+    .getByRole("link", { name: "Thread" })
+    .dispatchEvent(
+      new MouseEvent("click", { bubbles: true, cancelable: true }),
+    );
+  screen
+    .getByRole("link", { name: "Other" })
+    .dispatchEvent(
+      new MouseEvent("click", { bubbles: true, cancelable: true }),
+    );
+  expect(openWeb).toHaveBeenCalledWith("https://example.com/thread");
+  expect(openUrl).toHaveBeenCalledWith("https://example.com/other");
 });

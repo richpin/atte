@@ -84,7 +84,7 @@ pub(crate) fn on_event(app: &AppHandle, event: RunEvent) {
 
 #[cfg(target_os = "macos")]
 fn reopen(app: &AppHandle) -> tauri::Result<()> {
-    let window = match app.get_webview_window("main") {
+    let window = match app.get_window("main") {
         Some(window) => window,
         None => {
             let Some(config) = app
@@ -96,7 +96,10 @@ fn reopen(app: &AppHandle) -> tauri::Result<()> {
             else {
                 return Ok(());
             };
-            tauri::WebviewWindowBuilder::from_config(app, config)?.build()?
+            tauri::WebviewWindowBuilder::from_config(app, config)?
+                .build()?
+                .as_ref()
+                .window()
         }
     };
     window.unminimize()?;

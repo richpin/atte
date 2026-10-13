@@ -120,11 +120,19 @@ it("starts collapsed with a default tab and replaces the last closed tab", async
   await userEvent.click(screen.getByRole("button", { name: "새 탭 1 닫기" }));
   expect(screen.getAllByRole("tab")).toHaveLength(1);
   expect(screen.getByRole("tab", { selected: true }).textContent).toBe(
-    "새 탭 4",
+    "새 탭 1",
   );
   expect(screen.getByRole("complementary")).toBeTruthy();
   expect(document.activeElement).toBe(
-    screen.getByRole("tab", { name: "새 탭 4" }),
+    screen.getByRole("tab", { name: "새 탭 1" }),
+  );
+  await userEvent.click(screen.getByRole("button", { name: "새 탭 1 닫기" }));
+  expect(screen.getByRole("tab", { selected: true }).textContent).toBe(
+    "새 탭 1",
+  );
+  await userEvent.click(add);
+  expect(screen.getByRole("tab", { selected: true }).textContent).toBe(
+    "새 탭 2",
   );
 });
 
@@ -237,15 +245,19 @@ it("resizes through the separator, remembers each thread's width and clamps with
   expect(panel.style.flexBasis).toBe("0%");
   model.setOpen("one", true);
   expect(panel.style.flexBasis).toBe("50%");
-  resize(600);
+  resize(640);
   await waitFor(() =>
     expect(Number.parseFloat(panel.style.flexBasis)).toBeCloseTo(
-      (280 / 600) * 100,
+      (320 / 640) * 100,
     ),
   );
   expect(model.panel("one")?.width).toBeCloseTo(450);
-  resize(500);
+  resize(639);
   expect(panel.style.flexBasis).toBe("0%");
+  expect(screen.getByRole("main")).toBeTruthy();
+  expect(screen.queryByRole("complementary")).toBeNull();
+  expect(model.panel("one")?.open).toBe(true);
+  expect(handle).toHaveProperty("disabled", true);
   resize(900);
   expect(panel.style.flexBasis).toBe("50%");
   setThreadId("two");
@@ -258,4 +270,56 @@ it("resizes through the separator, remembers each thread's width and clamps with
   await waitFor(() => expect(model.panel("one")?.open).toBe(false));
   fireEvent.keyDown(handle, { key: "Enter" });
   await waitFor(() => expect(panel.style.flexBasis).toBe("50%"));
+});
+
+it("fills the thread body when the conversation collapses and restores a split when resized back", async () => {
+  const { model, handle, panel } = setup();
+  model.setOpen("one", true);
+  fireEvent.keyDown(handle, { key: "Home" });
+  await waitFor(() => expect(panel.style.flexBasis).toBe("100%"));
+  expect(model.panel("one")?.fullWidth).toBe(true);
+  expect(screen.queryByRole("main")).toBeNull();
+  expect(screen.getByRole("complementary")).toBeTruthy();
+  fireEvent.keyDown(handle, { key: "ArrowRight" });
+  await waitFor(() => expect(model.panel("one")?.fullWidth).toBe(false));
+  expect(screen.getByRole("main")).toBeTruthy();
+  expect(Number.parseFloat(panel.style.flexBasis)).toBeLessThan(100);
+});
+
+it("preserves tab content through full-width mode, folding and window resizing", async () => {
+  const { model, handle, panel, resize } = setup();
+  const disposed = vi.fn();
+  model.openTab("one", {
+    id: "persistent",
+    title: () => "Persistent",
+    content: () => {
+      onCleanup(disposed);
+      return <input aria-label="Preserved tab" />;
+    },
+  });
+  await userEvent.type(
+    screen.getByRole("textbox", { name: "Preserved tab" }),
+    "Keep this",
+  );
+  fireEvent.keyDown(handle, { key: "Home" });
+  await waitFor(() => expect(panel.style.flexBasis).toBe("100%"));
+  resize(639);
+  expect(panel.style.flexBasis).toBe("0%");
+  expect(screen.getByRole("main")).toBeTruthy();
+  expect(screen.queryByRole("complementary")).toBeNull();
+  expect(model.panel("one")?.fullWidth).toBe(true);
+  resize(1200);
+  expect(panel.style.flexBasis).toBe("100%");
+  model.setOpen("one", false);
+  expect(screen.getByRole("main")).toBeTruthy();
+  model.setOpen("one", true);
+  expect(panel.style.flexBasis).toBe("100%");
+  expect(screen.getByRole("textbox", { name: "Preserved tab" })).toHaveProperty(
+    "value",
+    "Keep this",
+  );
+  expect(disposed).not.toHaveBeenCalled();
+  model.setWidth("one", 700);
+  expect(model.panel("one")?.width).toBe(700);
+  expect(screen.getByRole("main")).toBeTruthy();
 });

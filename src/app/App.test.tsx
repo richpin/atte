@@ -14,6 +14,7 @@ const openUrl = vi.hoisted(() => vi.fn(() => Promise.resolve()));
 
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: vi.fn(),
+  isTauri: () => false,
   Channel: class {
     onmessage = () => {};
   },
@@ -4772,4 +4773,94 @@ it("retries the failed list subscription and keeps rows and connection errors du
   expect(
     await screen.findByRole("status", { name: "연결 오류" }),
   ).toBeDefined();
+});
+
+it("opens each conversation link in a new web tab and routes user and agent links alike", async () => {
+  const saved = {
+    id: "web-links",
+    title: "Web links thread",
+    workingFolder: "/work/project",
+    agentId: "codex",
+    status: "sessionReady",
+    authentication: "authenticated",
+    permissions: [],
+    queuedMessages: [],
+    turns: [
+      {
+        id: "turn-web",
+        message: "[User web](https://example.com/user)",
+        responseParts: [
+          {
+            kind: "text",
+            id: "response-web",
+            text: "[Agent web](https://example.com/agent)",
+          },
+        ],
+        stopReason: "end_turn",
+      },
+    ],
+  };
+  const original = vi.mocked(invoke).getMockImplementation();
+  vi.mocked(invoke).mockImplementation((command, args) => {
+    if (command === "list_threads") return Promise.resolve([saved]);
+    if (command === "subscribe_thread") return subscribeWith(args, saved);
+    if (command === "plugin:webview|get_all_webviews")
+      return Promise.resolve([]);
+    return original?.(command, args) ?? Promise.resolve();
+  });
+  render(() => <App />);
+  await userEvent.click(
+    await screen.findByRole("button", { name: saved.title }),
+  );
+  await userEvent.click(await screen.findByRole("link", { name: "User web" }));
+  expect(screen.getAllByRole("tab")).toHaveLength(1);
+  expect(screen.getByRole("textbox", { name: "웹 주소" })).toHaveProperty(
+    "value",
+    "https://example.com/user",
+  );
+  await userEvent.click(screen.getByRole("link", { name: "Agent web" }));
+  expect(screen.getAllByRole("tab")).toHaveLength(2);
+  expect(screen.getByRole("textbox", { name: "웹 주소" })).toHaveProperty(
+    "value",
+    "https://example.com/agent",
+  );
+  expect(openUrl).not.toHaveBeenCalled();
+});
+
+it("shows the thread body and keeps the sidebar open in a narrow thread layout", async () => {
+  const saved = {
+    id: "narrow-web",
+    title: "Narrow web thread",
+    workingFolder: "/work/project",
+    agentId: "codex",
+    status: "sessionReady",
+    authentication: "authenticated",
+    turns: [],
+    permissions: [],
+    queuedMessages: [],
+  };
+  const original = vi.mocked(invoke).getMockImplementation();
+  vi.mocked(invoke).mockImplementation((command, args) => {
+    if (command === "list_threads") return Promise.resolve([saved]);
+    if (command === "subscribe_thread") return subscribeWith(args, saved);
+    return original?.(command, args) ?? Promise.resolve();
+  });
+  render(() => <App />);
+  await userEvent.click(
+    await screen.findByRole("button", { name: saved.title }),
+  );
+  layoutWidth = 544;
+  const handle = screen.getByRole("separator", {
+    name: "프로젝트 패널 너비 조절",
+  });
+  resizeElement(handle.parentElement as HTMLElement, 544);
+  await userEvent.click(
+    screen.getByRole("button", { name: "프로젝트 패널 열기" }),
+  );
+  expect(screen.getByRole("button", { name: "사이드바 접기" })).toBeTruthy();
+  expect(
+    screen.queryByRole("complementary", { name: "프로젝트 패널" }),
+  ).toBeNull();
+  expect(screen.getByRole("main")).toBeTruthy();
+  expect((handle.nextElementSibling as HTMLElement).style.flexBasis).toBe("0%");
 });
