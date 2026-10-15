@@ -484,6 +484,14 @@ async fn session_titles_update_during_load_and_resume_without_being_overwritten(
             let mut agent = mock_agent();
             agent.env.insert("FIXTURE_MODE".into(), mode.into());
             let (store, id) = persist_remote_session(folder.path(), &agent).await;
+            let original = Threads::with_store(vec![agent.clone()], store.clone()).unwrap();
+            original.connect(id).unwrap();
+            settle(&original, id).await;
+            original
+                .send_message(id, "Historical input".into())
+                .unwrap();
+            settle(&original, id).await;
+            original.shutdown().await;
             agent.env.insert(
                 "TITLE_UPDATES_RESTORE".into(),
                 json!([
@@ -504,9 +512,18 @@ async fn session_titles_update_during_load_and_resume_without_being_overwritten(
 }
 
 #[tokio::test]
-async fn session_titles_received_before_first_input_disable_the_provisional_title() {
+async fn first_input_replaces_only_default_session_titles() {
     use serde_json::json;
-    for title in [json!("새 스레드"), json!(null)] {
+    for (title, expected) in [
+        (json!("새 스레드"), "First input"),
+        (json!(null), "First input"),
+        (json!(""), "First input"),
+        (json!("   "), "First input"),
+        (json!(" New Thread "), "First input"),
+        (json!("new THREAD"), "First input"),
+        (json!(" 새 스레드 "), "First input"),
+        (json!("Agent title"), "Agent title"),
+    ] {
         let folder = tempfile::tempdir().unwrap();
         let mut agent = mock_agent();
         agent.env.insert("TITLE_UPDATES_NEW".into(), json!([
@@ -535,15 +552,55 @@ async fn session_titles_received_before_first_input_disable_the_provisional_titl
         })
         .await
         .unwrap();
+        let mut list = threads.subscribe_list().unwrap();
+        list.recv().await.unwrap();
         threads
             .send_message(draft.id, "First input".into())
             .unwrap();
-        assert_eq!(
-            settle(&threads, draft.id).await.title,
-            title.as_str().unwrap_or_default()
-        );
+        assert_eq!(settle(&threads, draft.id).await.title, expected);
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while stream.recv().await.unwrap().title != expected {}
+            while list.recv().await.unwrap()[0].title != expected {}
+        })
+        .await
+        .unwrap();
+        threads
+            .send_message(draft.id, "Second input".into())
+            .unwrap();
+        assert_eq!(settle(&threads, draft.id).await.title, expected);
         threads.shutdown().await;
     }
+}
+
+#[tokio::test]
+async fn first_input_title_survives_restart_and_is_not_reapplied() {
+    let folder = tempfile::tempdir().unwrap();
+    let agent = mock_agent();
+    let store = std::sync::Arc::new(
+        atte_lib::storage::Store::open(&folder.path().join("atte.sqlite")).unwrap(),
+    );
+    let threads = Threads::with_store(vec![agent.clone()], store.clone()).unwrap();
+    let draft = threads.create(folder.path()).unwrap();
+    threads.shutdown().await;
+
+    let restored = Threads::with_store(vec![agent.clone()], store.clone()).unwrap();
+    restored.connect(draft.id).unwrap();
+    settle(&restored, draft.id).await;
+    let body = format!("  {}  ", "한글🙂제목".repeat(20));
+    let expected: String = body.trim().chars().take(60).collect();
+    restored.send_message(draft.id, body).unwrap();
+    assert_eq!(settle(&restored, draft.id).await.title, expected);
+    restored.shutdown().await;
+
+    let restarted = Threads::with_store(vec![agent], store).unwrap();
+    assert_eq!(restarted.get(draft.id).unwrap().title, expected);
+    restarted.connect(draft.id).unwrap();
+    settle(&restarted, draft.id).await;
+    restarted
+        .send_message(draft.id, "Second input".into())
+        .unwrap();
+    assert_eq!(settle(&restarted, draft.id).await.title, expected);
+    restarted.shutdown().await;
 }
 
 #[tokio::test]

@@ -722,7 +722,7 @@ impl Threads {
                 Entry {
                     state: Arc::new(Mutex::new(ThreadState {
                         list: list.clone(),
-                        use_prompt_title: false,
+                        use_prompt_title: last_prompt_at.is_none(),
                         published_failure: thread.failure.clone(),
                         pending_errors: Vec::new(),
                         thread,
@@ -1614,17 +1614,7 @@ impl Threads {
         current.thread.status = ThreadStatus::Running;
         current.thread.failure = None;
         current.thread.interrupted = false;
-        if current.use_prompt_title {
-            current.use_prompt_title = false;
-            current.thread.title = input.body.trim().chars().take(60).collect::<String>();
-            if current.thread.title.is_empty() {
-                current.thread.title = input
-                    .attachments
-                    .first()
-                    .map(|attachment| attachment.name.chars().take(60).collect())
-                    .unwrap_or_default();
-            }
-        }
+        current.apply_first_prompt_title(&input);
         current.thread.turns.push(Turn {
             id: turn,
             message: input.body,
@@ -2126,7 +2116,7 @@ struct ThreadState {
     store: Option<Arc<Store>>,
     media_store: Option<Arc<MediaStore>>,
     thread: Thread,
-    // Only a new draft may derive a provisional title from its first input.
+    // Only an unprompted thread may derive a provisional title from its first input.
     use_prompt_title: bool,
     confirmed_configuration: Vec<ThreadConfiguration>,
     desired_configuration: HashMap<String, DesiredConfiguration>,
@@ -2149,6 +2139,29 @@ struct DesiredConfiguration {
 }
 
 impl ThreadState {
+    fn apply_first_prompt_title(&mut self, input: &UserInput) {
+        if !self.use_prompt_title {
+            return;
+        }
+        self.use_prompt_title = false;
+        let title = self.thread.title.trim();
+        if !title.is_empty() && !title.eq_ignore_ascii_case("New Thread") && title != "새 스레드"
+        {
+            return;
+        }
+        let body = input.body.trim();
+        let source = if body.is_empty() {
+            input
+                .attachments
+                .first()
+                .map(|attachment| attachment.name.as_str())
+                .unwrap_or_default()
+        } else {
+            body
+        };
+        self.thread.title = source.chars().take(60).collect();
+    }
+
     fn record_prompt_attempt(&mut self) -> Result<(), ThreadError> {
         let timestamp = next_prompt_at();
         if let Some(store) = &self.store {
@@ -2326,6 +2339,7 @@ impl ThreadState {
         let turn = Uuid::new_v4();
         self.dispatching_queued = Some(queued.clone());
         self.thread.status = ThreadStatus::Running;
+        self.apply_first_prompt_title(&queued.input);
         self.thread.turns.push(Turn {
             id: turn,
             message: queued.input.body.clone(),
@@ -2594,7 +2608,6 @@ impl RuntimeUpdates {
         if state.generation != self.generation {
             return;
         }
-        state.use_prompt_title = false;
         let title = title.unwrap_or_default();
         if state.thread.title == title {
             return;
@@ -3203,6 +3216,56 @@ mod title_tests {
     }
 
     #[test]
+    fn first_queued_prompt_titles_are_published_and_persisted_only_when_dispatched() {
+        for initial_title in [" New Thread ", "Agent title"] {
+            let folder = tempfile::tempdir().unwrap();
+            let store = Arc::new(Store::open(&folder.path().join("atte.sqlite")).unwrap());
+            let threads = Threads::with_store(vec![prepared_codex()], store.clone()).unwrap();
+            let draft = threads.create(folder.path()).unwrap();
+            let updates = updates_for(&threads, draft.id);
+            updates.title_updated(Some(initial_title.into()));
+            let body = format!("  {}  ", "첫프롬프트🙂".repeat(20));
+            let expected = if initial_title == "Agent title" {
+                initial_title.to_string()
+            } else {
+                body.trim().chars().take(60).collect::<String>()
+            };
+            updates
+                .state
+                .lock()
+                .unwrap()
+                .enqueue(UserInput::text(body))
+                .unwrap();
+            assert_eq!(threads.get(draft.id).unwrap().title, initial_title);
+            assert_eq!(store.threads().unwrap()[0].title, initial_title);
+
+            let mut stream = threads.subscribe(draft.id).unwrap();
+            let mut list = threads.subscribe_list().unwrap();
+            stream.try_recv().unwrap();
+            list.try_recv().unwrap();
+            let prompt = {
+                let mut state = updates.state.lock().unwrap();
+                let prompt = state.prepare_next_queued_prompt().unwrap();
+                state.publish();
+                prompt
+            };
+            assert!(prompt.queued_message.is_some());
+            let ThreadUpdate::Patch { thread, .. } = stream.try_recv().unwrap() else {
+                panic!("expected first queued prompt patch");
+            };
+            assert_eq!(thread.metadata.title, expected);
+            assert_eq!(list.try_recv().unwrap()[0].title, expected);
+            assert_eq!(store.threads().unwrap()[0].title, expected);
+
+            // A later default ACP title must not re-enable first-input naming.
+            updates.title_updated(None);
+            let mut state = updates.state.lock().unwrap();
+            state.apply_first_prompt_title(&UserInput::text("Second input".into()));
+            assert_eq!(state.thread.title, "");
+        }
+    }
+
+    #[test]
     fn context_usage_replaces_snapshots_independently_of_turn_status_and_rejects_stale_updates() {
         let folder = tempfile::tempdir().unwrap();
         let threads = Threads::default();
@@ -3416,9 +3479,9 @@ mod title_tests {
         stream.try_recv().unwrap();
         list.try_recv().unwrap();
 
-        // An explicit title equal to the default still disables the provisional title.
+        // Receiving a default title does not consume the first-input fallback.
         updates.title_updated(Some(draft.title.clone()));
-        assert!(!updates.state.lock().unwrap().use_prompt_title);
+        assert!(updates.state.lock().unwrap().use_prompt_title);
         assert!(stream.try_recv().is_err());
         assert!(list.try_recv().is_err());
 
