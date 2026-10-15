@@ -177,6 +177,17 @@ export const en = {
       cancel: "Cancel sign-in",
     },
     reconnect: "Reconnect",
+    openIn: {
+      label: "Open in",
+      loading: "Loading applications…",
+      empty: "No applications available for this project",
+      retry: "Could not load applications. Retry",
+      folderMissing: "The working folder could not be found.",
+      appMissing:
+        "The application is no longer available for this project. Reopen the menu to refresh.",
+      threadUnavailable: "The thread is unavailable. Select the thread again.",
+      openFailed: "The working folder could not be opened. Try again.",
+    },
     message: "Message",
     messagePlaceholder: "Type a message",
     stop: "Stop current task",

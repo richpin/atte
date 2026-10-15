@@ -184,6 +184,18 @@ export const ko = {
       cancel: "로그인 취소",
     },
     reconnect: "다시 연결",
+    openIn: {
+      label: "다음으로 열기",
+      loading: "앱을 불러오는 중…",
+      empty: "이 프로젝트를 열 수 있는 앱이 없습니다",
+      retry: "앱을 불러오지 못했습니다. 다시 시도",
+      folderMissing: "작업 폴더를 찾을 수 없습니다.",
+      appMissing:
+        "이 프로젝트에서 앱을 더 이상 사용할 수 없습니다. 메뉴를 다시 열어 목록을 갱신해주세요.",
+      threadUnavailable:
+        "스레드를 사용할 수 없습니다. 스레드를 다시 선택해주세요.",
+      openFailed: "작업 폴더를 열지 못했습니다. 다시 시도해주세요.",
+    },
     message: "메시지",
     messagePlaceholder: "메시지를 입력하세요",
     stop: "현재 작업 중단",

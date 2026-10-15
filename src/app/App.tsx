@@ -3,6 +3,7 @@ import { makeResizeObserver } from "@solid-primitives/resize-observer";
 import { QueryClient, QueryClientProvider } from "@tanstack/solid-query";
 import { isTauri } from "@tauri-apps/api/core";
 import { AgentAuthenticationProvider } from "features/agent-authentication";
+import { OpenWorkingFolderMenu } from "features/open-working-folder";
 import { listenForWebTabs } from "features/web-browser";
 import {
   Bot,
@@ -372,6 +373,7 @@ function ShellContent(props: { shell: AppShellModel }) {
                   <RotateCcw aria-hidden="true" class="size-4" />
                   {t("thread.reconnect")}
                 </DropdownMenuItem>
+                <OpenWorkingFolderMenu threadId={threads.selectedThreadId()} />
               </DropdownMenuContent>
             </DropdownMenu>
           </div>

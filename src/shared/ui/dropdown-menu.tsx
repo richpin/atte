@@ -151,13 +151,15 @@ const DropdownMenuSubContent = <T extends ValidComponent = "div">(
 ) => {
   const [, rest] = splitProps(props as DropdownMenuSubContentProps, ["class"]);
   return (
-    <DropdownMenuPrimitive.SubContent
-      class={cn(
-        "min-w-44 origin-[var(--kb-menu-content-transform-origin)] overflow-hidden rounded-xl border border-line bg-menu p-1 text-xs text-ink shadow-md animate-in",
-        props.class,
-      )}
-      {...rest}
-    />
+    <DropdownMenuPrimitive.Portal>
+      <DropdownMenuPrimitive.SubContent
+        class={cn(
+          "min-w-44 origin-[var(--kb-menu-content-transform-origin)] overflow-hidden rounded-xl border border-line bg-menu p-1 text-xs text-ink shadow-md animate-in",
+          props.class,
+        )}
+        {...rest}
+      />
+    </DropdownMenuPrimitive.Portal>
   );
 };
 

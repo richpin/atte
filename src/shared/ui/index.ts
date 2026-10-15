@@ -28,6 +28,9 @@ export {
   DropdownMenuItem,
   DropdownMenuRadioGroup,
   DropdownMenuRadioItem,
+  DropdownMenuSub,
+  DropdownMenuSubContent,
+  DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from "./dropdown-menu";
 export { LanguageMenu } from "./language-menu";

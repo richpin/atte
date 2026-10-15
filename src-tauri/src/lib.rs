@@ -7,6 +7,7 @@ mod file_selection;
 mod installation;
 mod installation_files;
 mod lifecycle;
+mod open_working_folder;
 pub mod storage;
 pub mod thread;
 
@@ -452,6 +453,8 @@ pub fn run() {
                 cancel_agent_authentication,
                 logout_agent,
                 select_working_folder,
+                open_working_folder::list_working_folder_apps,
+                open_working_folder::open_working_folder,
                 select_files,
                 select_media,
                 snapshot_clipboard_image,
