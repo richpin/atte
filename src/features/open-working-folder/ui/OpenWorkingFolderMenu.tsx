@@ -1,5 +1,5 @@
 import { Image } from "@kobalte/core/image";
-import { AppWindow, FolderOpen } from "lucide-solid";
+import { AppWindow, Ellipsis, FolderOpen } from "lucide-solid";
 import { useI18n } from "shared/i18n";
 import {
   DropdownMenuItem,
@@ -9,7 +9,11 @@ import {
   showErrorToast,
 } from "shared/ui";
 import { createResource, createSignal, For, Show } from "solid-js";
-import { listWorkingFolderApps, openWorkingFolder } from "../api/apps";
+import {
+  listWorkingFolderApps,
+  openWorkingFolder,
+  openWorkingFolderWithAppPicker,
+} from "../api/apps";
 
 export function OpenWorkingFolderMenu(props: { threadId: string | undefined }) {
   const { t } = useI18n();
@@ -20,12 +24,19 @@ export function OpenWorkingFolderMenu(props: { threadId: string | undefined }) {
   );
   const [opening, setOpening] = createSignal(false);
 
-  async function open(target: string) {
+  async function open(target?: string) {
     const id = props.threadId;
     if (!id || opening()) return;
     setOpening(true);
     try {
-      await openWorkingFolder(id, target);
+      if (target === undefined) {
+        await openWorkingFolderWithAppPicker(
+          id,
+          t("thread.openIn.chooseApplication"),
+        );
+      } else {
+        await openWorkingFolder(id, target);
+      }
     } catch (error) {
       const key =
         error === "folderMissing"
@@ -34,7 +45,9 @@ export function OpenWorkingFolderMenu(props: { threadId: string | undefined }) {
             ? "appMissing"
             : error === "threadUnavailable"
               ? "threadUnavailable"
-              : "openFailed";
+              : error === "invalidApplication"
+                ? "invalidApplication"
+                : "openFailed";
       showErrorToast(t(`thread.openIn.${key}`));
     } finally {
       setOpening(false);
@@ -102,6 +115,13 @@ export function OpenWorkingFolderMenu(props: { threadId: string | undefined }) {
               </Show>
             </Show>
           </Show>
+          <DropdownMenuItem
+            disabled={opening() || !props.threadId}
+            onSelect={() => void open()}
+          >
+            <Ellipsis aria-hidden="true" class="size-4" />
+            {t("thread.openIn.otherApplication")}
+          </DropdownMenuItem>
         </DropdownMenuSubContent>
       </DropdownMenuSub>
     </Show>

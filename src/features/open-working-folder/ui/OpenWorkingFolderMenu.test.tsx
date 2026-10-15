@@ -102,7 +102,7 @@ it("loads installed apps after Reconnect with original-color icons and opens the
   expect(cursor.querySelector("svg")).toBeTruthy();
   expect(
     screen.getAllByRole("menuitem").map((item) => item.textContent),
-  ).toEqual(["Reconnect", "Open in", "Finder", "Xcode"]);
+  ).toEqual(["Reconnect", "Open in", "Finder", "Xcode", "Other…"]);
   expect(invoke).toHaveBeenCalledWith("list_working_folder_apps", {
     threadId: "thread-a",
   });
@@ -187,7 +187,7 @@ it("shows an empty state when macOS returns no handlers", async () => {
   setup();
   await openSubmenu();
   const item = await screen.findByRole("menuitem", {
-    name: "No applications available for this project",
+    name: "No applications available for this folder",
   });
   expect(item.hasAttribute("data-disabled")).toBe(true);
 });
@@ -218,4 +218,64 @@ it("discards stale discovery when the selected thread changes", async () => {
     threadId: "thread-b",
     target: "another-native-id",
   });
+});
+
+it("opens the native app picker for the originating thread and treats cancellation quietly", async () => {
+  let complete!: () => void;
+  invoke.mockImplementation((command: string) =>
+    command === "list_working_folder_apps"
+      ? Promise.resolve(applications)
+      : new Promise<void>((resolve) => {
+          complete = resolve;
+        }),
+  );
+  const { setThreadId } = setup();
+  await openSubmenu();
+  await userEvent.click(screen.getByRole("menuitem", { name: "Other…" }));
+  expect(invoke).toHaveBeenCalledWith("open_working_folder_with_app_picker", {
+    threadId: "thread-a",
+    dialogTitle: "Choose an application",
+  });
+  setThreadId("thread-b");
+  complete();
+  await screen.findByRole("button", { name: "Thread menu" });
+  expect(screen.queryByRole("alert")).toBeNull();
+  expect(
+    invoke.mock.calls.some(([command]) => command === "open_working_folder"),
+  ).toBe(false);
+});
+
+it("offers the app picker even when OS discovery fails", async () => {
+  invoke.mockImplementation((command: string) =>
+    command === "list_working_folder_apps"
+      ? Promise.reject("discoveryFailed")
+      : Promise.resolve(),
+  );
+  setup();
+  await openSubmenu();
+  expect(
+    await screen.findByRole("menuitem", {
+      name: "Could not load applications. Retry",
+    }),
+  ).toBeTruthy();
+  await userEvent.click(screen.getByRole("menuitem", { name: "Other…" }));
+  expect(invoke).toHaveBeenCalledWith("open_working_folder_with_app_picker", {
+    threadId: "thread-a",
+    dialogTitle: "Choose an application",
+  });
+});
+
+it("reports an invalid selection from the native picker", async () => {
+  invoke.mockImplementation((command: string) =>
+    command === "list_working_folder_apps"
+      ? Promise.resolve([])
+      : Promise.reject("invalidApplication"),
+  );
+  setup();
+  await openSubmenu();
+  await userEvent.click(screen.getByRole("menuitem", { name: "Other…" }));
+  expect(await screen.findByRole("alert")).toHaveProperty(
+    "textContent",
+    "Choose a valid macOS application (.app).",
+  );
 });

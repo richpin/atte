@@ -455,6 +455,7 @@ pub fn run() {
                 select_working_folder,
                 open_working_folder::list_working_folder_apps,
                 open_working_folder::open_working_folder,
+                open_working_folder::open_working_folder_with_app_picker,
                 select_files,
                 select_media,
                 snapshot_clipboard_image,

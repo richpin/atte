@@ -179,12 +179,15 @@ export const en = {
     reconnect: "Reconnect",
     openIn: {
       label: "Open in",
+      otherApplication: "Other…",
+      chooseApplication: "Choose an application",
+      invalidApplication: "Choose a valid macOS application (.app).",
       loading: "Loading applications…",
-      empty: "No applications available for this project",
+      empty: "No applications available for this folder",
       retry: "Could not load applications. Retry",
       folderMissing: "The working folder could not be found.",
       appMissing:
-        "The application is no longer available for this project. Reopen the menu to refresh.",
+        "The application is no longer available for this folder. Reopen the menu to refresh.",
       threadUnavailable: "The thread is unavailable. Select the thread again.",
       openFailed: "The working folder could not be opened. Try again.",
     },

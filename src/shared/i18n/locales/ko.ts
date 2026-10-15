@@ -186,12 +186,15 @@ export const ko = {
     reconnect: "다시 연결",
     openIn: {
       label: "다음으로 열기",
+      otherApplication: "다른 앱…",
+      chooseApplication: "앱 선택",
+      invalidApplication: "유효한 macOS 앱(.app)을 선택해주세요.",
       loading: "앱을 불러오는 중…",
-      empty: "이 프로젝트를 열 수 있는 앱이 없습니다",
+      empty: "이 폴더를 열 수 있는 앱이 없습니다",
       retry: "앱을 불러오지 못했습니다. 다시 시도",
       folderMissing: "작업 폴더를 찾을 수 없습니다.",
       appMissing:
-        "이 프로젝트에서 앱을 더 이상 사용할 수 없습니다. 메뉴를 다시 열어 목록을 갱신해주세요.",
+        "이 폴더에서 앱을 더 이상 사용할 수 없습니다. 메뉴를 다시 열어 목록을 갱신해주세요.",
       threadUnavailable:
         "스레드를 사용할 수 없습니다. 스레드를 다시 선택해주세요.",
       openFailed: "작업 폴더를 열지 못했습니다. 다시 시도해주세요.",

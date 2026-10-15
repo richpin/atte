@@ -13,3 +13,13 @@ export function listWorkingFolderApps(threadId: string) {
 export function openWorkingFolder(threadId: string, target: string) {
   return invoke<void>("open_working_folder", { threadId, target });
 }
+
+export function openWorkingFolderWithAppPicker(
+  threadId: string,
+  dialogTitle: string,
+) {
+  return invoke<void>("open_working_folder_with_app_picker", {
+    threadId,
+    dialogTitle,
+  });
+}
