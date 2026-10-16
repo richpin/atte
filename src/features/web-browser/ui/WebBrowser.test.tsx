@@ -45,6 +45,7 @@ beforeEach(() => {
   native.state.mockResolvedValue({
     url: "https://example.com/",
     title: "Example",
+    faviconUrl: "https://example.com/favicon.ico",
     loading: false,
     canGoBack: true,
     canGoForward: false,
@@ -59,6 +60,7 @@ afterEach(() => {
 function setup(initialUrl?: string) {
   const [visible, setVisible] = createSignal(true);
   const title = vi.fn();
+  const favicon = vi.fn();
   const rendered = render(() => (
     <I18nProvider>
       <WebBrowser
@@ -67,10 +69,11 @@ function setup(initialUrl?: string) {
         initialUrl={initialUrl}
         visible={visible()}
         onTitle={title}
+        onFavicon={favicon}
       />
     </I18nProvider>
   ));
-  return { ...rendered, setVisible, title };
+  return { ...rendered, setVisible, title, favicon };
 }
 
 it("waits for an address, rejects unsafe schemes and opens localhost", async () => {
@@ -206,4 +209,26 @@ it("does not scan application overlays for retained hidden tabs", async () => {
     scan.mock.calls.some(([selector]) => selector.includes('[role="dialog"]')),
   ).toBe(false);
   changed.remove();
+});
+
+it("updates the favicon from page state and clears it when navigating", async () => {
+  const { favicon } = setup("https://example.com/");
+  await waitFor(() =>
+    expect(favicon).toHaveBeenLastCalledWith("https://example.com/favicon.ico"),
+  );
+  const input = screen.getByRole("textbox", { name: "웹 주소" });
+  fireEvent.input(input, { target: { value: "https://example.com/next" } });
+  fireEvent.submit(input.closest("form") as HTMLFormElement);
+  expect(favicon).toHaveBeenLastCalledWith(null);
+  native.state.mockResolvedValue({
+    url: "https://example.org/redirected",
+    title: "Redirected",
+    faviconUrl: "https://example.org/icon.svg",
+    loading: false,
+    canGoBack: true,
+    canGoForward: false,
+  });
+  await waitFor(() =>
+    expect(favicon).toHaveBeenLastCalledWith("https://example.org/icon.svg"),
+  );
 });

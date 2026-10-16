@@ -6,6 +6,7 @@ import {
   waitFor,
 } from "@solidjs/testing-library";
 import userEvent from "@testing-library/user-event";
+import { prepareFileChanges } from "shared/diff";
 import { I18nProvider } from "shared/i18n";
 import { createSignal, onCleanup } from "solid-js";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
@@ -89,6 +90,32 @@ function setup() {
   }
   return { model, setThreadId, setActive, handle, panel, resize };
 }
+
+it("reuses a turn's changes tab and preserves its file list alongside web tabs", async () => {
+  const { model } = setup();
+  const files = await prepareFileChanges([
+    { path: "/project/a.ts", comparisons: [{ before: "old", after: "new" }] },
+  ]);
+  model.openChangesTab("one", "turn-1", files);
+  const trigger = screen.getByRole("button", { name: /a.ts/ });
+  expect(trigger.getAttribute("aria-expanded")).toBe("false");
+  // Keep the renderer closed here; its own tests cover asynchronous resources.
+  model.openChangesTab("one", "turn-1", files);
+  expect(
+    model.panel("one")?.tabs.filter((tab) => tab.id === "changes:turn-1"),
+  ).toHaveLength(1);
+  model.newTab("one");
+  expect(screen.getByRole("button", { name: "웹" })).toBeTruthy();
+  model.selectTab("one", "changes:turn-1");
+  expect(screen.getByRole("button", { name: /a.ts/ })).toBe(trigger);
+  model.setOpen("one", false);
+  model.openChangesTab("one", "turn-1", files);
+  expect(screen.getByRole("button", { name: /a.ts/ })).toBe(trigger);
+  model.openChangesTab("one", "turn-2", files);
+  expect(
+    model.panel("one")?.tabs.filter((tab) => tab.id.startsWith("changes:")),
+  ).toHaveLength(2);
+});
 
 it("starts collapsed with a default tab and replaces the last closed tab", async () => {
   const { model } = setup();

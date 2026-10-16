@@ -5,6 +5,7 @@ import { Webview } from "@tauri-apps/api/webview";
 export type WebTabState = {
   url: string;
   title: string;
+  faviconUrl: string | null;
   loading: boolean;
   canGoBack: boolean;
   canGoForward: boolean;

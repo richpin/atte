@@ -13,6 +13,7 @@ export type ThreadPanelContentProps = {
 export type ThreadPanelTab = {
   id: string;
   title: Accessor<string>;
+  icon?: Component<{ class?: string }>;
   content: Component<ThreadPanelContentProps>;
 };
 

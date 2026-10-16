@@ -159,7 +159,7 @@ export type ToolContent =
         resource?: { uri?: string };
       };
     }
-  | { type: "diff"; path: string }
+  | { type: "diff"; path: string; oldText?: string | null; newText: string }
   | { type: "terminal"; terminalId: string };
 
 export interface Plan {

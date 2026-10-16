@@ -76,7 +76,7 @@ it("shows failure details only when expanded and marks unsupported result types"
           status: "failed",
           rawOutput: "Permission denied\nTry again",
           content: [
-            { type: "diff", path: "/project/file.ts" },
+            { type: "diff", path: "/project/file.ts", newText: "new content" },
             { type: "terminal", terminalId: "term-1" },
           ],
         }}

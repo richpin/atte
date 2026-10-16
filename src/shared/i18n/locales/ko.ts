@@ -5,6 +5,19 @@ type Localized<T> = {
 };
 
 export const ko = {
+  diff: {
+    title: "변경 사항",
+    tabTitle: "변경 사항",
+    files: "파일 {{count}}개 변경",
+    showFullCode: "전체 코드 보기",
+    showChangesOnly: "변경 부분만 보기",
+    edit: "수정 내역 {{number}}",
+    view: "변경 사항 보기",
+    loading: "변경 사항 불러오는 중…",
+    failed: "변경 사항을 표시하지 못했습니다.",
+    reportedOnly:
+      "읽기 전용 · 에이전트가 이번 턴에 보고한 변경입니다. 보고되지 않은 변경은 포함하지 않습니다.",
+  },
   markdown: {
     code: {
       copy: "코드 복사",

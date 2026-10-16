@@ -1,5 +1,5 @@
 import * as Tabs from "@kobalte/core/tabs";
-import { Plus, X } from "lucide-solid";
+import { Globe, Plus, X } from "lucide-solid";
 import { useI18n } from "shared/i18n";
 import { Button } from "shared/ui";
 import { createEffect, For } from "solid-js";
@@ -60,9 +60,18 @@ export function ThreadPanel(props: {
                   ref={(element) => triggers.set(tab.id, element)}
                   value={tab.id}
                   title={tab.title()}
-                  class="h-full min-w-20 max-w-44 truncate px-3 text-left text-xs text-muted outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-accent data-[selected]:text-ink"
+                  class="flex h-full min-w-20 max-w-44 items-center gap-2 px-3 text-left text-xs text-muted outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-accent data-[selected]:text-ink"
                 >
-                  {tab.title()}
+                  <span
+                    aria-hidden="true"
+                    class="flex size-3.5 shrink-0 items-center justify-center"
+                  >
+                    <Dynamic
+                      component={tab.icon ?? Globe}
+                      class="size-3.5 shrink-0"
+                    />
+                  </span>
+                  <span class="truncate">{tab.title()}</span>
                 </Tabs.Trigger>
                 <Button
                   variant="ghost"

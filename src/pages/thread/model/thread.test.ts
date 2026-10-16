@@ -3,7 +3,13 @@ import { invoke } from "@tauri-apps/api/core";
 import { createComputed, createRoot, onCleanup } from "solid-js";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createThreadModel } from "./thread";
-import type { Thread, ThreadMetadata, ThreadUpdate } from "./types";
+import { collectTurnChanges } from "./turn-changes";
+import type {
+  ResponsePart,
+  Thread,
+  ThreadMetadata,
+  ThreadUpdate,
+} from "./types";
 
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: vi.fn(),
@@ -1224,6 +1230,57 @@ it("preserves text and tool order while updating only the matching call", async 
     id: "tool-b",
     tool: { title: "Test", status: "failed", rawOutput: "Failure" },
   });
+});
+
+it("preserves reported file versions in snapshots and repeated tool updates", async () => {
+  const model = setup();
+  const part: Extract<ResponsePart, { kind: "tool" }> = {
+    kind: "tool",
+    id: "edit-file",
+    tool: {
+      status: "completed",
+      content: [
+        {
+          type: "diff",
+          path: "/project/a.ts",
+          oldText: "before",
+          newText: "after",
+        },
+      ],
+    },
+  };
+  await open(
+    model,
+    "A",
+    thread("A", {
+      turns: [
+        {
+          id: "turn",
+          message: "",
+          stopReason: null,
+          responseParts: [structuredClone(part)],
+        },
+      ],
+    }),
+  );
+  const receive = stream("A");
+  const update: ThreadUpdate = {
+    kind: "toolUpdate",
+    threadId: "A",
+    turnId: "turn",
+    part,
+  };
+  receive(structuredClone(update));
+  receive(structuredClone(update));
+  const current = model.thread()?.turns[0];
+  if (!current) throw new Error("missing turn");
+  expect(current.responseParts).toHaveLength(1);
+  expect(collectTurnChanges(current)).toEqual([
+    {
+      path: "/project/a.ts",
+      comparisons: [{ before: "before", after: "after" }],
+    },
+  ]);
 });
 
 it("replaces plan snapshots in place without altering surrounding response parts", async () => {

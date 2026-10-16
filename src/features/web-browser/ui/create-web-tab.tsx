@@ -3,6 +3,7 @@ import { useI18n } from "shared/i18n";
 import { Button } from "shared/ui";
 import { createSignal, Show } from "solid-js";
 import { WebBrowser } from "./WebBrowser";
+import { WebTabIcon } from "./WebTabIcon";
 
 export function createWebTab(
   threadId: string,
@@ -14,8 +15,12 @@ export function createWebTab(
   const [title, setTitle] = createSignal(
     options.url ? new URL(options.url).host : "",
   );
+  const [favicon, setFavicon] = createSignal<string | null>(null);
   return {
     id,
+    icon: (props: { class?: string }) => (
+      <WebTabIcon src={favicon()} class={props.class} />
+    ),
     title: () =>
       web()
         ? title() || t("webBrowser.title")
@@ -39,6 +44,7 @@ export function createWebTab(
           initialUrl={options.url}
           visible={props.visible}
           onTitle={setTitle}
+          onFavicon={setFavicon}
         />
       </Show>
     ),

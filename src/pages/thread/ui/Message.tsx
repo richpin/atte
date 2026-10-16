@@ -1,4 +1,5 @@
 import { ChevronDown } from "lucide-solid";
+import type { PreparedFileChange } from "shared/diff";
 import { type TranslationKey, useI18n } from "shared/i18n";
 import { AgentIcon, Markdown } from "shared/ui";
 import {
@@ -17,6 +18,7 @@ import { Plan } from "./Plan";
 import { PlanContent } from "./PlanContent";
 import { Thought } from "./Thought";
 import { ToolCall } from "./ToolCall";
+import { TurnChangesSummary } from "./TurnChangesSummary";
 
 const collapsedLines = 20;
 
@@ -107,6 +109,8 @@ export function Message(props: {
   approvalPending?: boolean;
   permissionToolIds?: string[];
   interrupted?: boolean;
+  changesActiveTurnId?: string;
+  onOpenChanges?: (turnId: string, files: PreparedFileChange[]) => void;
 }) {
   const { t } = useI18n();
   const responseStatus = () =>
@@ -216,6 +220,15 @@ export function Message(props: {
                 </Switch>
               )}
             </Index>
+            <TurnChangesSummary
+              turn={turn()}
+              active={
+                turn().id ===
+                (props.changesActiveTurnId ?? props.streamingTurnId)
+              }
+              permissionToolIds={props.permissionToolIds}
+              onOpen={props.onOpenChanges}
+            />
             <Show when={turn().id === props.respondingTurnId}>
               <div
                 role="status"

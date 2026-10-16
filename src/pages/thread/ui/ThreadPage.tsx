@@ -3,6 +3,7 @@ import {
   SignInDialog,
   useAgentAuthentication,
 } from "features/agent-authentication";
+import type { PreparedFileChange } from "shared/diff";
 import { useI18n } from "shared/i18n";
 import { createEffect, createSignal, Show, untrack } from "solid-js";
 import { createStore } from "solid-js/store";
@@ -23,6 +24,7 @@ export function ThreadPage(props: {
   model: ThreadModel;
   agents: PreparedAgent[];
   onManage: () => void;
+  onOpenChanges?: (turnId: string, files: PreparedFileChange[]) => void;
 }) {
   const { t } = useI18n();
   const authentication = useAgentAuthentication();
@@ -231,6 +233,8 @@ export function ThreadPage(props: {
                 </Show>
                 <Message
                   turns={thread()?.turns ?? []}
+                  changesActiveTurnId={streamingTurnId()}
+                  onOpenChanges={props.onOpenChanges}
                   streamingTurnId={
                     !model.subscriptionError() ? streamingTurnId() : undefined
                   }
@@ -241,7 +245,7 @@ export function ThreadPage(props: {
                       ? activeTurnId()
                       : undefined
                   }
-                  permissionToolIds={thread()?.permissions.map(
+                  permissionToolIds={thread()?.permissions?.map(
                     (request) => request.toolCallId,
                   )}
                   interrupted={thread()?.interrupted}

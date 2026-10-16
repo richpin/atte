@@ -18,6 +18,7 @@ export type WebBrowserOptions = {
   initialUrl?: string;
   visible: boolean;
   onTitle: (title: string) => void;
+  onFavicon?: (url: string | null) => void;
 };
 
 export function createWebBrowserModel(
@@ -31,6 +32,7 @@ export function createWebBrowserModel(
   const [state, setState] = createSignal<WebTabState>({
     url: props.initialUrl ?? "",
     title: "",
+    faviconUrl: null,
     loading: false,
     canGoBack: false,
     canGoForward: false,
@@ -99,6 +101,7 @@ export function createWebBrowserModel(
     retryUrl = url;
     setCreating(true);
     setError(false);
+    props.onFavicon?.(null);
     creation = (async () => {
       try {
         const created = await createWebview(props.id, props.threadId, url);
@@ -125,6 +128,7 @@ export function createWebBrowserModel(
     url?: string,
   ) {
     setError(false);
+    props.onFavicon?.(null);
     try {
       await webTabAction(props.id, kind, url);
       if (!disposed) {
@@ -155,7 +159,7 @@ export function createWebBrowserModel(
   });
 
   // Read native state only for the visible tab. This also captures SPA URL and
-  // history changes without injecting scripts or replacing WebKit's delegates.
+  // history changes without replacing WebKit's delegates.
   createEffect(() => {
     if (!ready() || !props.visible) return;
     let cancelled = false;
@@ -166,6 +170,7 @@ export function createWebBrowserModel(
         if (cancelled || disposed) return;
         const previous = state();
         setState(next);
+        props.onFavicon?.(next.faviconUrl ?? null);
         if (
           next.url &&
           next.url !== previous.url &&

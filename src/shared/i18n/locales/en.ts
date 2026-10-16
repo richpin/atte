@@ -1,4 +1,17 @@
 export const en = {
+  diff: {
+    title: "Changes",
+    tabTitle: "Changes",
+    files: "{{count}} files changed",
+    showFullCode: "Show full code",
+    showChangesOnly: "Show changes only",
+    edit: "Edit {{number}}",
+    view: "View changes",
+    loading: "Loading diff…",
+    failed: "Couldn’t display changes.",
+    reportedOnly:
+      "Read-only · Changes reported by the agent for this turn. Unreported changes are not included.",
+  },
   markdown: {
     code: {
       copy: "Copy code",

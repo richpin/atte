@@ -407,6 +407,10 @@ function ShellContent(props: { shell: AppShellModel }) {
             }}
           >
             <ThreadPage
+              onOpenChanges={(turnId, files) => {
+                const id = threads.selectedThreadId();
+                if (id) shell.threadPanels.openChangesTab(id, turnId, files);
+              }}
               active={shell.view() === "thread"}
               showInfoCard={showInfoCard()}
               model={threads}
