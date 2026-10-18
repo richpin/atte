@@ -20,8 +20,10 @@ import {
   Show,
 } from "solid-js";
 import { subscribeFiles } from "../api/files";
+import { imageMime, isSvg } from "../lib/file-kind";
 import { dirty, type FilesModel, treeWidth, within } from "../model/files";
 import type { FilesManager } from "../model/manager";
+import { FileImagePreview, SvgPreview } from "./FileImagePreview";
 
 export function WorkspaceFiles(props: {
   model: FilesModel;
@@ -37,6 +39,11 @@ export function WorkspaceFiles(props: {
   const [width, setWidth] = createSignal(360);
   const [anchor, setAnchor] = createSignal({ width: 360, tree: 140 });
   const [comparing, setComparing] = createSignal(false);
+  const [sourcePath, setSourcePath] = createSignal<string>();
+  const svgPreview = () => {
+    const path = model.selected();
+    return !!path && isSvg(path) && sourcePath() !== path;
+  };
   const dirtyKey = createMemo(() =>
     model
       .pending()
@@ -260,6 +267,7 @@ export function WorkspaceFiles(props: {
                 if (!directory) {
                   setFatal(false);
                   setComparing(false);
+                  setSourcePath(undefined);
                   void model.open(path);
                 }
               }}
@@ -285,9 +293,23 @@ export function WorkspaceFiles(props: {
           minSize="160px"
           class="flex min-h-0 min-w-0 flex-col overflow-hidden"
         >
+          <Show when={model.selected() && !model.current()}>
+            <div class="flex min-h-9 shrink-0 items-center gap-1 border-b border-line px-2 text-xs">
+              <span class="min-w-0 flex-1 truncate" title={model.selected()}>
+                {model.selected()}
+              </span>
+              <Show when={imageMime(model.selected() ?? "")}>
+                <span>{t("files.readOnly")}</span>
+              </Show>
+            </div>
+          </Show>
           <Show
             when={model.current()}
-            fallback={<p class="p-3 text-xs text-muted">{t("files.select")}</p>}
+            fallback={
+              <Show when={!model.selected()}>
+                <p class="p-3 text-xs text-muted">{t("files.select")}</p>
+              </Show>
+            }
           >
             {(draft) => (
               <>
@@ -296,6 +318,26 @@ export function WorkspaceFiles(props: {
                     {dirty(draft()) ? "● " : ""}
                     {draft().path}
                   </span>
+                  <Show when={isSvg(draft().path)}>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      class="h-7 px-2"
+                      aria-pressed={!svgPreview()}
+                      onClick={() => setSourcePath(draft().path)}
+                    >
+                      {t("files.source")}
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      class="h-7 px-2"
+                      aria-pressed={svgPreview()}
+                      onClick={() => setSourcePath(undefined)}
+                    >
+                      {t("files.preview")}
+                    </Button>
+                  </Show>
                   <Show when={draft().disk.readOnly}>
                     <span>{t("files.readOnly")}</span>
                   </Show>
@@ -358,10 +400,49 @@ export function WorkspaceFiles(props: {
             )}
           </Show>
           <div class="min-h-0 flex-1">
+            <Show
+              when={
+                props.visible &&
+                svgPreview() &&
+                !model.current() &&
+                !model.error()
+              }
+            >
+              <p role="status" class="p-3 text-xs text-muted">
+                {t("files.imageLoading")}
+              </p>
+            </Show>
+            <Show when={props.visible && imageMime(model.selected() ?? "")}>
+              <FileImagePreview
+                threadId={model.threadId}
+                path={model.selected() as string}
+                revision={model.imageRevision()}
+              />
+            </Show>
+            <Show
+              when={props.visible && svgPreview() && model.selected()}
+              keyed
+            >
+              {(path) => (
+                <Show when={model.current()}>
+                  {(draft) => (
+                    <Show
+                      when={!draft().problem || draft().problem === "conflict"}
+                    >
+                      <SvgPreview text={draft().text} path={path} />
+                    </Show>
+                  )}
+                </Show>
+              )}
+            </Show>
             <For each={Object.values(model.drafts)}>
               {(draft) => (
                 <div
-                  hidden={draft.path !== model.selected()}
+                  hidden={
+                    draft.path !== model.selected() ||
+                    svgPreview() ||
+                    !!imageMime(model.selected() ?? "")
+                  }
                   class="h-full min-h-0"
                 >
                   <Show
@@ -377,7 +458,12 @@ export function WorkspaceFiles(props: {
                       text={draft.text}
                       revision={draft.revision}
                       readOnly={draft.disk.readOnly}
-                      visible={props.visible && draft.path === model.selected()}
+                      visible={
+                        props.visible &&
+                        draft.path === model.selected() &&
+                        !svgPreview() &&
+                        !imageMime(draft.path)
+                      }
                       onChange={(text) => model.change(draft.id, text)}
                       onError={(cause) => {
                         setFatal(true);

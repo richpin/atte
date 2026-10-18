@@ -19,6 +19,7 @@ use tauri::{ipc::Channel, State};
 use uuid::Uuid;
 
 const MAX_BYTES: u64 = 2 * 1024 * 1024;
+const MAX_IMAGE_BYTES: u64 = 20 * 1024 * 1024;
 
 #[derive(Debug, Serialize, thiserror::Error)]
 #[serde(rename_all = "camelCase")]
@@ -39,6 +40,10 @@ pub(crate) enum FileError {
     ReadOnly,
     #[error("Only UTF-8 text files up to 2 MiB can be opened")]
     Unsupported,
+    #[error("Only PNG, JPEG, GIF, WebP, BMP and ICO images can be previewed")]
+    UnsupportedImage,
+    #[error("Images larger than 20 MiB cannot be previewed")]
+    ImageTooLarge,
     #[error("Filesystem operation failed: {0}")]
     Io(String),
 }
@@ -148,26 +153,36 @@ fn resolve(root: &Path, relative: &str) -> Result<PathBuf, FileError> {
     }
     Ok(parent.join(path.file_name().ok_or(FileError::InvalidPath)?))
 }
-fn regular_bytes(path: &Path) -> Result<(Vec<u8>, fs::Metadata), FileError> {
+fn regular_bytes(path: &Path, limit: u64) -> Result<(Vec<u8>, fs::Metadata), FileError> {
     let file = OpenOptions::new()
         .read(true)
         .custom_flags(nix::libc::O_NOFOLLOW | nix::libc::O_NONBLOCK)
         .open(path)?;
     let metadata = file.metadata()?;
-    if !metadata.is_file() || metadata.len() > MAX_BYTES {
+    if !metadata.is_file() {
         return Err(FileError::Unsupported);
     }
+    let too_large = || {
+        if limit == MAX_IMAGE_BYTES {
+            FileError::ImageTooLarge
+        } else {
+            FileError::Unsupported
+        }
+    };
+    if metadata.len() > limit {
+        return Err(too_large());
+    }
     let mut bytes = Vec::new();
-    file.take(MAX_BYTES + 1).read_to_end(&mut bytes)?;
-    if bytes.len() as u64 > MAX_BYTES {
-        return Err(FileError::Unsupported);
+    file.take(limit + 1).read_to_end(&mut bytes)?;
+    if bytes.len() as u64 > limit {
+        return Err(too_large());
     }
     Ok((bytes, metadata))
 }
 fn version(bytes: &[u8]) -> String {
     format!("{:x}", Sha256::digest(bytes))
 }
-fn text_file(root: &Path, relative: &str) -> Result<TextFile, FileError> {
+fn read_target(root: &Path, relative: &str) -> Result<(PathBuf, bool), FileError> {
     let path = resolve(root, relative)?;
     let link = fs::symlink_metadata(&path)?.is_symlink();
     let target = path.canonicalize()?;
@@ -178,7 +193,29 @@ fn text_file(root: &Path, relative: &str) -> Result<TextFile, FileError> {
     {
         return Err(FileError::InvalidPath);
     }
-    let (bytes, metadata) = regular_bytes(&target)?;
+    Ok((target, link))
+}
+fn image_file(root: &Path, relative: &str) -> Result<Vec<u8>, FileError> {
+    let (target, _) = read_target(root, relative)?;
+    let extension = Path::new(relative)
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    let expected = match extension.as_str() {
+        "jpg" | "jpeg" => "jpg",
+        "png" | "gif" | "webp" | "bmp" | "ico" => extension.as_str(),
+        _ => return Err(FileError::UnsupportedImage),
+    };
+    let (bytes, _) = regular_bytes(&target, MAX_IMAGE_BYTES)?;
+    if !infer::get(&bytes).is_some_and(|kind| kind.extension() == expected) {
+        return Err(FileError::UnsupportedImage);
+    }
+    Ok(bytes)
+}
+fn text_file(root: &Path, relative: &str) -> Result<TextFile, FileError> {
+    let (target, link) = read_target(root, relative)?;
+    let (bytes, metadata) = regular_bytes(&target, MAX_BYTES)?;
     let content = bytes.strip_prefix(&[0xef, 0xbb, 0xbf]).unwrap_or(&bytes);
     if content.contains(&0) {
         return Err(FileError::Unsupported);
@@ -202,7 +239,7 @@ fn save_text(
     if fs::symlink_metadata(&path)?.is_symlink() {
         return Err(FileError::ReadOnly);
     }
-    let (old, metadata) = regular_bytes(&path)?;
+    let (old, metadata) = regular_bytes(&path, MAX_BYTES)?;
     if metadata.permissions().readonly() {
         return Err(FileError::ReadOnly);
     }
@@ -233,7 +270,7 @@ fn save_text(
         .set_permissions(metadata.permissions())?;
     temporary.as_file().sync_all()?;
     // Recheck immediately before replacement, including saves while typing.
-    if version(&regular_bytes(&path)?.0) != expected {
+    if version(&regular_bytes(&path, MAX_BYTES)?.0) != expected {
         return Err(FileError::Conflict);
     }
     temporary
@@ -586,6 +623,18 @@ pub(crate) async fn read_workspace_file(
         .map_err(|_| FileError::Unavailable)?
 }
 #[tauri::command]
+pub(crate) async fn read_workspace_image(
+    threads: State<'_, Threads>,
+    thread_id: Uuid,
+    path: String,
+) -> Result<tauri::ipc::Response, FileError> {
+    let root = root(&threads, thread_id)?;
+    let bytes = tauri::async_runtime::spawn_blocking(move || image_file(&root, &path))
+        .await
+        .map_err(|_| FileError::Unavailable)??;
+    Ok(tauri::ipc::Response::new(bytes))
+}
+#[tauri::command]
 pub(crate) async fn save_workspace_file(
     app: tauri::AppHandle,
     lifecycle: State<'_, crate::lifecycle::Lifecycle>,
@@ -712,6 +761,109 @@ mod tests {
         assert!(matches!(
             save_text(root, "file", &initial.version, "overwrite"),
             Err(FileError::Conflict)
+        ));
+    }
+    #[test]
+    fn reads_supported_image_signatures_with_matching_case_insensitive_extensions() {
+        let folder = fixture();
+        for (name, bytes) in [
+            ("image.PNG", b"\x89PNG\r\n\x1a\n".as_slice()),
+            ("image.jpg", b"\xff\xd8\xff\xe0".as_slice()),
+            ("image.JPEG", b"\xff\xd8\xff\xe1".as_slice()),
+            ("image.gif", b"GIF89a".as_slice()),
+            ("image.webp", b"RIFF\x00\x00\x00\x00WEBP".as_slice()),
+            ("image.bmp", b"BM\x00\x00".as_slice()),
+            ("image.ico", b"\x00\x00\x01\x00".as_slice()),
+        ] {
+            fs::write(folder.path().join(name), bytes).unwrap();
+            assert_eq!(image_file(folder.path(), name).unwrap(), bytes, "{name}");
+        }
+    }
+    #[test]
+    fn rejects_disguised_and_unsupported_images() {
+        let folder = fixture();
+        for (name, bytes) in [
+            ("text.png", b"not an image".as_slice()),
+            (
+                "svg.png",
+                b"<svg xmlns=\"http://www.w3.org/2000/svg\"/>".as_slice(),
+            ),
+            ("png.jpg", b"\x89PNG\r\n\x1a\n".as_slice()),
+            ("image.svg", b"<svg/>".as_slice()),
+            ("image.txt", b"\x89PNG\r\n\x1a\n".as_slice()),
+        ] {
+            fs::write(folder.path().join(name), bytes).unwrap();
+            assert!(
+                matches!(
+                    image_file(folder.path(), name),
+                    Err(FileError::UnsupportedImage)
+                ),
+                "{name}"
+            );
+        }
+    }
+    #[test]
+    fn limits_image_bytes_independently_from_text_bytes() {
+        let folder = fixture();
+        let path = folder.path().join("large.png");
+        let mut file = fs::File::create(&path).unwrap();
+        file.write_all(b"\x89PNG\r\n\x1a\n").unwrap();
+        file.set_len(MAX_IMAGE_BYTES).unwrap();
+        assert_eq!(
+            image_file(folder.path(), "large.png").unwrap().len() as u64,
+            MAX_IMAGE_BYTES
+        );
+        assert!(matches!(
+            text_file(folder.path(), "large.png"),
+            Err(FileError::Unsupported)
+        ));
+        file.set_len(MAX_IMAGE_BYTES + 1).unwrap();
+        assert!(matches!(
+            image_file(folder.path(), "large.png"),
+            Err(FileError::ImageTooLarge)
+        ));
+    }
+    #[test]
+    fn image_reads_reject_escapes_protected_paths_and_non_regular_files() {
+        use std::os::unix::fs::symlink;
+        let folder = fixture();
+        let outside = fixture();
+        let root = folder.path();
+        let png = b"\x89PNG\r\n\x1a\n";
+        fs::write(root.join("inside.png"), png).unwrap();
+        fs::write(outside.path().join("outside.png"), png).unwrap();
+        fs::create_dir(root.join(".git")).unwrap();
+        fs::write(root.join(".git/secret.png"), png).unwrap();
+        symlink(root.join("inside.png"), root.join("link.PNG")).unwrap();
+        assert_eq!(image_file(root, "link.PNG").unwrap(), png);
+        symlink(outside.path(), root.join("escape")).unwrap();
+        symlink(outside.path().join("outside.png"), root.join("outside.png")).unwrap();
+        symlink(root.join(".git/secret.png"), root.join("protected.png")).unwrap();
+        for relative in [
+            "../outside.png",
+            "/etc/passwd",
+            ".git/secret.png",
+            "escape/outside.png",
+            "outside.png",
+            "protected.png",
+        ] {
+            assert!(
+                matches!(image_file(root, relative), Err(FileError::InvalidPath)),
+                "{relative}"
+            );
+        }
+        fs::create_dir(root.join("directory.png")).unwrap();
+        assert!(matches!(
+            image_file(root, "directory.png"),
+            Err(FileError::Unsupported)
+        ));
+        let fifo =
+            std::ffi::CString::new(root.join("pipe.png").as_os_str().as_encoded_bytes()).unwrap();
+        // SAFETY: the NUL-terminated path remains alive and points to an owned fixture directory.
+        assert_eq!(unsafe { nix::libc::mkfifo(fifo.as_ptr(), 0o600) }, 0);
+        assert!(matches!(
+            image_file(root, "pipe.png"),
+            Err(FileError::Unsupported)
         ));
     }
     #[test]

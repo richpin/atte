@@ -75,6 +75,15 @@ export const ko = {
     conflict:
       "파일이 외부에서 변경되었습니다. 편집 내용은 보존했습니다. 비교하거나 다시 읽은 후 저장하세요.",
     unsupported: "2MiB 이하의 UTF-8 텍스트 파일만 지원합니다.",
+    unsupportedImage:
+      "PNG·JPEG·GIF·WebP·BMP·ICO 이미지만 미리 볼 수 있습니다. 파일 내용과 확장자가 일치해야 합니다.",
+    imageTooLarge: "20MiB를 초과하는 이미지는 미리 볼 수 없습니다.",
+    imageReadFailed: "이미지가 없거나 읽을 수 없습니다.",
+    imageDecodeFailed:
+      "이미지를 표시하지 못했습니다. 파일이 손상되었거나 지원하지 않는 형식일 수 있습니다.",
+    imageLoading: "이미지 불러오는 중…",
+    source: "소스",
+    preview: "미리보기",
     exists: "같은 이름의 항목이 이미 있습니다.",
     invalidPath: "작업 폴더 내부의 올바른 이름을 입력하세요.",
     missing: "파일이 없거나 읽을 수 없습니다. 편집 내용은 보존했습니다.",

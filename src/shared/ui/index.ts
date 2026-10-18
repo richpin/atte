@@ -36,6 +36,7 @@ export {
 export { EditableFile } from "./editable-file";
 export { FileDiff } from "./file-diff";
 export { FileTree, type TreeAction } from "./file-tree";
+export { ImagePreview } from "./image-preview";
 export { LanguageMenu } from "./language-menu";
 export { Markdown, type MarkdownProps } from "./markdown";
 export { Progress, ProgressLabel, ProgressValueLabel } from "./progress";

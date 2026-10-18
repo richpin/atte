@@ -146,6 +146,17 @@ button:enabled {
   stroke-width: 1.5px;
 }
 
+.image-preview {
+  background-color: var(--color-canvas);
+  background-image: conic-gradient(
+    var(--color-panel) 25%,
+    transparent 0 50%,
+    var(--color-panel) 0 75%,
+    transparent 0
+  );
+  background-size: 16px 16px;
+}
+
 .app-resizable > [data-corvu-resizable-panel] {
   transition: flex-basis 160ms ease-out;
 }

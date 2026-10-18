@@ -18,6 +18,8 @@ export type FileOperation =
   | { type: "trash"; path: string };
 export const readFile = (threadId: string, path: string) =>
   invoke<DiskFile>("read_workspace_file", { threadId, path });
+export const readImage = (threadId: string, path: string) =>
+  invoke<ArrayBuffer>("read_workspace_image", { threadId, path });
 export const saveFile = (
   threadId: string,
   path: string,

@@ -8,6 +8,7 @@ import {
   readFile,
   saveFile,
 } from "../api/files";
+import { imageMime } from "../lib/file-kind";
 
 export type Draft = {
   id: string;
@@ -41,14 +42,17 @@ export function createFilesModel(threadId: string) {
   const [loading, setLoading] = createSignal(true);
   const [busy, setBusy] = createSignal(false);
   const [generation, setGeneration] = createSignal(0);
+  const [imageRevision, setImageRevision] = createSignal(0);
   const reads = new Map<string, number>();
   let disposed = false;
   const deferredUpdates: FileUpdate[] = [];
   const pending = () => Object.values(drafts).filter(dirty);
   const draftAt = (path: string) =>
     Object.values(drafts).find((draft) => draft.path === path);
-  const current = () =>
-    selected() ? draftAt(selected() as string) : undefined;
+  const current = () => {
+    const path = selected();
+    return path && !imageMime(path) ? draftAt(path) : undefined;
+  };
 
   async function refreshDraft(draft: Draft) {
     const request = (reads.get(draft.id) ?? 0) + 1;
@@ -94,6 +98,10 @@ export function createFilesModel(threadId: string) {
   async function open(path: string) {
     setSelected(path);
     setError(undefined);
+    if (imageMime(path)) {
+      setImageRevision((revision) => revision + 1);
+      return;
+    }
     const existing = draftAt(path);
     if (existing) {
       await refreshDraft(existing);
@@ -169,6 +177,16 @@ export function createFilesModel(threadId: string) {
       return;
     }
     setWarnings(update.warnings);
+    const path = selected();
+    if (
+      path &&
+      imageMime(path) &&
+      (update.type === "snapshot" ||
+        [...update.changed, ...update.removed].some((changed) =>
+          within(path, changed),
+        ))
+    )
+      setImageRevision((revision) => revision + 1);
     if (update.type === "snapshot") {
       setEntries(update.entries);
       setLoading(false);
@@ -215,7 +233,7 @@ export function createFilesModel(threadId: string) {
         }
         const path = selected();
         if (path && within(path, action.from))
-          setSelected(action.to + path.slice(action.from.length));
+          await open(action.to + path.slice(action.from.length));
         setEntries(
           entries().map((entry) =>
             within(entry.path, action.from)
@@ -269,6 +287,7 @@ export function createFilesModel(threadId: string) {
     busy,
     pending,
     generation,
+    imageRevision,
     open,
     save,
     saveAll,

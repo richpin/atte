@@ -464,6 +464,7 @@ pub fn run() {
                 workspace_files::subscribe_workspace_files,
                 workspace_files::unsubscribe_workspace_files,
                 workspace_files::read_workspace_file,
+                workspace_files::read_workspace_image,
                 workspace_files::save_workspace_file,
                 workspace_files::operate_workspace_file,
                 lifecycle::resolve_quit,

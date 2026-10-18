@@ -30,6 +30,64 @@ afterEach(() => {
 });
 
 describe("file drafts", () => {
+  it("keeps extensionless files and dotfiles named after image formats as text", async () => {
+    const files = model();
+    for (const path of ["png", ".png", "folder.png/jpeg"]) {
+      await files.open(path);
+      expect(readFile).toHaveBeenLastCalledWith("thread", path);
+      expect(files.current()?.path).toBe(path);
+    }
+  });
+  it("opens images without drafts and refreshes only for relevant filesystem changes", async () => {
+    const files = model();
+    await files.open("folder/image.PNG");
+    expect(readFile).not.toHaveBeenCalled();
+    expect(files.current()).toBeUndefined();
+    expect(files.pending()).toHaveLength(0);
+    const revision = files.imageRevision();
+    await files.update({
+      type: "changed",
+      entries: [],
+      removed: [],
+      changed: ["other.png"],
+      warnings: [],
+    });
+    expect(files.imageRevision()).toBe(revision);
+    await files.update({
+      type: "changed",
+      entries: [],
+      removed: [],
+      changed: ["folder/image.PNG"],
+      warnings: [],
+    });
+    expect(files.imageRevision()).toBe(revision + 1);
+    await files.update({
+      type: "changed",
+      entries: [],
+      removed: ["folder"],
+      changed: [],
+      warnings: [],
+    });
+    expect(files.imageRevision()).toBe(revision + 2);
+    await files.update({ type: "snapshot", entries: [], warnings: [] });
+    expect(files.imageRevision()).toBe(revision + 3);
+    await files.operation({ type: "move", from: "folder", to: "renamed" });
+    expect(files.selected()).toBe("renamed/image.PNG");
+    await files.operation({ type: "trash", path: "renamed" });
+    expect(files.selected()).toBeUndefined();
+  });
+  it("preserves text edits across image selections and reads SVG as editable text", async () => {
+    const files = model();
+    await files.open("file.svg");
+    const draft = files.current();
+    if (!draft) throw new Error("missing SVG draft");
+    files.change(draft.id, "<svg/>");
+    await files.open("image.png");
+    expect(files.pending()).toHaveLength(1);
+    await files.open("file.svg");
+    expect(files.current()?.text).toBe("<svg/>");
+    expect(files.current()?.id).toBe(draft.id);
+  });
   it("keeps edits in multiple files when navigating", async () => {
     const files = model();
     await files.open("first.ts");

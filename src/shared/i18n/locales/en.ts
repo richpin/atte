@@ -69,6 +69,15 @@ export const en = {
     conflict:
       "This file changed on disk. Your edits have been kept. Compare or reload before saving.",
     unsupported: "Only UTF-8 text files up to 2 MiB are supported.",
+    unsupportedImage:
+      "Only PNG, JPEG, GIF, WebP, BMP and ICO images can be previewed. The file must match its extension.",
+    imageTooLarge: "Images larger than 20 MiB cannot be previewed.",
+    imageReadFailed: "This image is missing or cannot be read.",
+    imageDecodeFailed:
+      "This image could not be displayed. It may be damaged or unsupported.",
+    imageLoading: "Loading image…",
+    source: "Source",
+    preview: "Preview",
     exists: "An item with that name already exists.",
     invalidPath: "Choose a valid name inside the working folder.",
     missing:
