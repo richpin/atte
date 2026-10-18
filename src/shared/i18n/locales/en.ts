@@ -301,6 +301,12 @@ export const en = {
     unconfirmed: "Unconfirmed completion",
     statusUnavailable: "Thread status unavailable",
     threadMenu: "{{ name }} menu",
+    rename: "Rename",
+    renameTitle: "Rename thread",
+    threadTitle: "Thread title",
+    saveTitle: "Save",
+    renaming: "Saving…",
+    renameFailed: "The thread could not be renamed. Try again.",
     deleteFailed: "The thread could not be deleted. Try again.",
     deleteTitle: "Delete this thread?",
     deleteDescription:
@@ -353,6 +359,7 @@ export const en = {
       "The working folder could not be found. Choose the folder again.",
     agentInstallRequired: "Install the agent and try again.",
     messageRequired: "Type a message.",
+    titleRequired: "Type a thread title.",
     threadNotReady:
       "Send from a connected thread after its response is complete.",
     queuedMessageGone: "This message was already sent or deleted.",

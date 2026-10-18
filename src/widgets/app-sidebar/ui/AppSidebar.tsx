@@ -3,6 +3,7 @@ import {
   EllipsisVertical,
   FolderClosed,
   FolderOpen,
+  Pencil,
   Plus,
   Settings,
   SquarePen,
@@ -42,6 +43,7 @@ import {
   useSidebar,
 } from "shared/ui";
 import { createMemo, createSignal, For, Show } from "solid-js";
+import { RenameThreadDialog } from "./RenameThreadDialog";
 
 type AppView = "new-thread" | "thread" | "general" | "agents";
 
@@ -69,6 +71,7 @@ export function AppSidebar(props: {
   onSelectThread: (id: string) => void;
   onNewThreadInProject: (folder: string) => void;
   onDeleteThread: (id: string) => Promise<void>;
+  onRenameThread: (id: string, title: string) => Promise<void>;
   onShowGeneral: () => void;
   onManageAgents: () => void;
 }) {
@@ -78,6 +81,10 @@ export function AppSidebar(props: {
     new Set<string>(),
   );
   const [deleteCandidate, setDeleteCandidate] = createSignal<SidebarThread>();
+  const [renameCandidate, setRenameCandidate] = createSignal<{
+    id: string;
+    title: string;
+  }>();
   const [deleting, setDeleting] = createSignal(false);
   const expanded = () => isMobile() || state() === "expanded";
 
@@ -412,6 +419,21 @@ export function AppSidebar(props: {
                                         </SidebarMenuSubItem>
                                         <DropdownMenuContent>
                                           <DropdownMenuItem
+                                            class="px-3 py-2"
+                                            onSelect={() =>
+                                              setRenameCandidate({
+                                                id: entry().id,
+                                                title: title(),
+                                              })
+                                            }
+                                          >
+                                            <Pencil
+                                              aria-hidden="true"
+                                              class="size-3.5"
+                                            />
+                                            {t("sidebar.rename")}
+                                          </DropdownMenuItem>
+                                          <DropdownMenuItem
                                             class="px-3 py-2 text-danger hover:bg-danger-soft data-[highlighted]:bg-danger-soft"
                                             onSelect={() =>
                                               requestDelete(entry())
@@ -470,6 +492,16 @@ export function AppSidebar(props: {
           </SidebarFooter>
         </Show>
       </Sidebar>
+
+      <Show when={renameCandidate()} keyed>
+        {(thread) => (
+          <RenameThreadDialog
+            thread={thread}
+            onRename={props.onRenameThread}
+            onClose={() => setRenameCandidate(undefined)}
+          />
+        )}
+      </Show>
 
       <Dialog
         open={Boolean(deleteCandidate())}

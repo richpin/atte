@@ -35,6 +35,10 @@ export function deleteThread(id: string) {
   return invoke<void>("delete_thread", { id });
 }
 
+export function renameThread(id: string, title: string) {
+  return invoke<void>("rename_thread", { id, title });
+}
+
 export function selectFiles(id: string, dialogTitle: string) {
   return invoke<FileSelection>("select_files", { id, dialogTitle });
 }

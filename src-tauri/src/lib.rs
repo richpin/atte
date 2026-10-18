@@ -205,6 +205,11 @@ fn list_threads(threads: State<'_, Threads>) -> Result<Vec<ThreadMetadata>, Thre
 }
 
 #[tauri::command]
+fn rename_thread(id: Uuid, title: String, threads: State<'_, Threads>) -> Result<(), ThreadError> {
+    threads.rename(id, &title)
+}
+
+#[tauri::command]
 fn delete_thread(
     id: Uuid,
     threads: State<'_, Threads>,
@@ -481,6 +486,7 @@ pub fn run() {
                 select_media,
                 snapshot_clipboard_image,
                 delete_thread,
+                rename_thread,
                 list_threads,
                 create_thread,
                 delete_queued_message,

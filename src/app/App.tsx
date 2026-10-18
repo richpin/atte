@@ -223,6 +223,7 @@ function ShellSidebar(props: { shell: AppShellModel }) {
       onSelectThread={(id) => void shell.openThread(id)}
       onNewThreadInProject={(folder) => shell.showNewThread(folder)}
       onDeleteThread={shell.removeThread}
+      onRenameThread={threads.renameThread}
       onShowGeneral={shell.showGeneral}
       onManageAgents={shell.showAgents}
     />

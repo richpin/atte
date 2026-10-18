@@ -515,6 +515,9 @@ pub enum ThreadError {
     NotReady(String),
     #[error("{0}")]
     InvalidMessage(String),
+    /// A thread title must contain non-whitespace text.
+    #[error("{0}")]
+    InvalidTitle(String),
     /// Application state could not be accessed.
     #[error("{0}")]
     Unavailable(String),
@@ -1255,6 +1258,38 @@ impl Threads {
             .thread
             .clone();
         Ok(thread)
+    }
+
+    /// Renames an app-owned thread and publishes the saved title to subscribers.
+    ///
+    /// # Errors
+    /// Returns an error for an empty title, unknown ID, or unavailable storage/state.
+    pub fn rename(&self, id: Uuid, title: &str) -> Result<(), ThreadError> {
+        let title = title.trim();
+        if title.is_empty() {
+            return Err(ThreadError::InvalidTitle(
+                "스레드 제목을 입력해주세요.".into(),
+            ));
+        }
+        let state = self.lock()?;
+        let entry = state.entries.get(&id).ok_or_else(not_found)?;
+        let mut current = entry.state.lock().map_err(|_| unavailable())?;
+        if current.thread.title == title {
+            return Ok(());
+        }
+        let mut metadata = current.thread.metadata();
+        metadata.title = title.to_owned();
+        metadata.updated_at = now();
+        if let Some(store) = &current.store {
+            store
+                .save_thread(&metadata)
+                .map_err(|error| ThreadError::Unavailable(error.to_string()))?;
+        }
+        current.thread.title = metadata.title;
+        current.thread.updated_at = metadata.updated_at;
+        let previous_storage_error = current.thread.storage_error.take();
+        current.publish_updates(previous_storage_error);
+        Ok(())
     }
 
     /// Permanently removes one app-owned thread locally, then requests remote cleanup.
@@ -2451,6 +2486,10 @@ impl ThreadState {
                 .err()
                 .map(|error| error.to_string());
         }
+        self.publish_updates(previous_storage_error);
+    }
+
+    fn publish_updates(&mut self, previous_storage_error: Option<String>) {
         if self.thread.failure != self.published_failure {
             if let Some(failure) = &self.thread.failure {
                 self.pending_errors.push(ThreadErrorNotification {
@@ -3202,6 +3241,86 @@ impl RuntimeUpdates {
 #[cfg(test)]
 mod title_tests {
     use super::*;
+
+    #[test]
+    fn renamed_title_is_persisted_published_and_still_accepts_agent_updates() {
+        let folder = tempfile::tempdir().unwrap();
+        let store = Arc::new(Store::open(&folder.path().join("atte.sqlite")).unwrap());
+        let threads = Threads::with_store(vec![prepared_codex()], store.clone()).unwrap();
+        let draft = threads.create(folder.path()).unwrap();
+        let updates = updates_for(&threads, draft.id);
+        let mut stream = threads.subscribe(draft.id).unwrap();
+        let mut list = threads.subscribe_list().unwrap();
+        stream.try_recv().unwrap();
+        list.try_recv().unwrap();
+
+        for status in [ThreadStatus::Disconnected, ThreadStatus::Running] {
+            updates.state.lock().unwrap().thread.status = status;
+            let before = threads.get(draft.id).unwrap();
+            let title = format!("직접 지정한 제목 {:?}", before.status);
+            threads.rename(draft.id, &format!("  {title}  ")).unwrap();
+            let changed = threads.get(draft.id).unwrap();
+            assert_eq!(changed.title, title);
+            assert_eq!(changed.status, before.status);
+            assert_eq!(changed.last_prompt_at, before.last_prompt_at);
+            assert_eq!(changed.turns, before.turns);
+            assert_eq!(changed.queued_messages, before.queued_messages);
+            let ThreadUpdate::Patch { thread, .. } = stream.try_recv().unwrap() else {
+                panic!("expected metadata patch");
+            };
+            assert_eq!(thread.metadata.title, title);
+            assert_eq!(list.try_recv().unwrap()[0].title, title);
+            let restored = Threads::with_store(vec![prepared_codex()], store.clone()).unwrap();
+            assert_eq!(restored.get(draft.id).unwrap().title, title);
+            threads.rename(draft.id, &title).unwrap();
+            assert!(stream.try_recv().is_err());
+            assert!(list.try_recv().is_err());
+        }
+        updates.title_updated(Some("Later agent title".into()));
+        assert_eq!(threads.get(draft.id).unwrap().title, "Later agent title");
+        assert_eq!(store.threads().unwrap()[0].title, "Later agent title");
+    }
+
+    #[test]
+    fn rename_rejects_empty_titles_and_unknown_threads() {
+        let folder = tempfile::tempdir().unwrap();
+        let threads = Threads::default();
+        let draft = threads.create(folder.path()).unwrap();
+        assert!(matches!(
+            threads.rename(draft.id, " \n\t "),
+            Err(ThreadError::InvalidTitle(_))
+        ));
+        assert!(matches!(
+            threads.rename(Uuid::new_v4(), "Title"),
+            Err(ThreadError::NotFound(_))
+        ));
+        assert_eq!(threads.get(draft.id).unwrap().title, draft.title);
+    }
+
+    #[test]
+    fn rename_storage_failure_keeps_the_previous_title_without_publications() {
+        let folder = tempfile::tempdir().unwrap();
+        let database = folder.path().join("atte.sqlite");
+        let store = Arc::new(Store::open(&database).unwrap());
+        let threads = Threads::with_store(vec![prepared_codex()], store).unwrap();
+        let draft = threads.create(folder.path()).unwrap();
+        let mut stream = threads.subscribe(draft.id).unwrap();
+        let mut list = threads.subscribe_list().unwrap();
+        stream.try_recv().unwrap();
+        list.try_recv().unwrap();
+        rusqlite::Connection::open(database)
+            .unwrap()
+            .execute("DROP TABLE threads", [])
+            .unwrap();
+
+        assert!(matches!(
+            threads.rename(draft.id, "Unsaved title"),
+            Err(ThreadError::Unavailable(_))
+        ));
+        assert_eq!(threads.get(draft.id).unwrap().title, draft.title);
+        assert!(stream.try_recv().is_err());
+        assert!(list.try_recv().is_err());
+    }
 
     fn updates_for(threads: &Threads, id: Uuid) -> RuntimeUpdates {
         let entries = threads.lock().unwrap();

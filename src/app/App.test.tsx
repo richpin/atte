@@ -1285,6 +1285,126 @@ it("keeps cancellation and permission responses usable during configuration reco
   finishConfiguration();
 });
 
+it("renames through subscriptions, supports cancel and leaves later agent title updates enabled", async () => {
+  const saved = {
+    id: "rename-me",
+    title: "기존 제목",
+    workingFolder: "/work/project",
+    agentId: "codex",
+    status: "sessionReady",
+    authentication: "authenticated",
+    turns: [],
+    permissions: [],
+    queuedMessages: [],
+  };
+  let receiveList!: (entries: (typeof saved)[]) => void;
+  const request = deferred<void>();
+  const original = vi.mocked(invoke).getMockImplementation();
+  vi.mocked(invoke).mockImplementation((command, args) => {
+    if (command === "list_threads") return Promise.resolve([saved]);
+    if (command === "subscribe_thread") return subscribeWith(args, saved);
+    if (command === "subscribe_thread_list") {
+      receiveList = (args as { channel: { onmessage: typeof receiveList } })
+        .channel.onmessage;
+      return Promise.resolve("list");
+    }
+    if (command === "rename_thread") return request.promise;
+    return original?.(command, args) ?? Promise.resolve();
+  });
+  render(() => <App />);
+  await userEvent.click(
+    await screen.findByRole("button", { name: "기존 제목" }),
+  );
+  await userEvent.click(threadMenu("기존 제목"));
+  await userEvent.click(screen.getByRole("menuitem", { name: "이름 변경" }));
+  const input = screen.getByRole("textbox", {
+    name: "스레드 제목",
+  }) as HTMLInputElement;
+  await waitFor(() => expect(document.activeElement).toBe(input));
+  expect(input.value).toBe(saved.title);
+  expect(input.selectionStart).toBe(0);
+  expect(input.selectionEnd).toBe(saved.title.length);
+  await userEvent.keyboard("{Escape}");
+  await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  expect(invoke).not.toHaveBeenCalledWith("rename_thread", expect.anything());
+
+  await userEvent.click(await waitFor(() => threadMenu("기존 제목")));
+  await userEvent.click(screen.getByRole("menuitem", { name: "이름 변경" }));
+  const editor = screen.getByRole("textbox", { name: "스레드 제목" });
+  await userEvent.clear(editor);
+  await userEvent.type(editor, "   ");
+  expect(screen.getByRole("button", { name: "저장" })).toHaveProperty(
+    "disabled",
+    true,
+  );
+  await userEvent.clear(editor);
+  await userEvent.type(editor, "  새 제목  {Enter}");
+  expect(invoke).toHaveBeenCalledWith("rename_thread", {
+    id: saved.id,
+    title: "새 제목",
+  });
+  expect(screen.getByRole("button", { name: "저장 중…" })).toHaveProperty(
+    "disabled",
+    true,
+  );
+  await userEvent.keyboard("{Escape}");
+  expect(screen.getByRole("dialog")).toBeTruthy();
+  request.resolve();
+  await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  await waitFor(() => expect(getSidebarThreadButton(saved.title)).toBeTruthy());
+  receiveList([{ ...saved, title: "새 제목" }]);
+  receive({ ...saved, title: "새 제목" });
+  await waitFor(() => expect(getSidebarThreadButton("새 제목")).toBeTruthy());
+  expect(screen.getByRole("heading", { name: "새 제목" })).toBeTruthy();
+  receiveList([{ ...saved, title: "에이전트 제목" }]);
+  receive({ ...saved, title: "에이전트 제목" });
+  await waitFor(() =>
+    expect(getSidebarThreadButton("에이전트 제목")).toBeTruthy(),
+  );
+});
+
+it("opens rename from right click and retains the input after a failed save for retry", async () => {
+  const saved = {
+    id: "rename-failure",
+    title: "변경 전",
+    workingFolder: "/work/project",
+    agentId: "codex",
+    status: "disconnected",
+  };
+  const rename = vi
+    .fn()
+    .mockRejectedValueOnce(new Error("failed"))
+    .mockResolvedValue(undefined);
+  const original = vi.mocked(invoke).getMockImplementation();
+  vi.mocked(invoke).mockImplementation((command, args) => {
+    if (command === "list_threads") return Promise.resolve([saved]);
+    if (command === "subscribe_thread_list") return Promise.resolve("list");
+    if (command === "rename_thread") return rename(args);
+    return original?.(command, args) ?? Promise.resolve();
+  });
+  render(() => <App />);
+  const menu = await screen.findByRole("button", { name: "변경 전 메뉴" });
+  fireEvent.contextMenu(menu.parentElement as HTMLElement);
+  await userEvent.click(
+    await screen.findByRole("menuitem", { name: "이름 변경" }),
+  );
+  const input = screen.getByRole("textbox", { name: "스레드 제목" });
+  await userEvent.clear(input);
+  await userEvent.type(input, "다시 저장할 제목");
+  await userEvent.click(screen.getByRole("button", { name: "저장" }));
+  await waitFor(() =>
+    expect(screen.getByRole("button", { name: "저장" })).toHaveProperty(
+      "disabled",
+      false,
+    ),
+  );
+  expect(input).toHaveProperty("value", "다시 저장할 제목");
+  expect(screen.getByText("변경 전")).toBeTruthy();
+  await userEvent.click(screen.getByRole("button", { name: "저장" }));
+  await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  expect(rename).toHaveBeenCalledTimes(2);
+});
+
 it("opens the same delete action from the row menu and right click, then cancels safely", async () => {
   const saved = {
     id: "delete-me",
