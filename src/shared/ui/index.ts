@@ -33,7 +33,9 @@ export {
   DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from "./dropdown-menu";
+export { EditableFile } from "./editable-file";
 export { FileDiff } from "./file-diff";
+export { FileTree, type TreeAction } from "./file-tree";
 export { LanguageMenu } from "./language-menu";
 export { Markdown, type MarkdownProps } from "./markdown";
 export { Progress, ProgressLabel, ProgressValueLabel } from "./progress";

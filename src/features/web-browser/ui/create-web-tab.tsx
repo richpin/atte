@@ -7,11 +7,18 @@ import { WebTabIcon } from "./WebTabIcon";
 
 export function createWebTab(
   threadId: string,
-  options: { url?: string; title?: () => string } = {},
+  options: {
+    url?: string;
+    title?: () => string;
+    startBlank?: boolean;
+    translate?: ReturnType<typeof useI18n>["t"];
+  } = {},
 ) {
-  const { t } = useI18n();
+  const t = options.translate ?? useI18n().t;
   const id = crypto.randomUUID();
-  const [web, setWeb] = createSignal(Boolean(options.url));
+  const [web, setWeb] = createSignal(
+    Boolean(options.url || options.startBlank),
+  );
   const [title, setTitle] = createSignal(
     options.url ? new URL(options.url).host : "",
   );

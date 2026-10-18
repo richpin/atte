@@ -1,3 +1,4 @@
+import { createFilesManager } from "features/workspace-files";
 import { createThreadModel, preparedAgents } from "pages/thread";
 import { useI18n } from "shared/i18n";
 import { showErrorToast } from "shared/ui";
@@ -9,7 +10,7 @@ export type AppView = "new-thread" | "thread" | "general" | "agents";
 export function createAppShellModel() {
   const { t } = useI18n();
   const threads = createThreadModel(undefined, showErrorToast);
-  const threadPanels = createThreadPanelModel();
+  const threadPanels = createThreadPanelModel(createFilesManager(t));
   const [view, setView] = createSignal<AppView>("new-thread");
   const [agentsRevision, setAgentsRevision] = createSignal(0);
   const [agentsFailed, setAgentsFailed] = createSignal(false);
@@ -72,6 +73,7 @@ export function createAppShellModel() {
   }
 
   async function removeThread(id: string) {
+    if (!(await threadPanels.confirmForget(id))) return;
     const selected = threads.selectedThreadId() === id;
     await threads.removeThread(id);
     threadPanels.forget(id);

@@ -1,0 +1,56 @@
+diff --git a/dist/model/FileTreeController.js b/dist/model/FileTreeController.js
+index efa8b6a2fd70e0d1f1dec1d90ee87268c72f56c4..aab6cc603cf434f0f4c4dfe734d987138985b063 100644
+--- a/dist/model/FileTreeController.js
++++ b/dist/model/FileTreeController.js
+@@ -113,6 +113,7 @@ var FileTreeController = class FileTreeController {
+ 	#searchMode;
+ 	#searchPreviousExpandedPaths = null;
+ 	#searchValue = null;
++	#searchInputValue = null;
+ 	#searchVisiblePathSet = null;
+ 	#searchVisibleIndexByPath = null;
+ 	#searchVisibleIndices = null;
+@@ -571,7 +572,7 @@ var FileTreeController = class FileTreeController {
+ 		return this.#searchValue !== null;
+ 	}
+ 	getSearchValue() {
+-		return this.#searchValue ?? "";
++		return this.#searchInputValue ?? "";
+ 	}
+ 	getSearchMatchingPaths() {
+ 		return this.#searchMatchingPaths;
+@@ -597,7 +598,7 @@ var FileTreeController = class FileTreeController {
+ 		this.#applySelection([canonicalPath], canonicalPath, false);
+ 		if (this.#searchValue != null) {
+ 			this.#setSearchState(null, false);
+-			this.#onSearchChange?.(this.#searchValue);
++			this.#onSearchChange?.(this.#searchInputValue);
+ 		}
+ 		this.#focusPathWithoutEmit(canonicalPath);
+ 		this.#renamingPath = canonicalPath;
+@@ -990,7 +991,15 @@ var FileTreeController = class FileTreeController {
+ 	#setSearchState(value, emitChange) {
+ 		const normalizedValue = value == null ? null : normalizeSearchQuery(value);
+ 		const previousSearch = this.#searchValue;
+-		if (previousSearch === normalizedValue) return;
++		const inputChanged = this.#searchInputValue !== value;
++		this.#searchInputValue = value;
++		if (previousSearch === normalizedValue) {
++			if (emitChange && inputChanged) {
++				this.#onSearchChange?.(this.#searchInputValue);
++				this.#emit();
++			}
++			return;
++		}
+ 		if (previousSearch == null && normalizedValue != null) this.#searchPreviousExpandedPaths = this.#getExpandedDirectoryPaths();
+ 		this.#searchValue = normalizedValue;
+ 		if (normalizedValue == null) {
+@@ -1009,7 +1018,7 @@ var FileTreeController = class FileTreeController {
+ 			this.#rebuildVisibleProjection(focusCandidate, true);
+ 		}
+ 		if (emitChange) {
+-			this.#onSearchChange?.(this.#searchValue);
++			this.#onSearchChange?.(this.#searchInputValue);
+ 			this.#emit();
+ 		}
+ 	}

@@ -7,13 +7,14 @@ use std::{
     future::Future,
     sync::atomic::{AtomicBool, Ordering},
 };
-use tauri::{AppHandle, Manager, RunEvent};
+use tauri::{AppHandle, Emitter, Manager, RunEvent, State};
 use tauri_plugin_dialog::{DialogExt, MessageDialogKind};
 use tokio_util::{sync::CancellationToken, task::TaskTracker};
 
 #[derive(Default)]
 pub(crate) struct Lifecycle {
     pending: AtomicBool,
+    dirty_files: AtomicBool,
     finished: AtomicBool,
     stop: CancellationToken,
     operations: TaskTracker,
@@ -21,14 +22,14 @@ pub(crate) struct Lifecycle {
 
 impl Lifecycle {
     /// Installation and removal retain ownership of file and process cleanup until done.
-    pub(crate) async fn finish_before_exit<T>(
+    pub(crate) async fn finish_before_exit<T, E: From<String>>(
         &self,
-        operation: impl Future<Output = Result<T, String>>,
-    ) -> Result<T, String> {
+        operation: impl Future<Output = Result<T, E>>,
+    ) -> Result<T, E> {
         self.operations
             .track_future(async {
                 if self.stop.is_cancelled() {
-                    return Err("앱을 종료하고 있습니다.".into());
+                    return Err("앱을 종료하고 있습니다.".to_owned().into());
                 }
                 operation.await
             })
@@ -112,6 +113,24 @@ fn request_quit(app: &AppHandle) {
     if lifecycle.pending.swap(true, Ordering::AcqRel) {
         return;
     }
+    if lifecycle.dirty_files.load(Ordering::Acquire) {
+        // Dock quit must reveal the confirmation even after the window was hidden.
+        if let Some(window) = app.get_window("main") {
+            let _ = window.show();
+            let _ = window.set_focus();
+        }
+        if app.emit_to("main", "files-quit-requested", ()).is_err() {
+            lifecycle.pending.store(false, Ordering::Release);
+        }
+        return;
+    }
+    finish_quit(app);
+}
+
+fn finish_quit(app: &AppHandle) {
+    let lifecycle = app.state::<Lifecycle>();
+    app.state::<crate::workspace_files::WorkspaceFiles>()
+        .clear();
     lifecycle.stop.cancel();
     lifecycle.operations.close();
     let app = app.clone();
@@ -122,4 +141,22 @@ fn request_quit(app: &AppHandle) {
         lifecycle.finished.store(true, Ordering::Release);
         app.exit(0);
     });
+}
+
+#[tauri::command]
+pub(crate) fn set_files_dirty(lifecycle: State<'_, Lifecycle>, dirty: bool) {
+    lifecycle.dirty_files.store(dirty, Ordering::Release);
+}
+
+#[tauri::command]
+pub(crate) fn resolve_quit(app: AppHandle, proceed: bool) {
+    let lifecycle = app.state::<Lifecycle>();
+    if !lifecycle.pending.load(Ordering::Acquire) {
+        return;
+    }
+    if proceed {
+        finish_quit(&app);
+    } else {
+        lifecycle.pending.store(false, Ordering::Release);
+    }
 }

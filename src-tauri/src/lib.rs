@@ -10,6 +10,7 @@ mod lifecycle;
 mod open_working_folder;
 pub mod storage;
 pub mod thread;
+mod workspace_files;
 
 use file_selection::{
     prepare_file_selection, prepare_media_selection, FileSelection, FileSelectionError,
@@ -204,8 +205,14 @@ fn list_threads(threads: State<'_, Threads>) -> Result<Vec<ThreadMetadata>, Thre
 }
 
 #[tauri::command]
-fn delete_thread(id: Uuid, threads: State<'_, Threads>) -> Result<(), ThreadError> {
-    threads.delete(id)
+fn delete_thread(
+    id: Uuid,
+    threads: State<'_, Threads>,
+    files: State<'_, workspace_files::WorkspaceFiles>,
+) -> Result<(), ThreadError> {
+    threads.delete(id)?;
+    files.forget(id);
+    Ok(())
 }
 
 #[tauri::command]
@@ -424,9 +431,16 @@ pub fn run() {
         })
         .manage(Subscriptions::default())
         .manage(SelectedFiles::default())
+        .manage(workspace_files::WorkspaceFiles::default())
         .manage(lifecycle::Lifecycle::default())
         .on_window_event(|window, event| {
+            #[cfg(target_os = "macos")]
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                api.prevent_close();
+                let _ = window.hide();
+            }
             if matches!(event, tauri::WindowEvent::Destroyed) {
+                window.state::<workspace_files::WorkspaceFiles>().clear();
                 let forgotten = window.state::<SelectedFiles>().forget_owner(window.label());
                 remove_forgotten_media(&window.state::<Threads>(), forgotten);
                 if let Ok(mut entries) = window.state::<Subscriptions>().0.lock() {
@@ -442,6 +456,13 @@ pub fn run() {
                 return true;
             }
             let handler: fn(tauri::ipc::Invoke) -> bool = tauri::generate_handler![
+                workspace_files::subscribe_workspace_files,
+                workspace_files::unsubscribe_workspace_files,
+                workspace_files::read_workspace_file,
+                workspace_files::save_workspace_file,
+                workspace_files::operate_workspace_file,
+                lifecycle::resolve_quit,
+                lifecycle::set_files_dirty,
                 browser::create_web_tab,
                 browser::web_tab_action,
                 browser::web_tab_state,

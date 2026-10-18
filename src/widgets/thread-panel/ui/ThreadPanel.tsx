@@ -14,11 +14,11 @@ export function ThreadPanel(props: {
   const { t } = useI18n();
   const triggers = new Map<string, HTMLButtonElement>();
 
-  function closeTab(tabId: string) {
+  async function closeTab(tabId: string) {
     const focused = triggers
       .get(tabId)
       ?.parentElement?.contains(document.activeElement);
-    props.model.closeTab(props.panel.threadId, tabId);
+    if (!(await props.model.closeTab(props.panel.threadId, tabId))) return;
     triggers.delete(tabId);
     if (focused) {
       triggers.get(props.panel.selectedTabId)?.focus();

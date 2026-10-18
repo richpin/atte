@@ -11,6 +11,7 @@ export type ThreadPanelContentProps = {
 };
 
 export type ThreadPanelTab = {
+  beforeClose?: () => Promise<boolean>;
   id: string;
   title: Accessor<string>;
   icon?: Component<{ class?: string }>;
@@ -78,6 +79,18 @@ export function createThreadPanelModel(
   }
 
   function closeTab(threadId: string, tabId: string) {
+    const tab = panels[threadId]?.tabs.find((entry) => entry.id === tabId);
+    if (tab?.beforeClose) {
+      return tab.beforeClose().then((proceed) => {
+        if (proceed) closeTabNow(threadId, tabId);
+        return proceed;
+      });
+    }
+    closeTabNow(threadId, tabId);
+    return true;
+  }
+
+  function closeTabNow(threadId: string, tabId: string) {
     const panel = panels[threadId];
     if (!panel) return;
     const index = panel.tabs.findIndex((tab) => tab.id === tabId);

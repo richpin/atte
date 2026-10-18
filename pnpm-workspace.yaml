@@ -1,0 +1,10 @@
+# Atte uses the vanilla entry point; React is only needed by the /react adapter.
+packageExtensions:
+  '@pierre/trees@1.0.0-beta.6':
+    peerDependenciesMeta:
+      react:
+        optional: true
+      react-dom:
+        optional: true
+patchedDependencies:
+  '@pierre/trees@1.0.0-beta.6': patches/@pierre__trees@1.0.0-beta.6.patch

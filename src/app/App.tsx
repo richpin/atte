@@ -86,6 +86,7 @@ function AppShell() {
       class="relative h-dvh min-h-0 overflow-hidden bg-canvas text-ink"
     >
       <ResizableAppShell root={() => resizableRoot} shell={shell} />
+      <shell.threadPanels.Guard />
     </Resizable>
   );
 }
