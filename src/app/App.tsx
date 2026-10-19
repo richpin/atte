@@ -212,7 +212,8 @@ function ShellSidebar(props: { shell: AppShellModel }) {
         subscriptionFailed: threads.subscriptionFailedFor(entry.id),
         unconfirmed: Boolean(
           entry.completedTurnId &&
-            threads.confirmedCompletion(entry.id) !== entry.completedTurnId,
+            shell.notifications.state()?.confirmedCompletions[entry.id] !==
+              entry.completedTurnId,
         ),
       }))}
       selected={threads.selectedThreadId()}
@@ -445,7 +446,7 @@ function ShellContent(props: { shell: AppShellModel }) {
         </ThreadPanelLayout>
       </div>
       <div hidden={shell.view() !== "general"} class="min-h-0 flex-1">
-        <GeneralPage />
+        <GeneralPage notifications={shell.notifications} />
       </div>
       <div hidden={shell.view() !== "agents"} class="min-h-0 flex-1">
         <AgentManagementPage

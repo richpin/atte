@@ -18,7 +18,10 @@
         "dragDropEnabled": false,
         "titleBarStyle": "Overlay",
         "hiddenTitle": true,
-        "trafficLightPosition": { "x": 14, "y": 22 }
+        "trafficLightPosition": {
+          "x": 14,
+          "y": 22
+        }
       }
     ],
     "security": {
@@ -34,6 +37,10 @@
       "icons/128x128@2x.png",
       "icons/icon.icns",
       "icons/icon.ico"
-    ]
+    ],
+    "macOS": {
+      "minimumSystemVersion": "10.14",
+      "signingIdentity": "-"
+    }
   }
 }

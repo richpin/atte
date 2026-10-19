@@ -41,6 +41,29 @@ export const en = {
     light: "Light",
     dark: "Dark",
   },
+  desktopNotifications: {
+    title: "Desktop notifications",
+    description:
+      "Notify me while Atte is inactive. Dock badges remain independent of these settings.",
+    completion: "Response completion notifications",
+    permission: "Approval request notifications",
+    allow: "Allow notifications",
+    openSettings: "Open macOS notification settings",
+    retry: "Reconnect",
+    unavailable:
+      "System notifications are unavailable. Try the installed .app build.",
+    error:
+      "Notification settings or delivery failed. Check your settings and try again.",
+    authorization: {
+      requesting: "Respond to the macOS notification permission prompt.",
+      unknown: "Notification permission could not be checked.",
+      notDetermined: "Notification permission is required.",
+      granted:
+        "Notifications are allowed by macOS. Sounds and presentation follow system settings.",
+      denied:
+        "Notifications are blocked by macOS. Allow them in system settings.",
+    },
+  },
   settings: {
     openMenu: "Open settings menu",
     general: "General",

@@ -84,7 +84,7 @@ pub(crate) fn on_event(app: &AppHandle, event: RunEvent) {
 }
 
 #[cfg(target_os = "macos")]
-fn reopen(app: &AppHandle) -> tauri::Result<()> {
+pub(crate) fn reopen(app: &AppHandle) -> tauri::Result<()> {
     let window = match app.get_window("main") {
         Some(window) => window,
         None => {
@@ -135,6 +135,7 @@ fn finish_quit(app: &AppHandle) {
     lifecycle.operations.close();
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
+        crate::notifications::shutdown(&app).await;
         let lifecycle = app.state::<Lifecycle>();
         let threads = app.state::<Threads>();
         tokio::join!(lifecycle.operations.wait(), threads.shutdown());

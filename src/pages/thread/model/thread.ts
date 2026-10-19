@@ -66,15 +66,9 @@ export function createThreadModel(
   const client = useQueryClient(queryClient);
   const [state, setState] = createStore<{ thread?: Thread }>({});
   const thread = () => state.thread;
-  const [confirmedCompletions, setConfirmedCompletions] = createStore<
-    Record<string, string | undefined>
-  >({});
   const [subscriptionFailures, setSubscriptionFailures] = createStore<
     Record<string, boolean | undefined>
   >({});
-  function confirmCompletion(id: string, turnId: string) {
-    if (!deleted.has(id)) setConfirmedCompletions(id, turnId);
-  }
   const [selectedThreadId, setSelectedThreadId] = createSignal<string>();
   const [error, setErrorState] = createSignal<string>();
   function setError(message: string | undefined, notify = true) {
@@ -883,7 +877,6 @@ export function createThreadModel(
     if (attachments.length)
       void releaseFiles(attachments).catch(() => undefined);
     deleted.add(id);
-    setConfirmedCompletions(id, undefined);
     setSubscriptionFailures(id, undefined);
     setThreadDraft(id, "");
     setThreadAttachments(id, []);
@@ -910,8 +903,6 @@ export function createThreadModel(
     error: visibleError,
     selecting,
     history,
-    confirmCompletion,
-    confirmedCompletion: (id: string) => confirmedCompletions[id],
     subscriptionFailedFor: (id: string) => Boolean(subscriptionFailures[id]),
     listLoading,
     listError,

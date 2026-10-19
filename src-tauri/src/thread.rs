@@ -816,6 +816,18 @@ impl Threads {
         Ok(self.list.lock().map_err(|_| unavailable())?.subscribe())
     }
 
+    /// Captures application context together with each list event under the list lock.
+    pub(crate) fn subscribe_list_mapped<T: Send + 'static>(
+        &self,
+        map: impl Fn(&[ThreadMetadata]) -> T + Send + 'static,
+    ) -> Result<mpsc::UnboundedReceiver<T>, ThreadError> {
+        Ok(self
+            .list
+            .lock()
+            .map_err(|_| unavailable())?
+            .subscribe_mapped(map))
+    }
+
     pub fn prepared_agents(&self) -> Vec<PreparedAgent> {
         self.agents
             .lock()

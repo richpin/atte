@@ -296,6 +296,29 @@ beforeEach(() => {
     () => layoutWidth,
   );
   vi.mocked(invoke).mockImplementation(async (command, args) => {
+    if (command === "subscribe_notifications") {
+      (
+        args as { channel: { onmessage: (state: unknown) => void } }
+      ).channel.onmessage({
+        supported: false,
+        preferences: { completion: true, permission: true },
+        authorization: "unknown",
+        failure: null,
+        confirmedCompletions: {},
+        navigation: null,
+      });
+      return "notification-subscription";
+    }
+    if (
+      [
+        "set_notification_context",
+        "acknowledge_notification_navigation",
+        "set_notification_preferences",
+        "request_notification_permission",
+        "open_notification_settings",
+      ].includes(command)
+    )
+      return;
     if (command === "subscribe_thread_list")
       return Promise.resolve("list-subscription");
     if (command === "list_threads") return Promise.resolve([]);
@@ -4748,17 +4771,40 @@ it("reports request failure with one toast and no banner or sidebar error, witho
   expect(screen.queryByRole("status", { name: "스레드 오류" })).toBeNull();
 });
 
-it("confirms completion only on the visible thread page and preserves it through cancellation and duplicate updates", async () => {
+it("uses backend completion confirmations and reports only the visible thread page", async () => {
   const first = { ...responseThread("first"), completedTurnId: "first-turn" };
   const second = responseThread("second");
+  let latestFirst = first;
+  let notificationUpdate!: (state: Record<string, unknown>) => void;
+  const notificationState = {
+    supported: true,
+    preferences: { completion: true, permission: true },
+    authorization: "granted",
+    failure: null,
+    navigation: null,
+    confirmedCompletions: {} as Record<string, string>,
+  };
   let listUpdate!: (entries: Record<string, unknown>[]) => void;
   const channels = new Map<string, (update: Record<string, unknown>) => void>();
   vi.mocked(invoke).mockImplementation(async (command, args) => {
+    if (command === "subscribe_notifications") {
+      notificationUpdate = (
+        args as { channel: { onmessage: typeof notificationUpdate } }
+      ).channel.onmessage;
+      notificationUpdate(notificationState);
+    }
     if (command === "list_threads") return [first, second];
     if (command === "prepared_agents") return [{ id: "codex", name: "Codex" }];
     if (command === "subscribe_thread_list") {
-      listUpdate = (args as { channel: { onmessage: typeof listUpdate } })
+      const publish = (args as { channel: { onmessage: typeof listUpdate } })
         .channel.onmessage;
+      listUpdate = (entries) => {
+        latestFirst = {
+          ...first,
+          ...entries.find((entry) => entry.id === first.id),
+        };
+        publish(entries);
+      };
     }
     if (command === "subscribe_thread") {
       const id = (args as { id: string }).id;
@@ -4766,7 +4812,10 @@ it("confirms completion only on the visible thread page and preserves it through
         .channel.onmessage;
       channels.set(id, update);
       queueMicrotask(() =>
-        update({ kind: "thread", thread: id === first.id ? first : second }),
+        update({
+          kind: "thread",
+          thread: id === first.id ? latestFirst : second,
+        }),
       );
     }
     if (command === "agent_catalog" || command === "refresh_agent_catalog")
@@ -4778,6 +4827,18 @@ it("confirms completion only on the visible thread page and preserves it through
     await screen.findByRole("status", { name: "미확인 완료" }),
   ).toBeDefined();
   await userEvent.click(getSidebarThreadButton(first.title));
+  await waitFor(() =>
+    expect(invoke).toHaveBeenCalledWith("set_notification_context", {
+      threadId: first.id,
+      locale: "ko",
+      settingsVisible: false,
+    }),
+  );
+  notificationState.confirmedCompletions = { [first.id]: "first-turn" };
+  notificationUpdate({
+    ...notificationState,
+    confirmedCompletions: { ...notificationState.confirmedCompletions },
+  });
   await waitFor(() =>
     expect(screen.queryByRole("status", { name: "미확인 완료" })).toBeNull(),
   );
@@ -4808,6 +4869,18 @@ it("confirms completion only on the visible thread page and preserves it through
   ).toBeDefined();
   await userEvent.click(getSidebarThreadButton(first.title));
   await waitFor(() =>
+    expect(invoke).toHaveBeenCalledWith("set_notification_context", {
+      threadId: first.id,
+      locale: "ko",
+      settingsVisible: false,
+    }),
+  );
+  notificationState.confirmedCompletions = { [first.id]: "late-first" };
+  notificationUpdate({
+    ...notificationState,
+    confirmedCompletions: { ...notificationState.confirmedCompletions },
+  });
+  await waitFor(() =>
     expect(screen.queryByRole("status", { name: "미확인 완료" })).toBeNull(),
   );
   await openAgentManagement();
@@ -4818,6 +4891,18 @@ it("confirms completion only on the visible thread page and preserves it through
     await screen.findByRole("status", { name: "미확인 완료" }),
   ).toBeDefined();
   await userEvent.click(getSidebarThreadButton(first.title));
+  await waitFor(() =>
+    expect(invoke).toHaveBeenCalledWith("set_notification_context", {
+      threadId: first.id,
+      locale: "ko",
+      settingsVisible: false,
+    }),
+  );
+  notificationState.confirmedCompletions = { [first.id]: "while-settings" };
+  notificationUpdate({
+    ...notificationState,
+    confirmedCompletions: { ...notificationState.confirmedCompletions },
+  });
   await waitFor(() =>
     expect(screen.queryByRole("status", { name: "미확인 완료" })).toBeNull(),
   );
@@ -5241,3 +5326,52 @@ it.each(["light", "dark"])(
     ).toBeTruthy();
   },
 );
+
+it("opens the thread from a notification and acknowledges its navigation intent once", async () => {
+  const target = responseThread("notification-target");
+  let notificationUpdate!: (state: Record<string, unknown>) => void;
+  const original = vi.mocked(invoke).getMockImplementation();
+  vi.mocked(invoke).mockImplementation((command, args) => {
+    if (command === "list_threads") return Promise.resolve([target]);
+    if (command === "subscribe_thread") return subscribeWith(args, target);
+    if (command === "subscribe_notifications") {
+      notificationUpdate = (
+        args as { channel: { onmessage: typeof notificationUpdate } }
+      ).channel.onmessage;
+      return Promise.resolve("notification-subscription");
+    }
+    return original?.(command, args) ?? Promise.resolve();
+  });
+  render(() => <App />);
+  await waitFor(() => expect(typeof notificationUpdate).toBe("function"));
+  const state = {
+    supported: true,
+    preferences: { completion: true, permission: true },
+    authorization: "granted",
+    failure: null,
+    confirmedCompletions: {},
+    navigation: { id: "click-one", threadId: target.id },
+  };
+  notificationUpdate(state);
+  await waitFor(() =>
+    expect(
+      getSidebarThreadButton(target.title).getAttribute("aria-current"),
+    ).toBe("page"),
+  );
+  await waitFor(() =>
+    expect(invoke).toHaveBeenCalledWith("acknowledge_notification_navigation", {
+      id: "click-one",
+    }),
+  );
+  notificationUpdate({
+    ...state,
+    preferences: { completion: false, permission: true },
+  });
+  expect(
+    vi
+      .mocked(invoke)
+      .mock.calls.filter(
+        ([command]) => command === "acknowledge_notification_navigation",
+      ),
+  ).toHaveLength(1);
+});

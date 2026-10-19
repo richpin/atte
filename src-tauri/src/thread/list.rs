@@ -1,9 +1,11 @@
 use super::{mpsc, HashMap, ThreadMetadata, Uuid};
 
+type ListSubscriber = Box<dyn Fn(&[ThreadMetadata]) -> bool + Send>;
+
 #[derive(Default)]
 pub(super) struct ThreadList {
     pub entries: HashMap<Uuid, ThreadMetadata>,
-    subscribers: Vec<mpsc::UnboundedSender<Vec<ThreadMetadata>>>,
+    subscribers: Vec<ListSubscriber>,
 }
 
 impl ThreadList {
@@ -33,16 +35,22 @@ impl ThreadList {
 
     fn publish_entries(&mut self) {
         let entries = self.sorted_entries();
-        self.subscribers
-            .retain(|subscriber| subscriber.send(entries.clone()).is_ok());
+        self.subscribers.retain(|subscriber| subscriber(&entries));
     }
 
     pub fn subscribe(&mut self) -> mpsc::UnboundedReceiver<Vec<ThreadMetadata>> {
+        self.subscribe_mapped(<[ThreadMetadata]>::to_vec)
+    }
+
+    /// Capture event context at publication, before an asynchronous consumer can lag.
+    pub fn subscribe_mapped<T: Send + 'static>(
+        &mut self,
+        map: impl Fn(&[ThreadMetadata]) -> T + Send + 'static,
+    ) -> mpsc::UnboundedReceiver<T> {
         let (sender, receiver) = mpsc::unbounded_channel();
-        let _ = sender.send(self.sorted_entries());
+        let _ = sender.send(map(&self.sorted_entries()));
         self.subscribers
-            .retain(|subscriber| !subscriber.is_closed());
-        self.subscribers.push(sender);
+            .push(Box::new(move |entries| sender.send(map(entries)).is_ok()));
         receiver
     }
 }
@@ -69,6 +77,25 @@ mod tests {
             completed_turn_id: None,
             interrupted: false,
         }
+    }
+
+    #[test]
+    fn captures_event_context_before_the_subscriber_consumes_it() {
+        use std::sync::{
+            atomic::{AtomicBool, Ordering},
+            Arc,
+        };
+        let active = Arc::new(AtomicBool::new(true));
+        let context = Arc::clone(&active);
+        let mut list = ThreadList::default();
+        let mut updates = list
+            .subscribe_mapped(move |entries| (entries.to_vec(), context.load(Ordering::Acquire)));
+        let _ = updates.try_recv().unwrap();
+        list.publish(metadata(Uuid::from_u128(1), 1));
+        active.store(false, Ordering::Release);
+        list.publish(metadata(Uuid::from_u128(2), 2));
+        assert!(updates.try_recv().unwrap().1);
+        assert!(!updates.try_recv().unwrap().1);
     }
 
     #[test]

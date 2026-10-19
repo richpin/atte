@@ -1,3 +1,4 @@
+import { createDesktopNotifications } from "features/desktop-notifications";
 import { createFilesManager } from "features/workspace-files";
 import {
   createThreadModel,
@@ -7,13 +8,14 @@ import {
 } from "pages/thread";
 import { useI18n } from "shared/i18n";
 import { showErrorToast } from "shared/ui";
-import { createEffect, createResource, createSignal } from "solid-js";
+import { createEffect, createResource, createSignal, on } from "solid-js";
 import { createThreadPanelModel } from "widgets/thread-panel";
 
 export type AppView = "new-thread" | "thread" | "general" | "agents";
 
 export function createAppShellModel() {
-  const { t } = useI18n();
+  const { t, locale } = useI18n();
+  const notifications = createDesktopNotifications();
   const threads = createThreadModel(undefined, showErrorToast);
   const threadPanels = createThreadPanelModel(createFilesManager(t));
   const [view, setView] = createSignal<AppView>("new-thread");
@@ -109,15 +111,24 @@ export function createAppShellModel() {
   }
 
   createEffect(() => {
-    if (view() !== "thread") return;
-    const id = threads.selectedThreadId();
-    if (!id) return;
-    const current = threads.thread();
-    const completion =
-      threads.history().find((entry) => entry.id === id)?.completedTurnId ??
-      (current?.id === id ? current.completedTurnId : undefined);
-    if (completion) threads.confirmCompletion(id, completion);
+    const id =
+      view() === "thread" ? (threads.selectedThreadId() ?? null) : null;
+    void notifications.reportContext(id, locale(), view() === "general");
   });
+
+  createEffect(
+    on(
+      () => notifications.state()?.navigation?.id,
+      (id) => {
+        const navigation = notifications.state()?.navigation;
+        if (!id || !navigation) return;
+        void (async () => {
+          await openThread(navigation.threadId);
+          await notifications.acknowledge(id);
+        })();
+      },
+    ),
+  );
 
   createEffect(() => {
     if (view() === "thread" && !threads.selectedThreadId()) showNewThread();
@@ -125,6 +136,7 @@ export function createAppShellModel() {
 
   return {
     view,
+    notifications,
     threads,
     threadPanels,
     agents: () => agents() ?? [],

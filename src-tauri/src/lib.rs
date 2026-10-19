@@ -8,6 +8,7 @@ mod git;
 mod installation;
 mod installation_files;
 mod lifecycle;
+mod notifications;
 mod open_working_folder;
 pub mod storage;
 pub mod thread;
@@ -459,6 +460,7 @@ pub fn run() {
                 }
             });
             lifecycle::install(app.handle())?;
+            notifications::install(app.handle())?;
             Ok(())
         })
         .manage(Subscriptions::default())
@@ -470,6 +472,14 @@ pub fn run() {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                 api.prevent_close();
                 let _ = window.hide();
+            }
+            if matches!(
+                event,
+                tauri::WindowEvent::Focused(_)
+                    | tauri::WindowEvent::Resized(_)
+                    | tauri::WindowEvent::CloseRequested { .. }
+            ) {
+                notifications::refresh_activity(window.app_handle());
             }
             if matches!(event, tauri::WindowEvent::Destroyed) {
                 window.state::<workspace_files::WorkspaceFiles>().clear();
@@ -520,6 +530,12 @@ pub fn run() {
                 inspect_working_folder,
                 delete_queued_message,
                 retry_queued_message,
+                notifications::subscribe_notifications,
+                notifications::set_notification_context,
+                notifications::request_notification_permission,
+                notifications::set_notification_preferences,
+                notifications::acknowledge_notification_navigation,
+                notifications::open_notification_settings,
                 subscribe_thread_list,
                 prepared_agents,
                 connect_thread,
