@@ -48,7 +48,8 @@ Registry 갱신은 `registry_metadata`만 트랜잭션으로 교체한다. 목�
 | --- | --- | --- |
 | `id` | TEXT PRIMARY KEY NOT NULL | Atte가 발급한 스레드 UUID |
 | `title` | TEXT NOT NULL | 잠정 제목 또는 에이전트가 제공한 제목; 명시적 해제는 빈 문자열 |
-| `working_folder` | TEXT NOT NULL | 작업 폴더의 경로 |
+| `working_folder` | TEXT NOT NULL | 에이전트가 실제로 작업하는 폴더의 경로 |
+| `worktree` | TEXT, nullable | worktree 생성 스레드의 `sourceFolder`·`root` 경로 JSON. 기존 폴더를 사용하는 스레드는 NULL |
 | `agent_id` | TEXT NOT NULL | 스레드에 고정된 에이전트 ID |
 | `session_id` | TEXT | 에이전트의 원격 세션 ID |
 | `created_at` | INTEGER NOT NULL | 생성 Unix 초 |
@@ -68,6 +69,8 @@ Registry 갱신은 `registry_metadata`만 트랜잭션으로 교체한다. 목�
 종료와 재실행 시 `failed` 상태는 보존하며 나머지 연결 상태는 `disconnected`로 복원한다. 이전 실행 중·승인 대기·중단 처리 상태는 중단 여부로 남기며 승인 조작이나 prompt를 되살리지 않는다. 사용자가 스레드를 선택하면 `session/load`를 우선 사용하고 전체 replay 성공 후 메모리의 본문을 교체한다. 실패한 부분 replay는 표시하지 않는다. `resume`만 지원하면 본문 없이 기존 맥락을 이어간다는 안내를 표시한다. 에이전트 부재 시 전체 본문을 읽을 수 있는 디스크 사본은 없다.
 
 연결 시작 전 상태가 `failed`이고 `lastPromptAt`이 NULL이면 다음 Reconnect 또는 재진입에서 원격 세션 참조를 비우고 `session/new`를 호출한다. Atte 스레드 ID와 대기 메시지는 유지하며 새 세션의 설정은 ACP 응답을 사용한다. 실패 직후 자동 재시도는 하지 않는다. 전송 시각이 있으면 기존 세션을 복원하며 실패를 새 세션으로 대체하지 않는다. 초기 스키마 v1만 수정하며 기존 개발 DB 변환·초기화나 과거 값으로 미전송 여부를 추정하는 처리는 하지 않는다.
+
+worktree 스레드를 삭제하면 프로세스를 종료·회수하고 checkout을 제거한 뒤 스레드 DB 행을 삭제한다. worktree 제거 실패 시 DB 행은 유지한다. checkout 제거 이후 DB 삭제 실패 시에는 기록이 남고 파일은 이미 제거되며, 같은 삭제를 재시도할 수 있다. 일반 스레드 삭제는 기존 작업 폴더를 보존한다. 자세한 정책은 [worktree 수명](worktrees.md)을 따른다.
 
 ### 스레드 행의 대기열
 

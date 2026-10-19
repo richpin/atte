@@ -17,6 +17,7 @@ CREATE TABLE threads (
     id TEXT PRIMARY KEY NOT NULL,
     title TEXT NOT NULL,
     working_folder TEXT NOT NULL,
+    worktree TEXT CHECK (worktree IS NULL OR (json_valid(worktree) AND json_type(worktree) = 'object')),
     agent_id TEXT NOT NULL,
     session_id TEXT,
     created_at INTEGER NOT NULL CHECK (created_at >= 0),

@@ -1,5 +1,6 @@
 export { AgentIcon } from "./agent-icon";
 export { Button, type ButtonProps } from "./button";
+export { Callout } from "./callout";
 export {
   Card,
   CardContent,

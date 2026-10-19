@@ -125,6 +125,7 @@ export const ko = {
   },
   thread: {
     find: {
+      menuLabel: "찾기",
       label: "대화에서 찾기",
       placeholder: "검색어 입력…",
       previous: "이전 결과 (Shift+Enter)",
@@ -209,6 +210,9 @@ export const ko = {
       configure: "스레드 설정을 변경할 수 없습니다.",
     },
     openSidebar: "사이드바 열기",
+    newWorktree: "새 worktree",
+    worktreeMode: "새 worktree 사용",
+    creating: "스레드 생성 중…",
     workingFolder: "작업 폴더",
     agent: "에이전트",
     startThread: "스레드 시작",
@@ -333,6 +337,9 @@ export const ko = {
     renaming: "저장 중…",
     renameFailed: "스레드 이름을 변경할 수 없습니다. 다시 시도해주세요.",
     deleteFailed: "스레드를 삭제할 수 없습니다. 다시 시도해주세요.",
+    worktreeDeleteTitle: "worktree도 함께 삭제됩니다",
+    worktreeDeleteDescription:
+      "이 스레드의 worktree 폴더와 미커밋 변경·미추적 파일을 포함한 모든 파일이 삭제됩니다. 필요한 작업은 먼저 원본 브랜치에 반영하거나 별도로 보관해주세요.",
     deleteTitle: "스레드를 삭제할까요?",
     deleteDescription:
       "이 스레드가 영구적으로 삭제됩니다. 이 작업은 취소할 수 없습니다.",
@@ -367,6 +374,21 @@ export const ko = {
     logoutFailed: "로그아웃하지 못했습니다. 다시 시도해주세요.",
   },
   backend: {
+    worktreeGitMissing: "Git을 실행할 수 없습니다. Git 설치를 확인해주세요.",
+    worktreeNoCommit: "Worktree를 만들려면 먼저 커밋을 만들어주세요.",
+    worktreeBare: "bare 저장소에서는 worktree를 시작할 수 없습니다.",
+    worktreeRepositoryRequired: "Git 저장소 안의 폴더를 선택해주세요.",
+    worktreeGitLaunch: "Git을 실행할 수 없습니다",
+    worktreeGitPath: "Git 경로를 읽을 수 없습니다.",
+    worktreeRepositoryName: "저장소 이름을 확인할 수 없습니다.",
+    worktreeSubfolderOutside: "선택한 하위 폴더가 worktree 밖을 가리킵니다.",
+    worktreeSubfolderMissing: "선택한 하위 폴더가 HEAD 커밋에 없습니다.",
+    worktreeUnavailable: "Worktree를 사용할 수 없습니다",
+    worktreeDeletion: "Worktree 삭제에 실패했습니다",
+    worktreeInvalidPath: "Worktree 경로가 올바르지 않습니다.",
+    worktreeRemaining: "Worktree 폴더가 남아 있습니다.",
+    worktreeCleanup: "Worktree 정리에 실패했습니다. 보존된 경로",
+
     requestExecutionFailed: "메시지 실행에 실패했습니다. 다시 시도해주세요.",
     appClosing: "앱을 종료하고 있습니다.",
     openWindowFailed: "창을 열 수 없습니다.",

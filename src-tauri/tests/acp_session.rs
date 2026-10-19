@@ -526,6 +526,11 @@ async fn first_input_replaces_only_default_session_titles() {
     ] {
         let folder = tempfile::tempdir().unwrap();
         let mut agent = mock_agent();
+        let title_gate = folder.path().join("title-ready");
+        agent.env.insert(
+            "TITLE_UPDATES_NEW_GATE".into(),
+            title_gate.to_string_lossy().into(),
+        );
         agent.env.insert("TITLE_UPDATES_NEW".into(), json!([
             {"sessionUpdate":"session_info_update","title":title},
             {"sessionUpdate":"config_option_update","configOptions":[
@@ -537,6 +542,9 @@ async fn first_input_replaces_only_default_session_titles() {
         let mut stream = subscribe(&threads, draft.id);
         threads.connect(draft.id).unwrap();
         settle(&threads, draft.id).await;
+        // Send this test's title/config notifications after session preparation,
+        // so they exercise first-input title precedence rather than handshake ordering.
+        std::fs::write(&title_gate, "ready").unwrap();
         // The following config notification is a barrier even when the title is unchanged.
         tokio::time::timeout(Duration::from_secs(5), async {
             loop {
@@ -792,7 +800,7 @@ async fn deleting_an_active_session_is_detached_and_keeps_shared_sessions_usable
     settle(&threads, remaining.id).await;
     threads.send_message(deleted.id, "hold".into()).unwrap();
 
-    threads.delete(deleted.id).unwrap();
+    threads.delete(deleted.id).await.unwrap();
 
     assert!(threads.get(deleted.id).is_err());
     wait_for_request(&log, "session/delete remote-1").await;
@@ -826,7 +834,7 @@ async fn deleting_without_remote_capability_skips_the_request_and_keeps_shared_s
     threads.connect(remaining.id).unwrap();
     settle(&threads, remaining.id).await;
 
-    threads.delete(deleted.id).unwrap();
+    threads.delete(deleted.id).await.unwrap();
     threads
         .send_message(remaining.id, "still connected".into())
         .unwrap();
@@ -859,7 +867,7 @@ async fn a_deleted_ready_session_finishing_does_not_close_the_shared_connection(
     threads.connect(remaining.id).unwrap();
     settle(&threads, remaining.id).await;
 
-    threads.delete(deleted.id).unwrap();
+    threads.delete(deleted.id).await.unwrap();
     wait_for_request(&log, "session/delete remote-1").await;
     tokio::time::sleep(Duration::from_millis(50)).await;
 
@@ -887,7 +895,7 @@ async fn remote_delete_error_does_not_restore_the_locally_deleted_thread() {
     threads.connect(deleted.id).unwrap();
     settle(&threads, deleted.id).await;
 
-    threads.delete(deleted.id).unwrap();
+    threads.delete(deleted.id).await.unwrap();
 
     wait_for_request(&log, "session/delete remote-1").await;
     assert!(threads.get(deleted.id).is_err());
@@ -921,7 +929,7 @@ async fn transport_close_during_remote_delete_does_not_restore_the_local_thread(
     threads.connect(remaining.id).unwrap();
     settle(&threads, remaining.id).await;
 
-    threads.delete(deleted.id).unwrap();
+    threads.delete(deleted.id).await.unwrap();
 
     wait_for_request(&log, "session/delete remote-1").await;
     assert_eq!(
@@ -946,7 +954,7 @@ async fn deleting_a_restored_session_sends_only_the_exact_remote_delete_request(
     std::fs::write(&log, "").unwrap();
     let restored = Threads::with_store(vec![agent], store).unwrap();
 
-    restored.delete(saved).unwrap();
+    restored.delete(saved).await.unwrap();
 
     wait_for_request(&log, "session/delete remote-1").await;
     let requests = std::fs::read_to_string(&log).unwrap();
@@ -967,7 +975,7 @@ async fn deleting_a_restored_session_without_delete_capability_skips_remote_dele
     std::fs::write(&log, "").unwrap();
     let restored = Threads::with_store(vec![agent], store).unwrap();
 
-    restored.delete(saved).unwrap();
+    restored.delete(saved).await.unwrap();
 
     wait_for_request(&log, "initialize ").await;
     let requests = std::fs::read_to_string(log).unwrap();
@@ -995,7 +1003,7 @@ async fn initialize_failure_during_restored_session_deletion_keeps_the_local_del
         .insert("DELETE_CONNECTION_MODE".into(), "init-error".into());
     let restored = Threads::with_store(vec![agent], store).unwrap();
 
-    restored.delete(saved).unwrap();
+    restored.delete(saved).await.unwrap();
 
     wait_for_request(&log, "initialize ").await;
     tokio::time::sleep(Duration::from_millis(50)).await;
@@ -1018,7 +1026,7 @@ async fn deleting_a_restored_session_after_agent_removal_keeps_the_local_deletio
     let (store, saved) = persist_remote_session(folder.path(), &agent).await;
     let restored = Threads::with_store(Vec::new(), store.clone()).unwrap();
 
-    restored.delete(saved).unwrap();
+    restored.delete(saved).await.unwrap();
 
     let reopened = Threads::with_store(Vec::new(), store).unwrap();
     assert_eq!(
@@ -1040,7 +1048,7 @@ async fn missing_executable_during_restored_session_deletion_keeps_the_local_del
     agent.command = folder.path().join("missing-agent");
     let restored = Threads::with_store(vec![agent], store.clone()).unwrap();
 
-    restored.delete(saved).unwrap();
+    restored.delete(saved).await.unwrap();
 
     restored.shutdown().await;
     let reopened = Threads::with_store(Vec::new(), store).unwrap();
@@ -1062,7 +1070,7 @@ async fn launch_failure_during_restored_session_deletion_keeps_the_local_deletio
     agent.command = folder.path().to_path_buf();
     let restored = Threads::with_store(vec![agent], store.clone()).unwrap();
 
-    restored.delete(saved).unwrap();
+    restored.delete(saved).await.unwrap();
 
     restored.shutdown().await;
     let reopened = Threads::with_store(Vec::new(), store).unwrap();
@@ -1092,7 +1100,7 @@ async fn process_exit_during_restored_session_deletion_keeps_the_local_deletion(
         .insert("DELETE_CONNECTION_MODE".into(), "exit".into());
     let restored = Threads::with_store(vec![agent], store).unwrap();
 
-    restored.delete(saved).unwrap();
+    restored.delete(saved).await.unwrap();
 
     wait_for_request(&log, "initialize ").await;
     assert!(restored.list().unwrap().is_empty());
@@ -1114,7 +1122,7 @@ async fn authentication_failure_during_restored_session_deletion_keeps_the_local
     agent.env.insert("DELETE_MODE".into(), "auth".into());
     let restored = Threads::with_store(vec![agent], store).unwrap();
 
-    restored.delete(saved).unwrap();
+    restored.delete(saved).await.unwrap();
 
     wait_for_request(&log, "session/delete remote-1").await;
     assert!(restored.list().unwrap().is_empty());
@@ -1136,7 +1144,7 @@ async fn delete_rpc_failure_during_restored_session_deletion_keeps_the_local_del
     agent.env.insert("DELETE_MODE".into(), "error".into());
     let restored = Threads::with_store(vec![agent], store).unwrap();
 
-    restored.delete(saved).unwrap();
+    restored.delete(saved).await.unwrap();
 
     wait_for_request(&log, "session/delete remote-1").await;
     assert!(restored.list().unwrap().is_empty());
@@ -1168,7 +1176,7 @@ async fn deleting_a_restored_session_reuses_a_matching_shared_connection_without
     restored.connect(remaining.id).unwrap();
     settle(&restored, remaining.id).await;
 
-    restored.delete(deleted.id).unwrap();
+    restored.delete(deleted.id).await.unwrap();
 
     wait_for_request(&log, "session/delete remote-1").await;
     let requests = std::fs::read_to_string(log).unwrap();
@@ -1193,7 +1201,7 @@ async fn shutdown_reaps_a_delete_only_connection_with_a_pending_request() {
     std::fs::write(&log, "").unwrap();
     agent.env.insert("DELETE_MODE".into(), "delayed".into());
     let restored = Threads::with_store(vec![agent], store).unwrap();
-    restored.delete(saved).unwrap();
+    restored.delete(saved).await.unwrap();
     wait_for_request(&log, "session/delete remote-1").await;
 
     tokio::time::timeout(Duration::from_secs(2), restored.shutdown())
@@ -6441,4 +6449,140 @@ async fn slash_commands_route_during_idle_running_and_replay_and_reset_on_reconn
     assert!(connecting.available_commands.is_empty());
     settle(&threads, draft.id).await;
     threads.shutdown().await;
+}
+
+#[tokio::test]
+async fn worktree_sessions_use_the_selected_checkout_subdirectory_as_process_and_session_cwd() {
+    let repo = worktree_repository();
+    let parent = tempfile::tempdir().unwrap();
+    let logs = tempfile::tempdir().unwrap();
+    let pid_file = logs.path().join("pid");
+    let mut agent = mock_agent();
+    agent
+        .env
+        .insert("PID_FILE".into(), pid_file.to_string_lossy().into());
+    agent.env.insert("FIXTURE_MODE".into(), "concurrent".into());
+    let threads = std::sync::Arc::new(Threads::new(vec![agent]));
+    let draft = threads
+        .create_in_worktree(&repo.path().join("app"), parent.path(), "fixture")
+        .await
+        .unwrap();
+    let connecting = std::sync::Arc::clone(&threads);
+    let id = draft.id;
+    tokio::task::spawn_blocking(move || connecting.connect(id))
+        .await
+        .unwrap()
+        .unwrap();
+    let ready = settle(&threads, draft.id).await;
+    // The ACP fixture asserts session/new.cwd equals the process working directory.
+    assert_eq!(ready.status, ThreadStatus::SessionReady);
+    assert!(ready.working_folder.ends_with("app"));
+    let worktree = ready.worktree.unwrap();
+    assert!(ready.working_folder.starts_with(&worktree.root));
+    let pid: i32 = std::fs::read_to_string(&pid_file).unwrap().parse().unwrap();
+    threads.send_message(draft.id, "wait".into()).unwrap();
+    assert_eq!(threads.get(draft.id).unwrap().status, ThreadStatus::Running);
+    // If the process cannot be reaped, retain files and the thread for retry.
+    threads.fail_next_runtime_stop_for_test();
+    assert!(threads.delete(draft.id).await.is_err());
+    assert!(worktree.root.exists());
+    assert!(threads.get(draft.id).is_ok());
+    threads.delete(draft.id).await.unwrap();
+    assert!(!worktree.root.exists());
+    assert!(threads.get(draft.id).is_err());
+    assert!(nix::sys::signal::kill(nix::unistd::Pid::from_raw(pid), None).is_err());
+    assert!(repo.path().join("app/file").exists());
+    threads.shutdown().await;
+}
+
+fn worktree_repository() -> tempfile::TempDir {
+    let repo = tempfile::tempdir().unwrap();
+    std::fs::create_dir(repo.path().join("app")).unwrap();
+    std::fs::write(repo.path().join("app/file"), "initial").unwrap();
+    for args in [
+        vec!["init", "--quiet"],
+        vec!["add", "."],
+        vec![
+            "-c",
+            "user.name=Test",
+            "-c",
+            "user.email=test@example.invalid",
+            "-c",
+            "commit.gpgsign=false",
+            "commit",
+            "--quiet",
+            "-m",
+            "initial",
+        ],
+    ] {
+        let output = Command::new("git")
+            .arg("-C")
+            .arg(repo.path())
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+    repo
+}
+
+#[tokio::test]
+async fn blocks_other_threads_from_reconnecting_into_a_worktree_during_deletion() {
+    let repo = worktree_repository();
+    let parent = tempfile::tempdir().unwrap();
+    let logs = tempfile::tempdir().unwrap();
+    let gate = logs.path().join("exit");
+    let mut agent = mock_agent();
+    agent
+        .env
+        .insert("EOF_GATE".into(), gate.to_string_lossy().into());
+    let threads = std::sync::Arc::new(Threads::new(vec![agent]));
+    let owner = threads
+        .create_in_worktree(&repo.path().join("app"), parent.path(), "fixture")
+        .await
+        .unwrap();
+    let other = threads
+        .create_for_agent(&owner.working_folder, "fixture")
+        .unwrap();
+    threads.connect(owner.id).unwrap();
+    assert_eq!(
+        settle(&threads, owner.id).await.status,
+        ThreadStatus::SessionReady
+    );
+    threads.connect(other.id).unwrap();
+    assert_eq!(
+        settle(&threads, other.id).await.status,
+        ThreadStatus::SessionReady
+    );
+
+    let deleting = threads.clone();
+    let deletion = tokio::spawn(async move { deleting.delete(owner.id).await });
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while !gate.with_extension("arrived").exists() {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .unwrap();
+    let reconnect_blocked = threads.reconnect(other.id).is_err();
+    let input_blocked = threads
+        .send_message(other.id, "must not send".into())
+        .is_err();
+    let creation_blocked = threads
+        .create_for_agent(&other.working_folder, "fixture")
+        .is_err();
+    std::fs::write(&gate, "exit").unwrap();
+    deletion.await.unwrap().unwrap();
+    threads.shutdown().await;
+    assert!(
+        reconnect_blocked,
+        "a second thread must not start a new runtime during checkout removal"
+    );
+    assert!(input_blocked);
+    assert!(creation_blocked);
+    assert!(!other.working_folder.exists());
 }

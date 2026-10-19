@@ -120,6 +120,7 @@ export const en = {
   },
   thread: {
     find: {
+      menuLabel: "Find",
       label: "Find in conversation",
       placeholder: "Find…",
       previous: "Previous match (Shift+Enter)",
@@ -203,6 +204,9 @@ export const en = {
       configure: "The thread setting could not be changed.",
     },
     openSidebar: "Open sidebar",
+    newWorktree: "New worktree",
+    worktreeMode: "Use new worktree",
+    creating: "Creating thread…",
     workingFolder: "Working folder",
     agent: "Agent",
     startThread: "Start Thread",
@@ -328,6 +332,9 @@ export const en = {
     renaming: "Saving…",
     renameFailed: "The thread could not be renamed. Try again.",
     deleteFailed: "The thread could not be deleted. Try again.",
+    worktreeDeleteTitle: "The worktree will also be deleted",
+    worktreeDeleteDescription:
+      "This thread's worktree folder and all files, including uncommitted changes and untracked files, will be deleted. Merge any work you need into the original branch or save it elsewhere first.",
     deleteTitle: "Delete this thread?",
     deleteDescription:
       "This thread will be permanently deleted. This action cannot be undone.",
@@ -362,6 +369,24 @@ export const en = {
     logoutFailed: "Logout failed. Try again.",
   },
   backend: {
+    worktreeGitMissing:
+      "Git could not be started. Check your Git installation.",
+    worktreeNoCommit: "Create a commit before creating a worktree.",
+    worktreeBare: "Worktrees cannot be started from a bare repository.",
+    worktreeRepositoryRequired: "Choose a folder inside a Git repository.",
+    worktreeGitLaunch: "Git could not be started",
+    worktreeGitPath: "The Git path could not be read.",
+    worktreeRepositoryName: "The repository name could not be determined.",
+    worktreeSubfolderOutside:
+      "The selected subfolder points outside the worktree.",
+    worktreeSubfolderMissing:
+      "The selected subfolder does not exist in the HEAD commit.",
+    worktreeUnavailable: "The worktree is unavailable",
+    worktreeDeletion: "Worktree deletion failed",
+    worktreeInvalidPath: "The worktree path is invalid.",
+    worktreeRemaining: "The worktree folder still exists.",
+    worktreeCleanup: "Worktree cleanup failed. Preserved path",
+
     requestExecutionFailed: "The message failed. Please try again.",
     appClosing: "The app is closing.",
     openWindowFailed: "The window could not be opened.",

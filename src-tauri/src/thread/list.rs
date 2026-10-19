@@ -58,6 +58,7 @@ mod tests {
             id,
             title: id.to_string(),
             working_folder: PathBuf::from("/project"),
+            worktree: None,
             agent_id: "codex".into(),
             session_id: None,
             created_at: 1,

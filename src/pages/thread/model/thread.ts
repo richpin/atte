@@ -32,6 +32,7 @@ import {
   snapshotClipboardImage,
   subscribeThread,
   subscribeThreadList,
+  type WorkingMode,
 } from "../api/threads";
 import type {
   Attachment,
@@ -311,6 +312,7 @@ export function createThreadModel(
       id,
       title,
       workingFolder,
+      worktree,
       agentId,
       status,
       sessionId,
@@ -325,6 +327,7 @@ export function createThreadModel(
       id,
       title,
       workingFolder,
+      worktree,
       agentId,
       status,
       sessionId,
@@ -852,13 +855,17 @@ export function createThreadModel(
     }
   }
 
-  async function createInFolder(folder: string, agentId: string) {
+  async function createInFolder(
+    folder: string,
+    agentId: string,
+    workingMode: WorkingMode = "local",
+  ) {
     if (selecting()) return;
     setSelecting(true);
     setError(undefined);
     const attempt = ++selection;
     try {
-      const id = await createThread(folder, agentId);
+      const id = await createThread(folder, agentId, workingMode);
       if (disposed) return;
       if (attempt !== selection) return;
       await openThread(id);

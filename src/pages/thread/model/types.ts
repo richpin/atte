@@ -31,6 +31,7 @@ export interface Thread {
   interrupted: boolean;
   storageError: string | null;
   workingFolder: string;
+  worktree: { sourceFolder: string; root: string } | null;
   agentId: string;
   status:
     | "disconnected"
@@ -125,6 +126,7 @@ export type ThreadMetadata = Pick<
   | "id"
   | "title"
   | "workingFolder"
+  | "worktree"
   | "agentId"
   | "status"
   | "sessionId"

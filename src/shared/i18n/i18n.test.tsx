@@ -57,3 +57,26 @@ function setLanguages(...languages: string[]) {
     languages: { configurable: true, value: languages },
   });
 }
+
+test("translates worktree errors while preserving paths and Git diagnostics", () => {
+  setLanguages("en-US");
+  function WorktreeErrorProbe() {
+    const { message } = useI18n();
+    return (
+      <p data-testid="worktree-error">
+        {message(
+          "선택한 하위 폴더가 HEAD 커밋에 없습니다.\nWorktree 정리에 실패했습니다. 보존된 경로: /work/한글 repo\nfatal: contains modified files",
+          "thread.error.create",
+        )}
+      </p>
+    );
+  }
+  render(() => (
+    <I18nProvider>
+      <WorktreeErrorProbe />
+    </I18nProvider>
+  ));
+  expect(screen.getByTestId("worktree-error").textContent).toBe(
+    "The selected subfolder does not exist in the HEAD commit.\nWorktree cleanup failed. Preserved path: /work/한글 repo\nfatal: contains modified files",
+  );
+});

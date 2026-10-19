@@ -33,6 +33,7 @@ function thread(id: string, changes: Partial<Thread> = {}): Thread {
     id,
     title: id,
     workingFolder: "/project",
+    worktree: null,
     agentId: "codex",
     createdAt: 1,
     updatedAt: 1,

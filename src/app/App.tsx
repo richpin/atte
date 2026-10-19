@@ -384,7 +384,7 @@ function ShellContent(props: { shell: AppShellModel }) {
                   }}
                 >
                   <Search aria-hidden="true" class="size-4" />
-                  {t("thread.find.label")}
+                  {t("thread.find.menuLabel")}
                 </DropdownMenuItem>
                 <DropdownMenuItem
                   disabled={!threads.canReconnect()}
@@ -404,6 +404,9 @@ function ShellContent(props: { shell: AppShellModel }) {
           agents={shell.agents()}
           selectedAgent={shell.agentId()}
           selectedFolder={shell.selectedFolder()}
+          workingMode={shell.workingMode()}
+          onSelectWorkingMode={shell.setWorkingMode}
+          worktreeUnavailable={shell.worktreeUnavailable()}
           loading={shell.agentsLoading()}
           failed={shell.agentsFailed()}
           selecting={threads.selecting()}

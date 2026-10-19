@@ -83,8 +83,23 @@ export function retryQueuedMessage(id: string, message: string) {
   return invoke<void>("retry_queued_message", { id, message });
 }
 
-export function createThread(folder: string, agentId: string) {
-  return invoke<string>("create_thread", { folder, agentId });
+export type WorkingMode = "local" | "worktree";
+export interface WorkingFolderInfo {
+  repositoryRoot: string | null;
+  commit: string | null;
+  unavailableReason: string | null;
+}
+
+export function inspectWorkingFolder(folder: string) {
+  return invoke<WorkingFolderInfo>("inspect_working_folder", { folder });
+}
+
+export function createThread(
+  folder: string,
+  agentId: string,
+  workingMode: WorkingMode,
+) {
+  return invoke<string>("create_thread", { folder, agentId, workingMode });
 }
 
 export function cancelTurn(id: string, turn: string) {

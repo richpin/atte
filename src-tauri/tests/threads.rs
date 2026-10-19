@@ -1,7 +1,7 @@
 use atte_lib::thread::{Attachment, QueuedMessage, ThreadUpdate, Threads};
 
-#[test]
-fn permanently_deletes_a_thread_and_its_queued_input() {
+#[tokio::test]
+async fn permanently_deletes_a_thread_and_its_queued_input() {
     let root = tempfile::tempdir().unwrap();
     let path = root.path().join("atte.sqlite");
     let store = std::sync::Arc::new(atte_lib::storage::Store::open(&path).unwrap());
@@ -21,7 +21,7 @@ fn permanently_deletes_a_thread_and_its_queued_input() {
             ],
         )
         .unwrap();
-    threads.delete(deleted.id).unwrap();
+    threads.delete(deleted.id).await.unwrap();
     let rows: i64 = database
         .query_row(
             "SELECT COUNT(*) FROM threads WHERE id=?1",
@@ -48,8 +48,8 @@ fn permanently_deletes_a_thread_and_its_queued_input() {
     );
 }
 
-#[test]
-fn publishes_the_remaining_list_after_deletion() {
+#[tokio::test]
+async fn publishes_the_remaining_list_after_deletion() {
     let root = tempfile::tempdir().unwrap();
     let store = std::sync::Arc::new(
         atte_lib::storage::Store::open(&root.path().join("atte.sqlite")).unwrap(),
@@ -58,13 +58,14 @@ fn publishes_the_remaining_list_after_deletion() {
     let deleted = threads.create(root.path()).unwrap();
     let remaining = threads.create(root.path()).unwrap();
     let mut updates = threads.subscribe_list().unwrap();
-    updates.blocking_recv().unwrap();
+    updates.recv().await.unwrap();
 
-    threads.delete(deleted.id).unwrap();
+    threads.delete(deleted.id).await.unwrap();
 
     assert_eq!(
         updates
-            .blocking_recv()
+            .recv()
+            .await
             .unwrap()
             .into_iter()
             .map(|entry| entry.id)
@@ -73,8 +74,8 @@ fn publishes_the_remaining_list_after_deletion() {
     );
 }
 
-#[test]
-fn keeps_the_thread_and_queue_when_local_deletion_fails() {
+#[tokio::test]
+async fn keeps_the_thread_and_queue_when_local_deletion_fails() {
     let root = tempfile::tempdir().unwrap();
     let path = root.path().join("atte.sqlite");
     let store = std::sync::Arc::new(atte_lib::storage::Store::open(&path).unwrap());
@@ -89,7 +90,7 @@ fn keeps_the_thread_and_queue_when_local_deletion_fails() {
         .unwrap();
 
     let failed = matches!(
-        threads.delete(draft.id),
+        threads.delete(draft.id).await,
         Err(atte_lib::thread::ThreadError::Unavailable(_))
     );
     let rows: i64 = database
@@ -110,8 +111,8 @@ fn keeps_the_thread_and_queue_when_local_deletion_fails() {
     );
 }
 
-#[test]
-fn permanently_deletes_a_restored_remote_session_without_an_installed_agent() {
+#[tokio::test]
+async fn permanently_deletes_a_restored_remote_session_without_an_installed_agent() {
     let root = tempfile::tempdir().unwrap();
     let path = root.path().join("atte.sqlite");
     let store = std::sync::Arc::new(atte_lib::storage::Store::open(&path).unwrap());
@@ -131,7 +132,7 @@ fn permanently_deletes_a_restored_remote_session_without_an_installed_agent() {
     )
     .unwrap();
 
-    restored.delete(draft.id).unwrap();
+    restored.delete(draft.id).await.unwrap();
 
     assert!(restored.list().unwrap().is_empty());
     let rows: i64 = database
@@ -165,6 +166,7 @@ fn stores_thread_metadata_in_relational_columns() {
             "id",
             "title",
             "working_folder",
+            "worktree",
             "agent_id",
             "session_id",
             "created_at",

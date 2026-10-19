@@ -277,6 +277,7 @@ it("shows registry icons and falls back for missing or failed images", async () 
 });
 const requests = vi.fn();
 const folderSelection = vi.fn();
+const folderInspection = vi.fn();
 beforeEach(() => {
   localStorage.clear();
   pendingSnapshots = new Map();
@@ -285,6 +286,11 @@ beforeEach(() => {
   vi.stubGlobal("ResizeObserver", ResizeObserverFixture);
   vi.resetAllMocks();
   folderSelection.mockResolvedValue("/project");
+  folderInspection.mockResolvedValue({
+    repositoryRoot: null,
+    commit: null,
+    unavailableReason: "notRepository",
+  });
   openUrl.mockResolvedValue(undefined);
   vi.spyOn(HTMLElement.prototype, "offsetWidth", "get").mockImplementation(
     () => layoutWidth,
@@ -294,6 +300,7 @@ beforeEach(() => {
       return Promise.resolve("list-subscription");
     if (command === "list_threads") return Promise.resolve([]);
     if (command === "select_working_folder") return folderSelection();
+    if (command === "inspect_working_folder") return folderInspection(args);
     if (command === "prepared_agents")
       return Promise.resolve([{ id: "codex", name: "Codex" }]);
     if (command === "subscribe_thread") {
@@ -376,9 +383,7 @@ it("opens conversation find from the thread menu and restores the menu trigger f
   );
   const menu = screen.getByRole("button", { name: "스레드 메뉴" });
   await userEvent.click(menu);
-  await userEvent.click(
-    screen.getByRole("menuitem", { name: "대화에서 찾기" }),
-  );
+  await userEvent.click(screen.getByRole("menuitem", { name: "찾기" }));
   const input = await screen.findByRole("searchbox", { name: "대화에서 찾기" });
   await waitFor(() => expect(document.activeElement).toBe(input));
   await userEvent.keyboard("{Escape}");
@@ -886,6 +891,7 @@ it("groups threads by folder, collapses projects and creates within the selected
   expect(invoke).toHaveBeenCalledWith("create_thread", {
     folder: "/work/project",
     agentId: "codex",
+    workingMode: "local",
   });
   expect(invoke).toHaveBeenCalledWith("connect_thread", { id: "new" });
 });
@@ -938,6 +944,7 @@ it.each(["light", "dark"])(
     expect(invoke).toHaveBeenCalledWith("create_thread", {
       folder: "/project",
       agentId: "fixture",
+      workingMode: "local",
     });
     await screen.findByRole("textbox");
     await userEvent.click(getNewThreadButton());
@@ -1472,6 +1479,9 @@ it("opens the same delete action from the row menu and right click, then cancels
       "이 스레드가 영구적으로 삭제됩니다. 이 작업은 취소할 수 없습니다.",
     ),
   ).toBeTruthy();
+  expect(
+    screen.queryByRole("note", { name: "worktree도 함께 삭제됩니다" }),
+  ).toBeNull();
   await userEvent.click(screen.getByRole("button", { name: "취소" }));
   await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
   expect(
@@ -3623,6 +3633,7 @@ it("keeps project setup after installation until an agent is explicitly selected
   expect(invoke).toHaveBeenCalledWith("create_thread", {
     folder: "/work/original",
     agentId: "new-provider",
+    workingMode: "local",
   });
   expect(invoke).not.toHaveBeenCalledWith(
     "select_working_folder",
@@ -4360,6 +4371,7 @@ it("keeps folder selection local until starting with the currently selected agen
   expect(invoke).toHaveBeenCalledWith("create_thread", {
     folder: "/work/프로젝트",
     agentId: "fixture",
+    workingMode: "local",
   });
   await screen.findByRole("textbox");
 });
@@ -5058,3 +5070,174 @@ it("completes a subscribed slash command and preserves it after a failed send", 
   expect(input).toHaveProperty("value", "src");
   expect(screen.getByRole("button", { name: "review 명령 편집" })).toBeTruthy();
 });
+
+it.each(["light", "dark"])(
+  "creates a worktree thread once and retains selections after a failed creation in %s theme",
+  async (theme) => {
+    localStorage.setItem("atte.theme", theme);
+    folderInspection.mockResolvedValue({
+      repositoryRoot: "/project",
+      commit: "abc123",
+      unavailableReason: null,
+    });
+    let rejectCreation!: (error: Error) => void;
+    requests.mockImplementation((command) => {
+      if (command === "create_thread")
+        return new Promise((_resolve, reject) => {
+          rejectCreation = reject;
+        });
+    });
+    render(() => <App />);
+    expect(screen.getByRole("switch", { name: "새 worktree" })).toHaveProperty(
+      "checked",
+      false,
+    );
+    await userEvent.click(screen.getByRole("button", { name: "폴더 선택" }));
+    const worktree = screen.getByRole("switch", { name: "새 worktree" });
+    await waitFor(() => expect(worktree).toHaveProperty("disabled", false));
+    await userEvent.click(worktree);
+    expect(worktree).toHaveProperty("checked", true);
+    await userEvent.click(worktree);
+    expect(worktree).toHaveProperty("checked", false);
+    worktree.focus();
+    await userEvent.keyboard(" ");
+    expect(worktree).toHaveProperty("checked", true);
+    await selectNewThreadAgent("Codex");
+    const start = screen.getByRole("button", { name: "스레드 시작" });
+    fireEvent.click(start);
+    fireEvent.click(start);
+    await waitFor(() =>
+      expect(invoke).toHaveBeenCalledWith("create_thread", {
+        folder: "/project",
+        agentId: "codex",
+        workingMode: "worktree",
+      }),
+    );
+    expect(
+      vi
+        .mocked(invoke)
+        .mock.calls.filter(([command]) => command === "create_thread"),
+    ).toHaveLength(1);
+    expect(
+      screen.getByRole("button", { name: "스레드 생성 중…" }),
+    ).toHaveProperty("disabled", true);
+    rejectCreation(new Error("checkout failed"));
+    await waitFor(() =>
+      expect(
+        screen.getByRole("button", { name: "스레드 시작" }),
+      ).toHaveProperty("disabled", false),
+    );
+    expect(worktree).toHaveProperty("checked", true);
+    expect(
+      screen.getByRole("button", { name: /^새 스레드 에이전트/ }).textContent,
+    ).toContain("Codex");
+    expect(screen.getByRole("button", { name: "project" })).toBeTruthy();
+    await userEvent.click(screen.getByRole("button", { name: "새 스레드" }));
+    expect(screen.getByRole("switch", { name: "새 worktree" })).toHaveProperty(
+      "checked",
+      false,
+    );
+  },
+);
+
+it("ignores stale folder inspection results", async () => {
+  let finishOld!: (value: unknown) => void;
+  folderSelection.mockResolvedValueOnce("/old").mockResolvedValueOnce("/new");
+  folderInspection.mockImplementation((args) => {
+    if (args.folder === "/old")
+      return new Promise((resolve) => {
+        finishOld = resolve;
+      });
+    return {
+      repositoryRoot: null,
+      commit: null,
+      unavailableReason: "notRepository",
+    };
+  });
+  render(() => <App />);
+  await userEvent.click(screen.getByRole("button", { name: "폴더 선택" }));
+  await waitFor(() =>
+    expect(invoke).toHaveBeenCalledWith("inspect_working_folder", {
+      folder: "/old",
+    }),
+  );
+  await userEvent.click(screen.getByRole("button", { name: "old" }));
+  await waitFor(() =>
+    expect(invoke).toHaveBeenCalledWith("inspect_working_folder", {
+      folder: "/new",
+    }),
+  );
+  finishOld({
+    repositoryRoot: "/old",
+    commit: "abc123",
+    unavailableReason: null,
+  });
+  await Promise.resolve();
+  expect(screen.getByRole("switch", { name: "새 worktree" })).toHaveProperty(
+    "disabled",
+    true,
+  );
+  expect(screen.getByRole("button", { name: "new" })).toBeTruthy();
+});
+
+it.each(["light", "dark"])(
+  "groups worktree threads by source and shows the rotated icon in %s theme",
+  async (theme) => {
+    localStorage.setItem("atte.theme", theme);
+    const saved = {
+      id: "worktree-id",
+      title: "Isolated task",
+      workingFolder: "/isolated/id/repository",
+      worktree: {
+        sourceFolder: "/work/source",
+        root: "/isolated/id/repository",
+      },
+      agentId: "codex",
+      status: "running",
+      authentication: "authenticated",
+      turns: [],
+      permissions: [],
+      queuedMessages: [],
+    };
+    const original = vi.mocked(invoke).getMockImplementation();
+    vi.mocked(invoke).mockImplementation((command, args) => {
+      if (command === "list_threads") return Promise.resolve([saved]);
+      if (command === "subscribe_thread") return subscribeWith(args, saved);
+      return original?.(command, args) ?? Promise.resolve();
+    });
+    render(() => <App />);
+    const rowButton = await screen.findByRole("button", { name: saved.title });
+    expect(
+      screen.getByRole("button", { name: "source에 새 스레드" }),
+    ).toBeTruthy();
+    const icon = screen.getByRole("img", { name: "새 worktree 사용" });
+    expect(icon.querySelector("svg")?.classList.contains("rotate-90")).toBe(
+      true,
+    );
+    expect(icon.className).toContain("right-1");
+    expect(icon.className).toContain("group-hover/thread-row:invisible");
+    expect(icon.className).toContain("group-focus-within/thread-row:invisible");
+    const status = rowButton.parentElement?.querySelector('[class*="right-7"]');
+    expect(status).toBeTruthy();
+    await userEvent.click(rowButton);
+    expect(screen.getByRole("heading", { name: saved.title })).toBeTruthy();
+    expect(screen.queryByRole("heading", { name: /worktree-id/ })).toBeNull();
+    const menu = threadMenu(saved.title);
+    await userEvent.click(menu);
+    expect(icon.classList.contains("invisible")).toBe(true);
+    await userEvent.click(screen.getByRole("menuitem", { name: "삭제" }));
+    const callout = screen.getByRole("note", {
+      name: "worktree도 함께 삭제됩니다",
+    });
+    expect(callout.textContent).toContain("미커밋 변경·미추적 파일");
+    expect(callout.textContent).toContain(saved.worktree.root);
+    expect(screen.getByRole("alertdialog").textContent).toContain(
+      "이 스레드가 영구적으로 삭제됩니다. 이 작업은 취소할 수 없습니다.",
+    );
+    await userEvent.click(screen.getByRole("button", { name: "취소" }));
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    expect(
+      await screen.findByRole("button", { name: saved.title }),
+    ).toBeTruthy();
+  },
+);

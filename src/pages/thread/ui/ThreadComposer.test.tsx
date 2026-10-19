@@ -36,6 +36,7 @@ function readyThread(): Thread {
     contextUsage: null,
     availableCommands: [],
     workingFolder: "/workspace",
+    worktree: null,
     agentId: "agent-1",
     status: "sessionReady",
     sessionId: "session-1",

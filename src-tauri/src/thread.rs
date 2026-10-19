@@ -5,6 +5,7 @@ use crate::agent::{prepared_codex, AgentDefinition, PreparedAgent};
 use crate::agent_management::authentication::AuthenticationObservation;
 use crate::file_selection::MediaStore;
 use crate::storage::{StorageError, Store};
+use crate::worktree::Worktree;
 pub(crate) use response::update_plan_content;
 pub use response::{PlanContent, ResponsePart};
 use serde::{Deserialize, Serialize};
@@ -37,6 +38,7 @@ pub struct Thread {
     pub storage_error: Option<String>,
     /// Absolute working directory.
     pub working_folder: PathBuf,
+    pub worktree: Option<Worktree>,
     /// Fixed execution target for this thread.
     pub agent_id: String,
     /// Connection state owned by the application.
@@ -102,6 +104,7 @@ impl ThreadPatch {
             id: _,
             title,
             working_folder,
+            worktree,
             agent_id,
             session_id,
             created_at,
@@ -114,6 +117,7 @@ impl ThreadPatch {
         } = self.metadata;
         thread.title = title;
         thread.working_folder = working_folder;
+        thread.worktree = worktree;
         thread.agent_id = agent_id;
         thread.session_id = session_id;
         thread.created_at = created_at;
@@ -416,6 +420,7 @@ pub struct ThreadMetadata {
     pub id: Uuid,
     pub title: String,
     pub working_folder: PathBuf,
+    pub worktree: Option<Worktree>,
     pub agent_id: String,
     pub session_id: Option<String>,
     pub created_at: u64,
@@ -435,6 +440,7 @@ impl Thread {
             id: self.id,
             title: self.title.clone(),
             working_folder: self.working_folder.clone(),
+            worktree: self.worktree.clone(),
             agent_id: self.agent_id.clone(),
             session_id: self.session_id.clone(),
             created_at: self.created_at,
@@ -556,7 +562,14 @@ struct State {
     entries: HashMap<Uuid, Entry>,
     runtimes: Vec<Runtime>,
     agent_transitions: HashMap<String, AgentTransition>,
+    deleting: HashMap<Uuid, PathBuf>,
     closed: bool,
+}
+
+impl State {
+    fn folder_is_deleting(&self, folder: &Path) -> bool {
+        self.deleting.values().any(|root| folder.starts_with(root))
+    }
 }
 
 #[derive(Default)]
@@ -710,6 +723,7 @@ impl Threads {
                 id: saved.id,
                 title: saved.title,
                 working_folder: saved.working_folder,
+                worktree: saved.worktree,
                 agent_id: saved.agent_id,
                 session_id: saved.session_id,
                 created_at: saved.created_at,
@@ -781,6 +795,7 @@ impl Threads {
                 closed: false,
                 runtimes: Vec::new(),
                 agent_transitions: HashMap::new(),
+                deleting: HashMap::new(),
             }),
             ..Self::new(agents)
         })
@@ -1179,6 +1194,47 @@ impl Threads {
 
     /// Creates a draft with a fixed prepared agent and validated working folder.
     pub fn create_for_agent(&self, folder: &Path, agent_id: &str) -> Result<Thread, ThreadError> {
+        self.create_prepared(folder, agent_id, Uuid::new_v4(), None)
+    }
+
+    /// Creates an isolated checkout, publishing the thread only after durable storage succeeds.
+    pub async fn create_in_worktree(
+        &self,
+        source: &Path,
+        root: &Path,
+        agent_id: &str,
+    ) -> Result<Thread, ThreadError> {
+        if !self
+            .prepared_agents()
+            .iter()
+            .any(|agent| agent.id == agent_id)
+        {
+            return Err(not_found());
+        }
+        let id = Uuid::new_v4();
+        let prepared = crate::worktree::PreparedWorktree::create(source, root, id)
+            .await
+            .map_err(ThreadError::InvalidWorkingFolder)?;
+        match self.create_prepared(
+            &prepared.working_folder,
+            agent_id,
+            id,
+            Some(prepared.metadata.clone()),
+        ) {
+            Ok(thread) => Ok(thread),
+            Err(error) => Err(ThreadError::InvalidWorkingFolder(
+                prepared.rollback_error(error.to_string()).await,
+            )),
+        }
+    }
+
+    pub(crate) fn create_prepared(
+        &self,
+        folder: &Path,
+        agent_id: &str,
+        id: Uuid,
+        worktree: Option<Worktree>,
+    ) -> Result<Thread, ThreadError> {
         // Keep this guard until insertion so unregister cannot miss a new owner.
         let agents = self.agents.lock().map_err(|_| unavailable())?;
         let _agent = agents
@@ -1193,7 +1249,7 @@ impl Threads {
         }
         let created_at = now();
         let draft = Thread {
-            id: Uuid::new_v4(),
+            id,
             title: "새 스레드".into(),
             created_at,
             updated_at: created_at,
@@ -1203,6 +1259,7 @@ impl Threads {
             working_folder: folder.canonicalize().map_err(|_| {
                 ThreadError::InvalidWorkingFolder("작업 폴더를 찾을 수 없습니다.".into())
             })?,
+            worktree,
             agent_id: agent_id.into(),
             status: ThreadStatus::Disconnected,
             session_id: None,
@@ -1219,7 +1276,7 @@ impl Threads {
             available_commands: Vec::new(),
         };
         let mut state = self.lock()?;
-        if state.closed {
+        if state.closed || state.folder_is_deleting(&draft.working_folder) {
             return Err(unavailable());
         }
         if let Some(store) = &self.store {
@@ -1307,16 +1364,80 @@ impl Threads {
         Ok(())
     }
 
-    /// Permanently removes one app-owned thread locally, then requests remote cleanup.
-    ///
-    /// # Errors
-    /// Returns an error without changing in-memory state when local persistence fails.
-    pub fn delete(&self, id: Uuid) -> Result<(), ThreadError> {
+    /// Removes a thread and its owned checkout. A failed checkout removal retains the thread.
+    pub async fn delete(&self, id: Uuid) -> Result<(), ThreadError> {
+        let _lifecycle = self.lifecycle.lock().await;
+        let worktree = self.get(id)?.worktree;
+        if let Some(worktree) = worktree {
+            let runtimes = {
+                let mut state = self.lock()?;
+                state.deleting.insert(id, worktree.root.clone());
+                for entry in state.entries.values_mut() {
+                    let mut current = entry.state.lock().map_err(|_| unavailable())?;
+                    if !current.thread.working_folder.starts_with(&worktree.root) {
+                        continue;
+                    }
+                    current.generation += 1;
+                    current.thread.interrupted |= matches!(
+                        current.thread.status,
+                        ThreadStatus::Running
+                            | ThreadStatus::WaitingForApproval
+                            | ThreadStatus::Cancelling
+                    );
+                    current.thread.status = ThreadStatus::Disconnected;
+                    current.clear_permissions();
+                    if let Some(turn) = current
+                        .thread
+                        .turns
+                        .last_mut()
+                        .filter(|turn| turn.stop_reason.is_none())
+                    {
+                        turn.stop_reason = Some("cancelled".into());
+                    }
+                    entry.runtime = None;
+                    current.publish();
+                }
+                let mut runtimes = Vec::new();
+                let mut index = 0;
+                while index < state.runtimes.len() {
+                    if state.runtimes[index].folder.starts_with(&worktree.root) {
+                        runtimes.push(state.runtimes.remove(index));
+                    } else {
+                        index += 1;
+                    }
+                }
+                runtimes
+            };
+            let result = async {
+                if let Err(runtimes) = self.stop_runtimes(runtimes).await {
+                    self.restore_runtimes(runtimes);
+                    return Err(unavailable());
+                }
+                crate::worktree::remove(&worktree, id)
+                    .await
+                    .map_err(ThreadError::InvalidWorkingFolder)?;
+                self.delete_record(id)
+            }
+            .await;
+            self.lock()?.deleting.remove(&id);
+            result
+        } else {
+            self.delete_record(id)
+        }
+    }
+
+    /// Removes local records; worktree runtimes have already been stopped and reaped.
+    fn delete_record(&self, id: Uuid) -> Result<(), ThreadError> {
         let agents = self.agents.lock().map_err(|_| unavailable())?;
         let mut state = self.lock()?;
         let entry = state.entries.get_mut(&id).ok_or_else(not_found)?;
         let mut current = entry.state.lock().map_err(|_| unavailable())?;
-        let session_id = current.thread.session_id.clone();
+        let session_id = current
+            .thread
+            .worktree
+            .is_none()
+            .then(|| current.thread.session_id.clone())
+            .flatten();
         let agent = session_id.as_ref().and_then(|_| {
             agents
                 .iter()
@@ -1395,21 +1516,49 @@ impl Threads {
     }
 
     fn connect_inner(&self, id: Uuid, reconnect: bool) -> Result<Thread, ThreadError> {
+        let checkout = {
+            let state = self.lock()?;
+            if state.deleting.contains_key(&id) {
+                return Err(unavailable());
+            }
+            let current = state
+                .entries
+                .get(&id)
+                .ok_or_else(not_found)?
+                .state
+                .lock()
+                .map_err(|_| unavailable())?;
+            if state.folder_is_deleting(&current.thread.working_folder) {
+                return Err(unavailable());
+            }
+            current
+                .thread
+                .worktree
+                .as_ref()
+                .map(|worktree| (worktree.clone(), current.thread.working_folder.clone()))
+        };
+        if let Some((worktree, folder)) = checkout {
+            crate::worktree::validate(&worktree, &folder)
+                .map_err(ThreadError::InvalidWorkingFolder)?;
+        }
         let agents = self.agents.lock().map_err(|_| unavailable())?;
         let mut state = self.lock()?;
-        if state.closed {
+        if state.closed || state.deleting.contains_key(&id) {
             return Err(unavailable());
         }
-        let agent_id = state
-            .entries
-            .get(&id)
-            .ok_or_else(not_found)?
-            .state
-            .lock()
-            .map_err(|_| unavailable())?
-            .thread
-            .agent_id
-            .clone();
+        let agent_id = {
+            let current = state
+                .entries
+                .get(&id)
+                .ok_or_else(not_found)?
+                .state
+                .lock()
+                .map_err(|_| unavailable())?;
+            if state.folder_is_deleting(&current.thread.working_folder) {
+                return Err(unavailable());
+            }
+            current.thread.agent_id.clone()
+        };
         if state
             .agent_transitions
             .get(&agent_id)
@@ -1585,11 +1734,14 @@ impl Threads {
             return Err(ThreadError::InvalidMessage("메시지를 입력해주세요.".into()));
         }
         let state = self.lock()?;
-        if state.closed {
+        if state.closed || state.deleting.contains_key(&id) {
             return Err(unavailable());
         }
         let entry = state.entries.get(&id).ok_or_else(not_found)?;
         let mut current = entry.state.lock().map_err(|_| unavailable())?;
+        if state.folder_is_deleting(&current.thread.working_folder) {
+            return Err(unavailable());
+        }
         if input
             .attachments
             .iter()

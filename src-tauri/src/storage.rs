@@ -83,7 +83,7 @@ impl Store {
             .lock()
             .map_err(|_| StorageError::Unavailable)?;
         let mut statement = connection.prepare(
-            "SELECT id, title, working_folder, agent_id, session_id, created_at, updated_at, last_prompt_at, status, failure, interrupted FROM threads",
+            "SELECT id, title, working_folder, agent_id, session_id, created_at, updated_at, last_prompt_at, status, failure, interrupted, worktree FROM threads",
         )?;
         let rows = statement.query_map([], |row| {
             Ok((
@@ -98,6 +98,7 @@ impl Store {
                 row.get::<_, String>(8)?,
                 row.get::<_, Option<String>>(9)?,
                 row.get::<_, bool>(10)?,
+                row.get::<_, Option<String>>(11)?,
             ))
         })?;
         rows.map(|row| {
@@ -113,11 +114,15 @@ impl Store {
                 status,
                 failure,
                 interrupted,
+                worktree,
             ) = row?;
             Ok(ThreadMetadata {
                 id: uuid::Uuid::parse_str(&id)?,
                 title,
                 working_folder: PathBuf::from(working_folder),
+                worktree: worktree
+                    .map(|value| serde_json::from_str(&value))
+                    .transpose()?,
                 agent_id,
                 session_id,
                 created_at: u64::try_from(created_at)?,
@@ -182,7 +187,7 @@ impl Store {
             .lock()
             .map_err(|_| StorageError::Unavailable)?
             .execute(
-                "INSERT INTO threads (id, title, working_folder, agent_id, session_id, created_at, updated_at, last_prompt_at, status, failure, interrupted) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11) ON CONFLICT(id) DO UPDATE SET title=excluded.title, working_folder=excluded.working_folder, agent_id=excluded.agent_id, session_id=excluded.session_id, created_at=excluded.created_at, updated_at=excluded.updated_at, last_prompt_at=excluded.last_prompt_at, status=excluded.status, failure=excluded.failure, interrupted=excluded.interrupted",
+                "INSERT INTO threads (id, title, working_folder, agent_id, session_id, created_at, updated_at, last_prompt_at, status, failure, interrupted, worktree) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12) ON CONFLICT(id) DO UPDATE SET title=excluded.title, working_folder=excluded.working_folder, agent_id=excluded.agent_id, session_id=excluded.session_id, created_at=excluded.created_at, updated_at=excluded.updated_at, last_prompt_at=excluded.last_prompt_at, status=excluded.status, failure=excluded.failure, interrupted=excluded.interrupted, worktree=excluded.worktree",
                 params![
                     metadata.id.to_string(),
                     metadata.title,
@@ -195,6 +200,7 @@ impl Store {
                     status,
                     failure,
                     metadata.interrupted,
+                    metadata.worktree.as_ref().map(serde_json::to_string).transpose()?,
                 ],
             )?;
         Ok(())

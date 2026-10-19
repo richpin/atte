@@ -1,5 +1,10 @@
 import { createFilesManager } from "features/workspace-files";
-import { createThreadModel, preparedAgents } from "pages/thread";
+import {
+  createThreadModel,
+  inspectWorkingFolder,
+  preparedAgents,
+  type WorkingMode,
+} from "pages/thread";
 import { useI18n } from "shared/i18n";
 import { showErrorToast } from "shared/ui";
 import { createEffect, createResource, createSignal } from "solid-js";
@@ -16,6 +21,20 @@ export function createAppShellModel() {
   const [agentsFailed, setAgentsFailed] = createSignal(false);
   const [selectedAgent, setSelectedAgent] = createSignal("");
   const [selectedFolder, setSelectedFolder] = createSignal<string>();
+  const [workingMode, setWorkingMode] = createSignal<WorkingMode>("local");
+  const [folderInfo] = createResource(selectedFolder, async (folder) => {
+    try {
+      return await inspectWorkingFolder(folder);
+    } catch {
+      return {
+        repositoryRoot: null,
+        commit: null,
+        unavailableReason: "inspectionFailed",
+      };
+    }
+  });
+  const worktreeUnavailable = () => folderInfo.loading || !folderInfo()?.commit;
+
   const [agents] = createResource(agentsRevision, async () => {
     try {
       setAgentsFailed(false);
@@ -35,6 +54,7 @@ export function createAppShellModel() {
 
   function showNewThread(folder?: string) {
     threads.startNewThread();
+    setWorkingMode("local");
     if (folder !== undefined) setSelectedFolder(folder);
     setView("new-thread");
   }
@@ -54,7 +74,10 @@ export function createAppShellModel() {
 
   async function selectFolder() {
     const folder = await threads.selectFolder();
-    if (folder) setSelectedFolder(folder);
+    if (folder) {
+      setSelectedFolder(folder);
+      setWorkingMode("local");
+    }
   }
 
   async function startThread() {
@@ -65,10 +88,11 @@ export function createAppShellModel() {
       !agent ||
       agents.loading ||
       agentsFailed() ||
-      threads.selecting()
+      threads.selecting() ||
+      (workingMode() === "worktree" && worktreeUnavailable())
     )
       return;
-    await threads.createInFolder(folder, agent);
+    await threads.createInFolder(folder, agent, workingMode());
     if (threads.selectedThreadId()) setView("thread");
   }
 
@@ -108,6 +132,10 @@ export function createAppShellModel() {
     agentsFailed,
     agentId,
     selectedFolder,
+    workingMode,
+    setWorkingMode,
+    folderInfo,
+    worktreeUnavailable,
     newThreadError,
     setSelectedAgent,
     showNewThread,

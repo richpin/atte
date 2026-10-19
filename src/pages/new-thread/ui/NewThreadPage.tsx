@@ -1,4 +1,4 @@
-import { ArrowRight, Bot, ChevronDown, Folder } from "lucide-solid";
+import { ArrowRight, Bot, ChevronDown, Folder, Split } from "lucide-solid";
 import { useI18n } from "shared/i18n";
 import {
   AgentIcon,
@@ -8,6 +8,10 @@ import {
   SelectItem,
   SelectTrigger,
   SelectValue,
+  Switch,
+  SwitchControl,
+  SwitchLabel,
+  SwitchThumb,
 } from "shared/ui";
 import { Show } from "solid-js";
 
@@ -20,6 +24,9 @@ export function NewThreadPage(props: {
   agents: NewThreadAgent[];
   selectedAgent: string;
   selectedFolder?: string;
+  workingMode: "local" | "worktree";
+  onSelectWorkingMode: (mode: "local" | "worktree") => void;
+  worktreeUnavailable: boolean;
   loading: boolean;
   failed: boolean;
   selecting: boolean;
@@ -44,7 +51,7 @@ export function NewThreadPage(props: {
           <p class="text-lg text-muted">{t("thread.empty.description")}</p>
         </div>
         <div class="divide-y divide-line rounded-xl border border-line bg-panel px-4">
-          <div class="grid grid-cols-1 @sm:grid-cols-[9.5rem_minmax(0,1fr)] items-center gap-3 py-3">
+          <div class="grid h-[54px] grid-cols-[minmax(0,1fr)_minmax(0,1fr)] @sm:grid-cols-[9.5rem_minmax(0,1fr)] items-center gap-3">
             <span
               id="new-thread-folder-label"
               class="flex items-center gap-2 whitespace-nowrap text-sm text-muted"
@@ -70,7 +77,7 @@ export function NewThreadPage(props: {
               />
             </button>
           </div>
-          <div class="grid grid-cols-1 @sm:grid-cols-[9.5rem_minmax(0,1fr)] items-center gap-3 py-3">
+          <div class="grid h-[54px] grid-cols-[minmax(0,1fr)_minmax(0,1fr)] @sm:grid-cols-[9.5rem_minmax(0,1fr)] items-center gap-3">
             <label
               for="new-thread-agent"
               class="flex items-center gap-2 whitespace-nowrap text-sm text-muted"
@@ -83,7 +90,7 @@ export function NewThreadPage(props: {
               fallback={
                 <Button
                   variant="ghost"
-                  class="justify-start px-2 font-normal"
+                  class="h-9 justify-start px-2 font-normal"
                   onClick={props.onManageAgents}
                 >
                   {t("thread.manageAgents")}
@@ -119,7 +126,7 @@ export function NewThreadPage(props: {
                 <SelectTrigger
                   id="new-thread-agent"
                   aria-label={t("thread.newThreadAgent")}
-                  class="min-w-0 gap-2 border-0 px-2 text-sm font-normal"
+                  class="h-9 min-w-0 gap-2 border-0 px-2 text-sm font-normal"
                 >
                   <SelectValue<NewThreadAgent> class="min-w-0">
                     {(state) => (
@@ -138,16 +145,37 @@ export function NewThreadPage(props: {
               </Select>
             </Show>
           </div>
+          <Switch
+            class="grid h-[54px] grid-cols-[minmax(0,1fr)_minmax(0,1fr)] @sm:grid-cols-[9.5rem_minmax(0,1fr)] items-center gap-3"
+            checked={props.workingMode === "worktree"}
+            disabled={disabled() || props.worktreeUnavailable}
+            onChange={(checked) =>
+              props.onSelectWorkingMode(checked ? "worktree" : "local")
+            }
+          >
+            <SwitchLabel class="flex items-center gap-2 whitespace-nowrap text-sm font-normal text-muted">
+              <Split aria-hidden="true" class="size-4 shrink-0 rotate-90" />
+              {t("thread.newWorktree")}
+            </SwitchLabel>
+            <div class="flex min-h-9 items-center px-2">
+              <SwitchControl class="h-4.5 w-8.5 border">
+                <SwitchThumb class="size-4 data-[checked]:translate-x-4" />
+              </SwitchControl>
+            </div>
+          </Switch>
         </div>
         <div class="flex justify-end">
           <Button
             class="rounded-xl"
             disabled={
-              disabled() || !props.selectedFolder || !props.selectedAgent
+              disabled() ||
+              !props.selectedFolder ||
+              !props.selectedAgent ||
+              (props.workingMode === "worktree" && props.worktreeUnavailable)
             }
             onClick={props.onStart}
           >
-            {t("thread.startThread")}
+            {props.selecting ? t("thread.creating") : t("thread.startThread")}
             <ArrowRight aria-hidden="true" />
           </Button>
         </div>

@@ -6,6 +6,7 @@ import {
   Pencil,
   Plus,
   Settings,
+  Split,
   SquarePen,
   Trash2,
 } from "lucide-solid";
@@ -13,6 +14,7 @@ import { useI18n } from "shared/i18n";
 import {
   AgentIcon,
   Button,
+  Callout,
   Dialog,
   DialogContent,
   DialogDescription,
@@ -51,6 +53,7 @@ type SidebarThread = {
   id: string;
   title: string;
   workingFolder: string;
+  worktree?: { sourceFolder: string; root: string } | null;
   agentId: string;
   status: string;
   sessionId?: string | null;
@@ -91,9 +94,10 @@ export function AppSidebar(props: {
   const groups = createMemo(() => {
     const folders = new Map<string, SidebarThread[]>();
     for (const thread of props.threads) {
-      const entries = folders.get(thread.workingFolder) ?? [];
+      const folder = thread.worktree?.sourceFolder ?? thread.workingFolder;
+      const entries = folders.get(folder) ?? [];
       entries.push(thread);
-      folders.set(thread.workingFolder, entries);
+      folders.set(folder, entries);
     }
     return [...folders.keys()].sort().map((folder) => ({
       folder,
@@ -343,13 +347,24 @@ export function AppSidebar(props: {
                                             }
                                             class="h-8 w-full text-left group-hover/thread-row:pr-7 group-focus-within/thread-row:pr-7"
                                             classList={{
-                                              "pr-7":
-                                                menuOpen() ||
-                                                Boolean(
+                                              "pr-12": Boolean(
+                                                entry().worktree &&
                                                   status() &&
-                                                    status()?.kind !==
-                                                      "approval",
-                                                ),
+                                                  status()?.kind !== "approval",
+                                              ),
+                                              "pr-7":
+                                                !(
+                                                  entry().worktree &&
+                                                  status() &&
+                                                  status()?.kind !== "approval"
+                                                ) &&
+                                                (menuOpen() ||
+                                                  Boolean(entry().worktree) ||
+                                                  Boolean(
+                                                    status() &&
+                                                      status()?.kind !==
+                                                        "approval",
+                                                  )),
                                             }}
                                             isActive={selected()}
                                             onClick={() =>
@@ -384,8 +399,12 @@ export function AppSidebar(props: {
                                             }
                                           >
                                             <span
-                                              class="pointer-events-none absolute top-1.5 right-1 grid size-5 place-items-center group-hover/thread-row:invisible group-focus-within/thread-row:invisible"
+                                              class="pointer-events-none absolute top-1.5 grid size-5 place-items-center group-hover/thread-row:invisible group-focus-within/thread-row:invisible"
                                               classList={{
+                                                "right-7": Boolean(
+                                                  entry().worktree,
+                                                ),
+                                                "right-1": !entry().worktree,
                                                 invisible: menuOpen(),
                                               }}
                                             >
@@ -396,6 +415,25 @@ export function AppSidebar(props: {
                                                 label={status()?.label ?? ""}
                                               />
                                             </span>
+                                          </Show>
+                                          <Show when={entry().worktree}>
+                                            <SidebarMenuAction
+                                              as="span"
+                                              role="img"
+                                              aria-label={t(
+                                                "thread.worktreeMode",
+                                              )}
+                                              title={t("thread.worktreeMode")}
+                                              class="pointer-events-none text-muted [&>svg]:size-3.5 group-hover/thread-row:invisible group-focus-within/thread-row:invisible"
+                                              classList={{
+                                                invisible: menuOpen(),
+                                              }}
+                                            >
+                                              <Split
+                                                aria-hidden="true"
+                                                class="rotate-90"
+                                              />
+                                            </SidebarMenuAction>
                                           </Show>
                                           <DropdownMenuTrigger
                                             as={SidebarMenuAction}
@@ -510,12 +548,22 @@ export function AppSidebar(props: {
         }}
       >
         <DialogContent role="alertdialog">
-          <DialogHeader>
+          <DialogHeader class="space-y-3">
             <DialogTitle>{t("sidebar.deleteTitle")}</DialogTitle>
             <DialogDescription>
               {t("sidebar.deleteDescription")}
             </DialogDescription>
           </DialogHeader>
+          <Show when={deleteCandidate()?.worktree}>
+            {(worktree) => (
+              <Callout title={t("sidebar.worktreeDeleteTitle")}>
+                <p>{t("sidebar.worktreeDeleteDescription")}</p>
+                <p class="mt-2 break-all font-mono text-xs">
+                  {worktree().root}
+                </p>
+              </Callout>
+            )}
+          </Show>
           <DialogFooter>
             <Button
               aria-label={t("common.cancel")}

@@ -157,11 +157,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let supports_configuration = env::var_os("CONFIGURATION").is_some();
     let responsive_configuration = env::var_os("RESPONSIVE_CONFIGURATION").is_some();
     let mut current_configuration = configuration();
-    if mode == "concurrent" {
-        return concurrent::run();
-    }
     if let Some(path) = env::var_os("PID_FILE") {
         fs::write(path, process::id().to_string())?;
+    }
+    if mode == "concurrent" {
+        return concurrent::run();
     }
     let _descendant = if mode == "tree" {
         let mut command = Command::new(env::current_exe()?);
@@ -822,6 +822,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let new_session = response["result"]["sessionId"].clone();
         send(&mut output, response)?;
         if method == "session/new" {
+            if let Some(gate) = env::var_os("TITLE_UPDATES_NEW_GATE") {
+                while !std::path::Path::new(&gate).exists() {
+                    thread::sleep(Duration::from_millis(5));
+                }
+            }
             send_session_updates(&mut output, "TITLE_UPDATES_NEW", &new_session)?;
             send_session_updates(&mut output, "COMMANDS_UPDATES_NEW", &new_session)?;
         }
@@ -883,6 +888,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         if method == "session/new" && mode == "exit-ready" {
             thread::sleep(Duration::from_millis(200));
             process::exit(13);
+        }
+    }
+    if let Some(gate) = env::var_os("EOF_GATE") {
+        let gate = std::path::PathBuf::from(gate);
+        fs::write(gate.with_extension("arrived"), "waiting")?;
+        while !gate.exists() {
+            thread::sleep(Duration::from_millis(5));
         }
     }
     if env::var_os("DETACHED_CHILD").is_some() {

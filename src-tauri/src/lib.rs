@@ -4,6 +4,7 @@ pub mod agent_management;
 mod agent_runtime;
 mod browser;
 mod file_selection;
+mod git;
 mod installation;
 mod installation_files;
 mod lifecycle;
@@ -11,6 +12,7 @@ mod open_working_folder;
 pub mod storage;
 pub mod thread;
 mod workspace_files;
+pub mod worktree;
 
 use file_selection::{
     prepare_file_selection, prepare_media_selection, FileSelection, FileSelectionError,
@@ -189,14 +191,35 @@ async fn snapshot_clipboard_image(
 }
 
 #[tauri::command]
+async fn inspect_working_folder(folder: String) -> worktree::FolderInfo {
+    worktree::inspect(std::path::Path::new(&folder)).await
+}
+
+#[tauri::command]
 async fn create_thread(
+    app: tauri::AppHandle,
     folder: String,
     agent_id: String,
+    working_mode: worktree::WorkingMode,
     threads: State<'_, Threads>,
 ) -> Result<Uuid, ThreadError> {
-    threads
-        .create_for_agent(std::path::Path::new(&folder), &agent_id)
-        .map(|thread| thread.id)
+    let folder = std::path::Path::new(&folder);
+    match working_mode {
+        worktree::WorkingMode::Local => threads
+            .create_for_agent(folder, &agent_id)
+            .map(|thread| thread.id),
+        worktree::WorkingMode::Worktree => {
+            let root = app
+                .path()
+                .home_dir()
+                .map_err(|error| ThreadError::Unavailable(error.to_string()))?
+                .join(".atte/worktrees");
+            threads
+                .create_in_worktree(folder, &root, &agent_id)
+                .await
+                .map(|thread| thread.id)
+        }
+    }
 }
 
 #[tauri::command]
@@ -210,12 +233,12 @@ fn rename_thread(id: Uuid, title: String, threads: State<'_, Threads>) -> Result
 }
 
 #[tauri::command]
-fn delete_thread(
+async fn delete_thread(
     id: Uuid,
     threads: State<'_, Threads>,
     files: State<'_, workspace_files::WorkspaceFiles>,
 ) -> Result<(), ThreadError> {
-    threads.delete(id)?;
+    threads.delete(id).await?;
     files.forget(id);
     Ok(())
 }
@@ -226,13 +249,17 @@ fn prepared_agents(threads: State<'_, Threads>) -> Vec<agent::PreparedAgent> {
 }
 
 #[tauri::command]
-async fn connect_thread(id: Uuid, threads: State<'_, Threads>) -> Result<(), ThreadError> {
-    threads.connect(id).map(|_| ())
+async fn connect_thread(id: Uuid, app: tauri::AppHandle) -> Result<(), ThreadError> {
+    tauri::async_runtime::spawn_blocking(move || app.state::<Threads>().connect(id).map(|_| ()))
+        .await
+        .map_err(|_| ThreadError::Unavailable("스레드 상태를 사용할 수 없습니다.".into()))?
 }
 
 #[tauri::command]
-async fn reconnect_thread(id: Uuid, threads: State<'_, Threads>) -> Result<(), ThreadError> {
-    threads.reconnect(id).map(|_| ())
+async fn reconnect_thread(id: Uuid, app: tauri::AppHandle) -> Result<(), ThreadError> {
+    tauri::async_runtime::spawn_blocking(move || app.state::<Threads>().reconnect(id).map(|_| ()))
+        .await
+        .map_err(|_| ThreadError::Unavailable("스레드 상태를 사용할 수 없습니다.".into()))?
 }
 
 #[tauri::command]
@@ -490,6 +517,7 @@ pub fn run() {
                 rename_thread,
                 list_threads,
                 create_thread,
+                inspect_working_folder,
                 delete_queued_message,
                 retry_queued_message,
                 subscribe_thread_list,

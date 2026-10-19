@@ -146,7 +146,19 @@ function translateMessage(
           typeof value.message === "string"
         ? value.message
         : undefined;
-  return message ? translateContent(message, t) : t(fallback);
+  if (!message) return t(fallback);
+  const worktreeMessage = message
+    .split("\n")
+    .map((line) => {
+      for (const [source, key] of backendMessages) {
+        if (key.startsWith("backend.worktree") && line.startsWith(source))
+          return `${t(key)}${line.slice(source.length)}`;
+      }
+      return line;
+    })
+    .join("\n");
+  if (worktreeMessage !== message) return worktreeMessage;
+  return translateContent(message, t);
 }
 
 function translateContent(value: string, t: Translate): string;
