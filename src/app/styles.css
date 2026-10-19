@@ -6,6 +6,7 @@
   --color-find-match: #fde047;
   --color-find-current: #fb923c;
   --color-find-foreground: #171717;
+  --color-command: #2563eb;
   --color-response-info: #2563eb;
   --color-response-info-soft: #eff6ff;
   --color-response-warning: #c2410c;
@@ -83,6 +84,7 @@
   --color-find-match: #a16207;
   --color-find-current: #c2410c;
   --color-find-foreground: #ffffff;
+  --color-command: #93c5fd;
   --color-response-info: #3b82f6;
   --color-response-info-soft: #172554;
   --color-response-warning: #fb923c;

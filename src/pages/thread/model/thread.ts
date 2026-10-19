@@ -157,22 +157,26 @@ export function createThreadModel(
   const connecting = () =>
     Boolean(connectingThreadId()) && connectingThreadId() === thread()?.id;
   const [connectFailed, setConnectFailed] = createSignal(false);
-  const [drafts, setDrafts] = createStore<Record<string, string | undefined>>(
-    {},
-  );
+  const [drafts, setDrafts] = createStore<
+    Record<string, { text: string; command?: string } | undefined>
+  >({});
   const [draftAttachmentState, setDraftAttachmentState] = createStore<
     Record<string, Attachment[] | undefined>
   >({});
   const [attachmentErrors, setAttachmentErrors] = createSignal<string[]>([]);
   const draft = () => {
     const id = selectedThreadId();
-    return id ? (drafts[id] ?? "") : "";
+    return id ? (drafts[id]?.text ?? "") : "";
   };
-  const setThreadDraft = (id: string, value: string) =>
-    setDrafts(id, value || undefined);
-  const setDraft = (value: string) => {
+  const draftCommand = () => {
     const id = selectedThreadId();
-    if (id) setThreadDraft(id, value);
+    return id ? drafts[id]?.command : undefined;
+  };
+  const setThreadDraft = (id: string, value: string, command?: string) =>
+    setDrafts(id, value ? { text: value, command } : undefined);
+  const setDraft = (value: string, command?: string) => {
+    const id = selectedThreadId();
+    if (id) setThreadDraft(id, value, command);
   };
   const draftAttachments = () => {
     const id = selectedThreadId();
@@ -555,7 +559,7 @@ export function createThreadModel(
     setError(undefined);
     try {
       await sendMessage(current.id, { text: message, attachments });
-      if (drafts[current.id] === message) setThreadDraft(current.id, "");
+      if (drafts[current.id]?.text === message) setThreadDraft(current.id, "");
       if (
         draftAttachmentState[current.id]?.length === attachments.length &&
         draftAttachmentState[current.id]?.every(
@@ -908,6 +912,7 @@ export function createThreadModel(
     connecting,
     connectFailed,
     draft,
+    draftCommand,
     setDraft,
     draftAttachments,
     attachmentErrors,

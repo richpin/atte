@@ -34,6 +34,7 @@ function readyThread(): Thread {
     interrupted: false,
     storageError: null,
     contextUsage: null,
+    availableCommands: [],
     workingFolder: "/workspace",
     agentId: "agent-1",
     status: "sessionReady",
@@ -171,7 +172,7 @@ it("switches from PromptInput to PermissionInput when approval is requested", ()
     </I18nProvider>
   ));
 
-  expect(screen.getByRole("textbox", { name: "Message" })).toBeTruthy();
+  expect(screen.getByRole("combobox", { name: "Message" })).toBeTruthy();
   expect(
     screen.queryByRole("region", { name: "Permission request" }),
   ).toBeNull();
@@ -190,7 +191,7 @@ it("switches from PromptInput to PermissionInput when approval is requested", ()
     ],
   }));
 
-  expect(screen.queryByRole("textbox", { name: "Message" })).toBeNull();
+  expect(screen.queryByRole("combobox", { name: "Message" })).toBeNull();
   expect(
     screen.getByRole("region", { name: "Permission request" }),
   ).toBeTruthy();
@@ -365,7 +366,7 @@ it("submits PromptInput with Enter", () => {
     </I18nProvider>
   ));
 
-  fireEvent.keyDown(screen.getByRole("textbox", { name: "Message" }), {
+  fireEvent.keyDown(screen.getByRole("combobox", { name: "Message" }), {
     key: "Enter",
   });
   expect(onSend).toHaveBeenCalledOnce();
@@ -536,4 +537,69 @@ it("disables every thread mutation while the subscription is unavailable", () =>
   expect(
     screen.getByRole("button", { name: /Delete queued message/ }),
   ).toHaveProperty("disabled", true);
+});
+
+it("sizes the slash popup to the composer without an intrinsic minimum width", async () => {
+  const rect = (x: number, y: number, width: number, height: number) => ({
+    x,
+    y,
+    width,
+    height,
+    top: y,
+    left: x,
+    right: x + width,
+    bottom: y + height,
+    toJSON() {},
+  });
+  const bounds = vi
+    .spyOn(HTMLElement.prototype, "getBoundingClientRect")
+    .mockImplementation(function (this: HTMLElement) {
+      if (this.tagName === "FORM") return rect(180, 480, 720, 140);
+      if (this.tagName === "TEXTAREA") return rect(196, 496, 688, 60);
+      return rect(0, 0, 1200, 900);
+    });
+  const current = readyThread();
+  current.availableCommands = [
+    {
+      name: "review",
+      description: "A long description ".repeat(60),
+      inputHint: null,
+    },
+  ];
+  const [draft, setDraft] = createSignal("");
+  render(() => (
+    <I18nProvider>
+      <ThreadComposer
+        active={false}
+        thread={current}
+        draft={draft()}
+        answerPending={false}
+        cancelPending={false}
+        showStop={false}
+        stopping={false}
+        actionsEnabled={true}
+        canSend={true}
+        onDraftChange={setDraft}
+        onSend={() => {}}
+        onCancel={() => {}}
+        onAnswer={() => {}}
+        onConfigure={() => {}}
+        onDeleteQueued={async () => {}}
+        onRetryQueued={async () => {}}
+      />
+    </I18nProvider>
+  ));
+  try {
+    await userEvent.type(
+      screen.getByRole("combobox", { name: "Message" }),
+      "/",
+    );
+    const popup = screen
+      .getByRole("listbox")
+      .closest("[data-popper-positioner]") as HTMLElement;
+    await waitFor(() => expect(popup.style.width).toBe("720px"));
+    expect(popup.style.minWidth).toBe("0px");
+  } finally {
+    bounds.mockRestore();
+  }
 });

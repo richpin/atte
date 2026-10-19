@@ -40,6 +40,7 @@ function thread(id: string, changes: Partial<Thread> = {}): Thread {
     interrupted: false,
     storageError: null,
     contextUsage: null,
+    availableCommands: [],
     status: "sessionReady",
     sessionId: id,
     authentication: "authenticated",
@@ -1475,4 +1476,54 @@ it("updates and removes plans in earlier turns without disturbing neighboring re
     { kind: "text", id: "after", text: "After" },
   ]);
   expect(model.thread()?.turns[1].responseParts).toEqual([]);
+});
+
+it("replaces command lists from subscriptions and isolates inactive threads", async () => {
+  const model = setup();
+  const availableCommands = [
+    { name: "review", description: "Review changes", inputHint: "Files" },
+  ];
+  const first = thread("A", { availableCommands });
+  await open(model, "A", first);
+  expect(model.thread()?.availableCommands).toEqual(availableCommands);
+  const { turns: _turns, ...patch } = first;
+  stream("A")({
+    kind: "patch",
+    thread: { ...patch, availableCommands: [] },
+    turnUpdates: [],
+  });
+  expect(model.thread()?.availableCommands).toEqual([]);
+  await open(model, "B");
+  stream("A")({ kind: "patch", thread: patch, turnUpdates: [] });
+  expect(model.thread()?.availableCommands).toEqual([]);
+  await open(model, "A", first);
+  expect(model.thread()?.availableCommands).toEqual(availableCommands);
+});
+
+it("preserves selected command tokens per draft and after failed sends, then clears on success", async () => {
+  const model = setup();
+  await open(model, "A");
+  model.setDraft("/$review files", "$review");
+  await open(model, "B");
+  expect(model.draftCommand()).toBeUndefined();
+  model.setDraft("/review plain text");
+  await open(model, "A");
+  expect(model.draft()).toBe("/$review files");
+  expect(model.draftCommand()).toBe("$review");
+  commands.set("send_message", async () => {
+    throw new Error("Try again");
+  });
+  await model.send();
+  expect(model.draftCommand()).toBe("$review");
+  commands.set("send_message", async () => {});
+  await model.send();
+  expect(invoke).toHaveBeenCalledWith("send_message", {
+    id: "A",
+    input: { text: "/$review files", attachments: [] },
+  });
+  expect(model.draftCommand()).toBeUndefined();
+  expect(model.draft()).toBe("");
+  await open(model, "B");
+  expect(model.draft()).toBe("/review plain text");
+  expect(model.draftCommand()).toBeUndefined();
 });

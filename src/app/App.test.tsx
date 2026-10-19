@@ -5023,3 +5023,38 @@ it("shows the thread body and keeps the sidebar open in a narrow thread layout",
   expect(screen.getByRole("main")).toBeTruthy();
   expect((handle.nextElementSibling as HTMLElement).style.flexBasis).toBe("0%");
 });
+
+it("completes a subscribed slash command and preserves it after a failed send", async () => {
+  const ready = {
+    id: "draft-1",
+    workingFolder: "/project",
+    agentId: "codex",
+    status: "sessionReady",
+    turns: [],
+    availableCommands: [
+      { name: "review", description: "Review changes", inputHint: "Files" },
+    ],
+  };
+  requests.mockImplementation(async (command) => {
+    if (command === "send_message") throw { message: "Send failed" };
+    return ready;
+  });
+  render(() => <App />);
+  await userEvent.click(screen.getByRole("button", { name: "폴더 선택" }));
+  await startNewThreadWithAgent();
+  const input = await screen.findByRole("combobox", { name: "메시지" });
+  await userEvent.type(input, "/rev{Enter}src");
+  expect(input).toHaveProperty("value", "src");
+  expect(screen.getByRole("button", { name: "review 명령 편집" })).toBeTruthy();
+  expect(invoke).not.toHaveBeenCalledWith("send_message", expect.anything());
+  await userEvent.click(screen.getByRole("button", { name: "전송" }));
+  expect(invoke).toHaveBeenCalledWith("send_message", {
+    id: "draft-1",
+    input: { text: "/review src", attachments: [] },
+  });
+  expect((await screen.findByRole("alert")).textContent).toContain(
+    "Send failed",
+  );
+  expect(input).toHaveProperty("value", "src");
+  expect(screen.getByRole("button", { name: "review 명령 편집" })).toBeTruthy();
+});

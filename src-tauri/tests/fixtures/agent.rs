@@ -303,6 +303,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 response
             }
             "session/resume" => {
+                send_session_updates(
+                    &mut output,
+                    "COMMANDS_UPDATES_RESTORE",
+                    &request["params"]["sessionId"],
+                )?;
                 assert_eq!(mode, "resume-only");
                 assert_eq!(request["params"]["sessionId"], "remote-1");
                 send_session_updates(
@@ -317,6 +322,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 response
             }
             "session/load" => {
+                send_session_updates(
+                    &mut output,
+                    "COMMANDS_UPDATES_RESTORE",
+                    &request["params"]["sessionId"],
+                )?;
                 send_session_updates(
                     &mut output,
                     "USAGE_UPDATES_RESTORE",
@@ -410,6 +420,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
             "session/prompt" => {
+                send_session_updates(
+                    &mut output,
+                    "COMMANDS_UPDATES_RUNNING",
+                    &request["params"]["sessionId"],
+                )?;
                 send_session_updates(
                     &mut output,
                     "USAGE_UPDATES_RUNNING",
@@ -808,6 +823,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         send(&mut output, response)?;
         if method == "session/new" {
             send_session_updates(&mut output, "TITLE_UPDATES_NEW", &new_session)?;
+            send_session_updates(&mut output, "COMMANDS_UPDATES_NEW", &new_session)?;
         }
         if method == "session/prompt" && prompts == 1 {
             send_session_updates(

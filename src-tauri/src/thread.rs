@@ -55,6 +55,7 @@ pub struct Thread {
     pub configuration: Vec<ThreadConfiguration>,
     pub prompt_capabilities: PromptCapabilities,
     pub context_usage: Option<ContextUsage>,
+    pub available_commands: Vec<AvailableCommand>,
 }
 
 /// Current thread fields excluding the potentially large transcript.
@@ -71,6 +72,7 @@ pub struct ThreadPatch {
     pub configuration: Vec<ThreadConfiguration>,
     pub prompt_capabilities: PromptCapabilities,
     pub context_usage: Option<ContextUsage>,
+    pub available_commands: Vec<AvailableCommand>,
 }
 
 impl From<&Thread> for ThreadPatch {
@@ -85,6 +87,7 @@ impl From<&Thread> for ThreadPatch {
             configuration: thread.configuration.clone(),
             prompt_capabilities: thread.prompt_capabilities.clone(),
             context_usage: thread.context_usage,
+            available_commands: thread.available_commands.clone(),
         }
     }
 }
@@ -128,8 +131,18 @@ impl ThreadPatch {
         thread.configuration = self.configuration;
         thread.prompt_capabilities = self.prompt_capabilities;
         thread.context_usage = self.context_usage;
+        thread.available_commands = self.available_commands;
         true
     }
+}
+
+/// Commands advertised by the current agent connection; never persisted.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AvailableCommand {
+    pub name: String,
+    pub description: String,
+    pub input_hint: Option<String>,
 }
 
 /// Latest agent-reported context occupancy; never persisted.
@@ -719,6 +732,7 @@ impl Threads {
                 configuration: Vec::new(),
                 prompt_capabilities: PromptCapabilities::default(),
                 context_usage: None,
+                available_commands: Vec::new(),
             };
             entries.insert(
                 thread.id,
@@ -1202,6 +1216,7 @@ impl Threads {
             configuration: Vec::new(),
             prompt_capabilities: PromptCapabilities::default(),
             context_usage: None,
+            available_commands: Vec::new(),
         };
         let mut state = self.lock()?;
         if state.closed {
@@ -1454,6 +1469,7 @@ impl Threads {
             thread.session_id = None;
         }
         thread.context_usage = None;
+        thread.available_commands.clear();
         thread.status = ThreadStatus::Connecting;
         thread.authentication = AuthenticationStatus::Unknown;
         thread.failure = None;
@@ -2767,6 +2783,17 @@ impl RuntimeUpdates {
         next
     }
 
+    pub fn available_commands_updated(&self, commands: Vec<AvailableCommand>) {
+        let Ok(mut state) = self.state.lock() else {
+            return;
+        };
+        if state.generation != self.generation || state.thread.available_commands == commands {
+            return;
+        }
+        state.thread.available_commands = commands;
+        state.publish();
+    }
+
     pub fn context_usage_updated(&self, usage: ContextUsage) {
         let Ok(mut state) = self.state.lock() else {
             return;
@@ -3382,6 +3409,48 @@ mod title_tests {
             state.apply_first_prompt_title(&UserInput::text("Second input".into()));
             assert_eq!(state.thread.title, "");
         }
+    }
+
+    #[test]
+    fn command_lists_replace_snapshots_clear_and_ignore_stale_connections() {
+        let folder = tempfile::tempdir().unwrap();
+        let threads = Threads::default();
+        let draft = threads.create(folder.path()).unwrap();
+        let other = threads.create(folder.path()).unwrap();
+        let updates = updates_for(&threads, draft.id);
+        let commands = vec![AvailableCommand {
+            name: "review".into(),
+            description: "Review changes".into(),
+            input_hint: Some("Files".into()),
+        }];
+        let mut stream = threads.subscribe(draft.id).unwrap();
+        stream.try_recv().unwrap();
+        for status in [
+            ThreadStatus::Connecting,
+            ThreadStatus::Running,
+            ThreadStatus::WaitingForApproval,
+            ThreadStatus::Cancelling,
+            ThreadStatus::SessionReady,
+        ] {
+            updates.state.lock().unwrap().thread.status = status;
+            updates.available_commands_updated(commands.clone());
+            let ThreadUpdate::Patch { thread, .. } = stream.try_recv().unwrap() else {
+                panic!("expected command list patch");
+            };
+            assert_eq!(thread.available_commands, commands);
+            let mut snapshot = threads.subscribe(draft.id).unwrap();
+            let ThreadUpdate::Thread { thread } = snapshot.try_recv().unwrap() else {
+                panic!("expected command list snapshot");
+            };
+            assert_eq!(thread.available_commands, commands);
+            assert!(threads.get(other.id).unwrap().available_commands.is_empty());
+            updates.available_commands_updated(Vec::new());
+            stream.try_recv().unwrap();
+            assert!(threads.get(draft.id).unwrap().available_commands.is_empty());
+        }
+        updates.state.lock().unwrap().generation += 1;
+        updates.available_commands_updated(commands);
+        assert!(stream.try_recv().is_err());
     }
 
     #[test]

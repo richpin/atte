@@ -35,6 +35,7 @@ export function ThreadPage(props: {
     selectedThreadId,
     connecting,
     draft,
+    draftCommand,
     draftAttachments,
     attachmentErrors,
     setDraft,
@@ -312,6 +313,7 @@ export function ThreadPage(props: {
                     active={props.active}
                     thread={currentThread()}
                     draft={draft()}
+                    draftCommand={draftCommand()}
                     draftAttachments={draftAttachments()}
                     attachmentErrors={attachmentErrors()}
                     answerPending={answerPending()}

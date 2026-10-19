@@ -41,6 +41,7 @@ export function ThreadComposer(props: {
   active: boolean;
   thread: Thread;
   draft: string;
+  draftCommand?: string;
   draftAttachments?: Attachment[];
   attachmentErrors?: string[];
   answerPending: boolean;
@@ -51,7 +52,7 @@ export function ThreadComposer(props: {
   canSend: boolean;
   signInOpen?: boolean;
   promptRef?: (element: HTMLTextAreaElement) => void;
-  onDraftChange: (message: string) => void;
+  onDraftChange: (message: string, command?: string) => void;
   onSelectFiles?: () => void;
   onSelectMedia?: (kind: MediaKind) => void;
   onPasteImage?: (image: File) => void;
@@ -65,6 +66,7 @@ export function ThreadComposer(props: {
   onRetryQueued: (id: string) => Promise<void>;
 }) {
   const { t } = useI18n();
+  let composer: HTMLFormElement | undefined;
   const authenticationRequired = () =>
     props.thread.failure === "authenticationRequired";
   const submit = () => {
@@ -96,6 +98,7 @@ export function ThreadComposer(props: {
         onRetry={props.onRetryQueued}
       />
       <form
+        ref={composer}
         class="max-h-thread-composer-form shrink-0 overflow-y-auto overscroll-contain rounded-3xl border border-line bg-input-surface p-4 shadow-sm"
         onSubmit={(event) => {
           event.preventDefault();
@@ -123,6 +126,10 @@ export function ThreadComposer(props: {
               </Show>
               <PromptInput
                 value={props.draft}
+                selectedCommand={props.draftCommand}
+                commands={props.thread.availableCommands}
+                menuAnchor={composer}
+                focusScope={props.thread.id}
                 disabled={!props.canSend && !authenticationRequired()}
                 inputRef={props.promptRef}
                 focusKey={

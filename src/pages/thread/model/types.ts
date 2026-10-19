@@ -11,6 +11,12 @@ export type ConnectionFailure =
   | "resumptionUnsupported"
   | "sessionRestorationFailed";
 
+export interface AvailableCommand {
+  name: string;
+  description: string;
+  inputHint: string | null;
+}
+
 export interface ContextUsage {
   used: number;
   size: number;
@@ -44,6 +50,7 @@ export interface Thread {
   queuedMessages: QueuedMessage[];
   configuration: ThreadConfiguration[];
   contextUsage: ContextUsage | null;
+  availableCommands: AvailableCommand[];
   promptCapabilities?: { image: boolean; audio: boolean };
 }
 

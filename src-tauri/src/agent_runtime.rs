@@ -207,6 +207,16 @@ pub(crate) async fn run(
                             MaybeUndefined::Null => route.updates.title_updated(None),
                             MaybeUndefined::Undefined => {},
                         },
+                        SessionUpdate::AvailableCommandsUpdate(update) => route.updates.available_commands_updated(
+                            update.available_commands.into_iter().map(|command| crate::thread::AvailableCommand {
+                                name: command.name,
+                                description: command.description,
+                                input_hint: match command.input {
+                                    Some(agent_client_protocol::schema::v1::AvailableCommandInput::Unstructured(input)) => Some(input.hint),
+                                    _ => None,
+                                },
+                            }).collect()
+                        ),
                         SessionUpdate::UsageUpdate(update) => route.updates.context_usage_updated(crate::thread::ContextUsage { used: update.used, size: update.size }),
                         SessionUpdate::ConfigOptionUpdate(update) => route
                             .updates

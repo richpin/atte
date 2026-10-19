@@ -6380,3 +6380,65 @@ async fn real_codex_plan_document_survives_approval_and_reconnection() {
     threads.shutdown().await;
     result.unwrap();
 }
+
+#[tokio::test]
+async fn slash_commands_route_during_idle_running_and_replay_and_reset_on_reconnect() {
+    use atte_lib::thread::ThreadUpdate;
+    let folder = tempfile::tempdir().unwrap();
+    let mut agent = mock_agent();
+    for (key, commands) in [
+        (
+            "COMMANDS_UPDATES_NEW",
+            serde_json::json!([{"name":"review","description":"Review changes","input":{"hint":"Files"}}]),
+        ),
+        ("COMMANDS_UPDATES_RUNNING", serde_json::json!([])),
+        (
+            "COMMANDS_UPDATES_RESTORE",
+            serde_json::json!([{"name":"compact","description":"Compact context"}]),
+        ),
+    ] {
+        agent.env.insert(
+            key.into(),
+            serde_json::json!([
+                {"sessionUpdate":"available_commands_update","availableCommands":commands}
+            ])
+            .to_string(),
+        );
+    }
+    let threads = Threads::new(vec![agent]);
+    let draft = threads.create(folder.path()).unwrap();
+    let mut stream = threads.subscribe(draft.id).unwrap();
+    threads.connect(draft.id).unwrap();
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            if let ThreadUpdate::Patch { thread, .. } = stream.recv().await.unwrap() {
+                if !thread.available_commands.is_empty() {
+                    assert_eq!(
+                        thread.available_commands[0].input_hint.as_deref(),
+                        Some("Files")
+                    );
+                    break;
+                }
+            }
+        }
+    })
+    .await
+    .unwrap();
+    settle(&threads, draft.id).await;
+    threads
+        .send_message(draft.id, "/review src".into())
+        .unwrap();
+    let completed = settle(&threads, draft.id).await;
+    assert!(completed.available_commands.is_empty());
+    assert_eq!(completed.turns[0].message, "/review src");
+    let connecting = threads.reconnect(draft.id).unwrap();
+    assert!(connecting.available_commands.is_empty());
+    let restored = settle(&threads, draft.id).await;
+    assert_eq!(restored.available_commands[0].name, "compact");
+    assert_eq!(restored.available_commands[0].input_hint, None);
+    assert_eq!(restored.turns.len(), 1);
+    let connecting = threads.reconnect(draft.id).unwrap();
+    assert!(connecting.available_commands.is_empty());
+    settle(&threads, draft.id).await;
+    threads.shutdown().await;
+}
