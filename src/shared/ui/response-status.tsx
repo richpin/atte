@@ -1,5 +1,5 @@
-import { LoaderCircle } from "lucide-solid";
 import { Show } from "solid-js";
+import { Tailspin } from "./tailspin";
 
 export function ResponseStatus(props: {
   kind: "progress" | "complete" | "error" | "approval";
@@ -22,11 +22,7 @@ export function ResponseStatus(props: {
     >
       <Show when={props.kind === "approval"}>{props.label}</Show>
       <Show when={props.kind === "progress"}>
-        <LoaderCircle
-          aria-hidden="true"
-          class="size-4 animate-spin motion-reduce:animate-none"
-          strokeWidth={2}
-        />
+        <Tailspin class="inline-flex size-4" />
       </Show>
       <Show when={props.kind === "complete" || props.kind === "error"}>
         <span aria-hidden="true" class="size-2 rounded-full bg-current" />

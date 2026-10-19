@@ -373,7 +373,7 @@ it("keeps the response indicator with thoughts and stops thinking at the next re
       .getByRole("button", { name: "Thinking" })
       .getAttribute("aria-expanded"),
   ).toBe("true");
-  expect(document.querySelector("[data-thought] .animate-spin")).toBeNull();
+  expect(document.querySelector("[data-thought] l-tailspin")).toBeNull();
   setTurns(0, "responseParts", 2, {
     kind: "thought",
     id: "next",
@@ -385,7 +385,7 @@ it("keeps the response indicator with thoughts and stops thinking at the next re
       .getAttribute("aria-expanded"),
   ).toBe("false");
   setThinking(undefined);
-  expect(document.querySelector("[data-thought] .animate-spin")).toBeNull();
+  expect(document.querySelector("[data-thought] l-tailspin")).toBeNull();
   expect(screen.getAllByRole("button", { name: "Thinking" })).toHaveLength(2);
 });
 

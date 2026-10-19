@@ -78,6 +78,7 @@ export {
   useSidebar,
 } from "./sidebar";
 export { Switch, SwitchControl, SwitchLabel, SwitchThumb } from "./switch";
+export { Tailspin } from "./tailspin";
 export { TextField, TextFieldInput } from "./text-field";
 export { showErrorToast, ToastHost } from "./toast";
 export { Tooltip, TooltipContent, TooltipTrigger } from "./tooltip";

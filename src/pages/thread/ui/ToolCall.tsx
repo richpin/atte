@@ -5,14 +5,18 @@ import {
   FilePen,
   FileText,
   Globe,
-  LoaderCircle,
   Search,
   Terminal,
   Wrench,
   X,
 } from "lucide-solid";
 import { useI18n } from "shared/i18n";
-import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "shared/ui";
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+  Tailspin,
+} from "shared/ui";
 import { createSignal, For, Show } from "solid-js";
 import { Dynamic } from "solid-js/web";
 import type { ToolCall as ToolCallData, ToolContent } from "../model/types";
@@ -70,7 +74,7 @@ export function ToolCall(props: {
       : props.tool.status === "completed"
         ? Check
         : spinning()
-          ? LoaderCircle
+          ? Tailspin
           : Circle;
   const textContent = () =>
     (props.tool.content ?? []).flatMap((item) =>
@@ -115,9 +119,9 @@ export function ToolCall(props: {
         <Dynamic
           component={statusIcon()}
           aria-hidden="true"
-          class="size-3.5 shrink-0"
+          class="inline-flex size-3.5 shrink-0"
+          size={14}
           classList={{
-            "animate-spin motion-reduce:animate-none": spinning(),
             "text-response-warning": props.tool.status === "failed",
             "text-response-success": props.tool.status === "completed",
             "text-muted":

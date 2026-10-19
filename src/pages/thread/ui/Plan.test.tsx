@@ -65,9 +65,13 @@ it("stops animation without changing unfinished status and preserves agent order
   expect(
     [...container.querySelectorAll("li")].map((row) => row.textContent),
   ).toEqual(["In progressLow first", "PendingHigh second"]);
-  expect(container.querySelector(".animate-spin")).toBeTruthy();
+  expect(container.querySelector("l-tailspin")?.getAttribute("speed")).toBe(
+    "0.9",
+  );
   setActive(false);
-  expect(container.querySelector(".animate-spin")).toBeNull();
+  expect(container.querySelector("l-tailspin")?.getAttribute("speed")).toBe(
+    "0",
+  );
   expect(screen.getByText("In progress")).toBeTruthy();
   expect(screen.getByText("0/2 completed")).toBeTruthy();
 });

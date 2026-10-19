@@ -40,6 +40,9 @@ importers:
       '@solid-primitives/i18n':
         specifier: ^2.2.1
         version: 2.2.1(solid-js@1.9.15)
+      '@solid-primitives/media':
+        specifier: ^2.3.6
+        version: 2.3.6(solid-js@1.9.15)
       '@solid-primitives/resize-observer':
         specifier: ^2.2.0
         version: 2.2.0(solid-js@1.9.15)
@@ -64,6 +67,9 @@ importers:
       dompurify:
         specifier: ^3.4.15
         version: 3.4.15
+      ldrs:
+        specifier: ^1.1.9
+        version: 1.1.9
       lucide-solid:
         specifier: ^1.47.0
         version: 1.47.0(solid-js@1.9.15)
@@ -1283,6 +1289,9 @@ packages:
     resolution: {integrity: sha512-XmOWe7eyHYH14cLdVPoyg+GOH3rYX++KpzrylJwSW98t3Nk+U8XOl8FWKOgwtzdb8lXGf6zYwDUzeHMWfxasyg==}
     engines: {node: '>=6'}
     hasBin: true
+
+  ldrs@1.1.9:
+    resolution: {integrity: sha512-JKVdzboxeZrKecA8ovi5iIDgs59wUrtJ+LDrHCgZecNrR0AJi2cJ3ZANJ+UCNS/sHRol73/jlypNCAMCXS+Ung==}
 
   lightningcss-android-arm64@1.32.0:
     resolution: {integrity: sha512-YK7/ClTt4kAK0vo6w3X+Pnm0D2cf2vPHbhOXdoNti1Ga0al1P4TBZhwjATvjNwLEBCnKvjJc2jQgHXH0NEwlAg==}
@@ -3011,6 +3020,8 @@ snapshots:
   json-parse-even-better-errors@2.3.1: {}
 
   json5@2.2.3: {}
+
+  ldrs@1.1.9: {}
 
   lightningcss-android-arm64@1.32.0:
     optional: true

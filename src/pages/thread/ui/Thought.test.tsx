@@ -47,7 +47,7 @@ it("renders Markdown only when expanded and keeps the user's choice through upda
   );
   expect(trigger.getAttribute("aria-expanded")).toBe("true");
   expect(screen.getByRole("button", { name: "Thinking" })).toBe(trigger);
-  expect(container.querySelector(".animate-spin")).toBeNull();
+  expect(container.querySelector("l-tailspin")).toBeNull();
   fireEvent.click(trigger);
   setText("Final reasoning");
   expect(container.querySelector("[data-markdown-body]")).toBeNull();

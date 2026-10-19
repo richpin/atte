@@ -3,11 +3,10 @@ import {
   ArrowRight,
   ExternalLink,
   Globe,
-  LoaderCircle,
   RotateCw,
 } from "lucide-solid";
 import { useI18n } from "shared/i18n";
-import { Button, TextField, TextFieldInput } from "shared/ui";
+import { Button, Tailspin, TextField, TextFieldInput } from "shared/ui";
 import { mergeProps, Show } from "solid-js";
 import {
   createWebBrowserModel,
@@ -84,7 +83,7 @@ export function WebBrowser(props: WebBrowserOptions) {
               when={state().loading || creating()}
               fallback={<RotateCw class="size-4" />}
             >
-              <LoaderCircle class="size-4 animate-spin motion-reduce:animate-none" />
+              <Tailspin class="inline-flex size-4" />
             </Show>
           </Button>
           <TextField

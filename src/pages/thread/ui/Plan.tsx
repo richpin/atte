@@ -1,12 +1,11 @@
-import {
-  Check,
-  ChevronDown,
-  Circle,
-  Lightbulb,
-  LoaderCircle,
-} from "lucide-solid";
+import { Check, ChevronDown, Circle, Lightbulb } from "lucide-solid";
 import { useI18n } from "shared/i18n";
-import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "shared/ui";
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+  Tailspin,
+} from "shared/ui";
 import { createSignal, For, Show } from "solid-js";
 import { Dynamic } from "solid-js/web";
 import type { Plan as PlanData } from "../model/types";
@@ -74,15 +73,12 @@ export function PlanEntries(props: {
                 entry.status === "completed"
                   ? Check
                   : entry.status === "in_progress"
-                    ? LoaderCircle
+                    ? Tailspin
                     : Circle
               }
               aria-hidden="true"
               class="mt-0.5 size-4 shrink-0 text-muted"
-              classList={{
-                "animate-spin motion-reduce:animate-none":
-                  props.active && entry.status === "in_progress",
-              }}
+              active={props.active}
             />
             <span class="sr-only">
               {t(

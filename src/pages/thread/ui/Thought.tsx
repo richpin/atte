@@ -1,10 +1,11 @@
-import { Brain, ChevronDown, LoaderCircle } from "lucide-solid";
+import { Brain, ChevronDown } from "lucide-solid";
 import { useI18n } from "shared/i18n";
 import {
   Collapsible,
   CollapsibleContent,
   CollapsibleTrigger,
   Markdown,
+  Tailspin,
 } from "shared/ui";
 import { createSignal, Show } from "solid-js";
 import type { ResponsePart } from "../model/types";
@@ -28,10 +29,7 @@ export function Thought(props: {
           when={props.active}
           fallback={<Brain aria-hidden="true" class="size-4 shrink-0" />}
         >
-          <LoaderCircle
-            aria-hidden="true"
-            class="size-4 shrink-0 animate-spin motion-reduce:animate-none"
-          />
+          <Tailspin aria-hidden="true" class="inline-flex size-4 shrink-0" />
         </Show>
         <span>{t("thread.thought.title")}</span>
         <ChevronDown
