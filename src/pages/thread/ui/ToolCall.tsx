@@ -127,11 +127,17 @@ export function ToolCall(props: {
         />
         <span class="shrink-0 text-xs text-muted">{status()}</span>
       </CollapsibleTrigger>
-      <CollapsibleContent class="flex min-w-0 flex-col gap-3 border-t border-line px-3 py-3">
+      <CollapsibleContent
+        data-thread-search-root=""
+        data-thread-search-hidden={!expanded()}
+        class="flex min-w-0 flex-col gap-3 border-t border-line px-3 py-3"
+      >
         <Show when={plainValue(props.tool.rawInput)}>
           {(input) => (
             <section>
-              <p class="mb-1 text-xs text-muted">{t("thread.tool.input")}</p>
+              <p data-thread-search-ignore="" class="mb-1 text-xs text-muted">
+                {t("thread.tool.input")}
+              </p>
               <pre class="max-h-64 overflow-auto whitespace-pre-wrap break-words text-xs">
                 {input()}
               </pre>
@@ -141,7 +147,9 @@ export function ToolCall(props: {
         <Show when={output()}>
           {(result) => (
             <section>
-              <p class="mb-1 text-xs text-muted">{t("thread.tool.output")}</p>
+              <p data-thread-search-ignore="" class="mb-1 text-xs text-muted">
+                {t("thread.tool.output")}
+              </p>
               <pre class="max-h-64 overflow-auto whitespace-pre-wrap break-words text-xs">
                 {result()}
               </pre>

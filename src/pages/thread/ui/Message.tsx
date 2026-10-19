@@ -62,7 +62,12 @@ function UserMessage(props: { message: string; attachments: Attachment[] }) {
           collapsible() && !expanded() ? "max-h-[25rem] overflow-hidden" : ""
         }
       >
-        <div ref={content} data-user-message-content="">
+        <div
+          ref={content}
+          data-user-message-content=""
+          data-thread-search-root=""
+          on:thread-search-reveal={() => setExpanded(true)}
+        >
           <Show when={props.message}>
             <Markdown source={props.message} variant="user" streaming={false} />
           </Show>
@@ -203,6 +208,7 @@ export function Message(props: {
                     {(text) => (
                       <div
                         data-message-participant="agent"
+                        data-thread-search-root=""
                         class="w-full min-w-0 text-left text-sm"
                       >
                         <Markdown

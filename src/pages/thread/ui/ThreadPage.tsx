@@ -21,6 +21,7 @@ const timelineComposerGap = 48;
 export function ThreadPage(props: {
   active: boolean;
   showInfoCard: boolean;
+  findRequest?: number;
   model: ThreadModel;
   agents: PreparedAgent[];
   onManage: () => void;
@@ -209,6 +210,14 @@ export function ThreadPage(props: {
           <div class="relative min-h-0 flex-1">
             <div hidden={loading()} class="h-full">
               <ThreadTimeline
+                active={props.active && !loading() && !signInOpen()}
+                threadId={selectedThreadId()}
+                findRequest={props.findRequest}
+                overlay={
+                  <Show when={thread() && props.showInfoCard}>
+                    <ThreadInfoCard usage={thread()?.contextUsage ?? null} />
+                  </Show>
+                }
                 followKey={`${thread()?.id}:${activeTurnId()}`}
                 bottomInset={composerInset()}
               >
@@ -288,9 +297,6 @@ export function ThreadPage(props: {
                   </span>
                 </h2>
               </div>
-            </Show>
-            <Show when={thread() && props.showInfoCard}>
-              <ThreadInfoCard usage={thread()?.contextUsage ?? null} />
             </Show>
             <div
               ref={(element) => {

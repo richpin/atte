@@ -347,6 +347,45 @@ function threadMenu(title: string): HTMLButtonElement {
   return menu as HTMLButtonElement;
 }
 
+it("opens conversation find from the thread menu and restores the menu trigger focus", async () => {
+  // Exercise a frame that runs before the menu's deferred focus restoration.
+  vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) =>
+    window.setTimeout(() => callback(performance.now()), 0),
+  );
+  vi.stubGlobal("cancelAnimationFrame", window.clearTimeout.bind(window));
+  const saved = {
+    id: "find-thread",
+    title: "Find thread",
+    workingFolder: "/project",
+    agentId: "codex",
+    status: "sessionReady",
+    authentication: "authenticated",
+    turns: [],
+    permissions: [],
+    queuedMessages: [],
+  };
+  const original = vi.mocked(invoke).getMockImplementation();
+  vi.mocked(invoke).mockImplementation((command, args) => {
+    if (command === "list_threads") return Promise.resolve([saved]);
+    if (command === "subscribe_thread") return subscribeWith(args, saved);
+    return original?.(command, args) ?? Promise.resolve();
+  });
+  render(() => <App />);
+  await userEvent.click(
+    await screen.findByRole("button", { name: saved.title }),
+  );
+  const menu = screen.getByRole("button", { name: "스레드 메뉴" });
+  await userEvent.click(menu);
+  await userEvent.click(
+    screen.getByRole("menuitem", { name: "대화에서 찾기" }),
+  );
+  const input = await screen.findByRole("searchbox", { name: "대화에서 찾기" });
+  await waitFor(() => expect(document.activeElement).toBe(input));
+  await userEvent.keyboard("{Escape}");
+  expect(screen.queryByRole("searchbox")).toBeNull();
+  expect(document.activeElement).toBe(menu);
+});
+
 async function openAgentManagement() {
   await userEvent.click(screen.getByRole("button", { name: "설정 메뉴 열기" }));
   await userEvent.click(screen.getByRole("menuitem", { name: "에이전트" }));

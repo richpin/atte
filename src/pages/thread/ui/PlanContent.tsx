@@ -73,7 +73,11 @@ export function PlanContent(props: {
             )}
           </Show>
         </CollapsibleTrigger>
-        <CollapsibleContent class="min-w-0 border-t border-line px-3 py-3">
+        <CollapsibleContent
+          data-thread-search-root=""
+          data-thread-search-hidden={!expanded()}
+          class="min-w-0 border-t border-line px-3 py-3"
+        >
           <Switch>
             <Match when={items()}>
               {(plan) => (
@@ -93,7 +97,9 @@ export function PlanContent(props: {
             <Match when={file()}>
               {(plan) => (
                 <div>
-                  <p class="mb-2 text-muted">{t("thread.planContent.file")}</p>
+                  <p data-thread-search-ignore="" class="mb-2 text-muted">
+                    {t("thread.planContent.file")}
+                  </p>
                   <p class="whitespace-pre-wrap break-all">{plan().uri}</p>
                 </div>
               )}

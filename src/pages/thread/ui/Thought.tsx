@@ -40,7 +40,11 @@ export function Thought(props: {
           classList={{ "-rotate-90": !expanded() }}
         />
       </CollapsibleTrigger>
-      <CollapsibleContent class="border-t border-line px-3 py-3">
+      <CollapsibleContent
+        data-thread-search-root=""
+        data-thread-search-hidden={!expanded()}
+        class="border-t border-line px-3 py-3"
+      >
         <Show when={expanded()}>
           <Markdown
             source={props.part.text}

@@ -124,6 +124,13 @@ export const ko = {
     newTabDescription: "여기에서 프로젝트를 탐색할 수 있습니다.",
   },
   thread: {
+    find: {
+      label: "대화에서 찾기",
+      placeholder: "검색어 입력…",
+      previous: "이전 결과 (Shift+Enter)",
+      next: "다음 결과 (Enter)",
+      close: "검색 닫기 (Esc)",
+    },
     information: "스레드 정보",
     context: "Context",
     contextUsageUnavailable: "사용량 정보 없음",

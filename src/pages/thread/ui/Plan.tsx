@@ -47,7 +47,11 @@ export function Plan(props: { plan: PlanData; active: boolean }) {
             })}
           </span>
         </CollapsibleTrigger>
-        <CollapsibleContent class="border-t border-line px-3 py-3">
+        <CollapsibleContent
+          data-thread-search-root=""
+          data-thread-search-hidden={!expanded()}
+          class="border-t border-line px-3 py-3"
+        >
           <PlanEntries entries={props.plan.entries} active={props.active} />
         </CollapsibleContent>
       </Collapsible>

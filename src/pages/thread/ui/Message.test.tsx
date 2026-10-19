@@ -208,6 +208,25 @@ it("does not offer expansion when the user message fits within 20 lines", () => 
   expect(screen.queryByRole("button", { name: "Show more" })).toBeNull();
 });
 
+it("reveals the full clipped user message when conversation find navigates into it", () => {
+  renderMessage("Long searchable message");
+  const content = setMessageHeight("Long searchable message", 600);
+  expect(
+    screen
+      .getByRole("button", { name: "Show more" })
+      .getAttribute("aria-expanded"),
+  ).toBe("false");
+  content.dispatchEvent(new Event("thread-search-reveal"));
+  expect(
+    screen
+      .getByRole("button", { name: "Show less" })
+      .getAttribute("aria-expanded"),
+  ).toBe("true");
+  expect(content.parentElement?.classList.contains("overflow-hidden")).toBe(
+    false,
+  );
+});
+
 it("expands and collapses a user message taller than 20 lines", () => {
   renderMessage("Long prompt");
   const content = setMessageHeight("Long prompt", 401);

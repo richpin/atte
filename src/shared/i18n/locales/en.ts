@@ -119,6 +119,13 @@ export const en = {
     newTabDescription: "Explore your project here.",
   },
   thread: {
+    find: {
+      label: "Find in conversation",
+      placeholder: "Find…",
+      previous: "Previous match (Shift+Enter)",
+      next: "Next match (Enter)",
+      close: "Close find (Esc)",
+    },
     information: "Thread information",
     context: "Context",
     contextUsageUnavailable: "Usage unavailable",

@@ -11,6 +11,7 @@ import {
   List,
   PanelRight,
   RotateCcw,
+  Search,
   Settings,
 } from "lucide-solid";
 import { AgentManagementPage } from "pages/agent-management";
@@ -236,6 +237,8 @@ function ShellContent(props: { shell: AppShellModel }) {
   const { t, content } = useI18n();
   const { state, isMobile, openMobile } = useSidebar();
   const [showInfoCard, setShowInfoCard] = createSignal(true);
+  const [findRequest, setFindRequest] = createSignal(0);
+  let findSelected = false;
   const threadPanelId = createUniqueId();
   onMount(() => {
     if (!isTauri()) return;
@@ -367,7 +370,22 @@ function ShellContent(props: { shell: AppShellModel }) {
               >
                 <Ellipsis aria-hidden="true" class="size-4" />
               </DropdownMenuTrigger>
-              <DropdownMenuContent>
+              <DropdownMenuContent
+                onCloseAutoFocus={() => {
+                  if (!findSelected) return;
+                  findSelected = false;
+                  // Open after the menu has restored focus to its trigger.
+                  queueMicrotask(() => setFindRequest((value) => value + 1));
+                }}
+              >
+                <DropdownMenuItem
+                  onSelect={() => {
+                    findSelected = true;
+                  }}
+                >
+                  <Search aria-hidden="true" class="size-4" />
+                  {t("thread.find.label")}
+                </DropdownMenuItem>
                 <DropdownMenuItem
                   disabled={!threads.canReconnect()}
                   onSelect={() => void threads.reconnect()}
@@ -415,6 +433,7 @@ function ShellContent(props: { shell: AppShellModel }) {
               }}
               active={shell.view() === "thread"}
               showInfoCard={showInfoCard()}
+              findRequest={findRequest()}
               model={threads}
               agents={shell.agents()}
               onManage={shell.showAgents}

@@ -28,7 +28,7 @@ export function ThreadInfoCard(props: { usage: ContextUsage | null }) {
   };
 
   return (
-    <Card class="absolute top-6 right-4 h-32 w-60 rounded-3xl border-line bg-input-surface p-5 text-ink shadow-sm">
+    <Card class="absolute top-3 right-6 h-32 w-60 rounded-3xl border-line bg-input-surface p-5 text-ink shadow-sm">
       <h2 class="text-sm font-medium">{t("thread.context")}</h2>
       <Show
         when={usage()}
