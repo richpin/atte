@@ -92,6 +92,17 @@ export function AppSidebar(props: {
   }>();
   const [deleting, setDeleting] = createSignal(false);
   const expanded = () => isMobile() || state() === "expanded";
+  const sharedWorktree = () => {
+    const candidate = deleteCandidate();
+    const root = candidate?.worktree?.root;
+    return Boolean(
+      root &&
+        props.threads.some(
+          (thread) =>
+            thread.id !== candidate?.id && thread.worktree?.root === root,
+        ),
+    );
+  };
 
   const groups = createMemo(() => {
     const folders = new Map<string, SidebarThread[]>();
@@ -563,8 +574,20 @@ export function AppSidebar(props: {
           </DialogHeader>
           <Show when={deleteCandidate()?.worktree}>
             {(worktree) => (
-              <Callout title={t("sidebar.worktreeDeleteTitle")}>
-                <p>{t("sidebar.worktreeDeleteDescription")}</p>
+              <Callout
+                title={t(
+                  sharedWorktree()
+                    ? "sidebar.worktreePreserveTitle"
+                    : "sidebar.worktreeDeleteTitle",
+                )}
+              >
+                <p>
+                  {t(
+                    sharedWorktree()
+                      ? "sidebar.worktreePreserveDescription"
+                      : "sidebar.worktreeDeleteDescription",
+                  )}
+                </p>
                 <p class="mt-2 break-all font-mono text-xs">
                   {worktree().root}
                 </p>

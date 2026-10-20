@@ -567,6 +567,18 @@ struct State {
 }
 
 impl State {
+    fn managed_worktree(&self, folder: &Path) -> Result<Option<Worktree>, ThreadError> {
+        for entry in self.entries.values() {
+            let current = entry.state.lock().map_err(|_| unavailable())?;
+            if let Some(worktree) = &current.thread.worktree {
+                if folder.starts_with(&worktree.root) {
+                    return Ok(Some(worktree.clone()));
+                }
+            }
+        }
+        Ok(None)
+    }
+
     fn folder_is_deleting(&self, folder: &Path) -> bool {
         self.deleting.values().any(|root| folder.starts_with(root))
     }
@@ -707,7 +719,21 @@ impl Threads {
         let media_store = Arc::new(MediaStore::new(store.root().join("prompt-attachments")));
         let mut entries = HashMap::new();
         let list = Arc::new(Mutex::new(list::ThreadList::default()));
-        for saved in store.threads()? {
+        let saved_threads = store.threads()?;
+        let worktrees: Vec<_> = saved_threads
+            .iter()
+            .filter_map(|thread| thread.worktree.clone())
+            .collect();
+        for mut saved in saved_threads {
+            if saved.worktree.is_none() {
+                saved.worktree = worktrees
+                    .iter()
+                    .find(|worktree| saved.working_folder.starts_with(&worktree.root))
+                    .cloned();
+                if saved.worktree.is_some() {
+                    store.save_thread(&saved)?;
+                }
+            }
             let last_prompt_at = saved.last_prompt_at;
             if let Some(timestamp) = last_prompt_at {
                 LAST_PROMPT_AT.fetch_max(timestamp, Ordering::Relaxed);
@@ -1209,6 +1235,27 @@ impl Threads {
         self.create_prepared(folder, agent_id, Uuid::new_v4(), None)
     }
 
+    /// Starts an independent conversation in an existing thread's managed checkout.
+    pub async fn create_in_existing_worktree(
+        &self,
+        source_thread_id: Uuid,
+        agent_id: &str,
+    ) -> Result<Thread, ThreadError> {
+        let _lifecycle = self.lifecycle.lock().await;
+        let source = self.get(source_thread_id)?;
+        let worktree = source.worktree.ok_or_else(|| {
+            ThreadError::InvalidWorkingFolder(
+                "이 스레드는 관리 worktree를 사용하지 않습니다.".into(),
+            )
+        })?;
+        self.create_prepared(
+            &source.working_folder,
+            agent_id,
+            Uuid::new_v4(),
+            Some(worktree),
+        )
+    }
+
     /// Creates an isolated checkout, publishing the thread only after durable storage succeeds.
     pub async fn create_in_worktree(
         &self,
@@ -1259,6 +1306,15 @@ impl Threads {
                 "존재하는 작업 폴더를 선택해주세요.".into(),
             ));
         }
+        let working_folder = folder.canonicalize().map_err(|_| {
+            ThreadError::InvalidWorkingFolder("작업 폴더를 찾을 수 없습니다.".into())
+        })?;
+        let inherited_worktree = self.lock()?.managed_worktree(&working_folder)?;
+        let worktree = worktree.or_else(|| inherited_worktree.clone());
+        if let Some(worktree) = &worktree {
+            crate::worktree::validate(worktree, folder)
+                .map_err(ThreadError::InvalidWorkingFolder)?;
+        }
         let created_at = now();
         let draft = Thread {
             id,
@@ -1268,9 +1324,7 @@ impl Threads {
             last_prompt_at: None,
             interrupted: false,
             storage_error: None,
-            working_folder: folder.canonicalize().map_err(|_| {
-                ThreadError::InvalidWorkingFolder("작업 폴더를 찾을 수 없습니다.".into())
-            })?,
+            working_folder,
             worktree,
             agent_id: agent_id.into(),
             status: ThreadStatus::Disconnected,
@@ -1288,7 +1342,13 @@ impl Threads {
             available_commands: Vec::new(),
         };
         let mut state = self.lock()?;
-        if state.closed || state.folder_is_deleting(&draft.working_folder) {
+        // Recheck membership under the insertion lock: deletion may have completed
+        // while Git validation ran without the global state lock.
+        if state.closed
+            || state.folder_is_deleting(&draft.working_folder)
+            || state.managed_worktree(&draft.working_folder)? != inherited_worktree
+            || !draft.working_folder.is_dir()
+        {
             return Err(unavailable());
         }
         if let Some(store) = &self.store {
@@ -1376,14 +1436,44 @@ impl Threads {
         Ok(())
     }
 
-    /// Removes a thread and its owned checkout. A failed checkout removal retains the thread.
+    /// Removes a thread, removing its checkout only after the last reference disappears.
     pub async fn delete(&self, id: Uuid) -> Result<(), ThreadError> {
         let _lifecycle = self.lifecycle.lock().await;
-        let worktree = self.get(id)?.worktree;
+        let worktree = {
+            let mut state = self.lock()?;
+            let worktree = state
+                .entries
+                .get(&id)
+                .ok_or_else(not_found)?
+                .state
+                .lock()
+                .map_err(|_| unavailable())?
+                .thread
+                .worktree
+                .clone();
+            if let Some(worktree) = &worktree {
+                for (other_id, entry) in &state.entries {
+                    if *other_id != id
+                        && entry
+                            .state
+                            .lock()
+                            .map_err(|_| unavailable())?
+                            .thread
+                            .working_folder
+                            .starts_with(&worktree.root)
+                    {
+                        drop(state);
+                        return self.delete_record(id, true);
+                    }
+                }
+                // This flag and the reference check share the creation insertion lock.
+                state.deleting.insert(id, worktree.root.clone());
+            }
+            worktree
+        };
         if let Some(worktree) = worktree {
             let runtimes = {
                 let mut state = self.lock()?;
-                state.deleting.insert(id, worktree.root.clone());
                 for entry in state.entries.values_mut() {
                     let mut current = entry.state.lock().map_err(|_| unavailable())?;
                     if !current.thread.working_folder.starts_with(&worktree.root) {
@@ -1425,29 +1515,26 @@ impl Threads {
                     self.restore_runtimes(runtimes);
                     return Err(unavailable());
                 }
-                crate::worktree::remove(&worktree, id)
+                crate::worktree::remove(&worktree)
                     .await
                     .map_err(ThreadError::InvalidWorkingFolder)?;
-                self.delete_record(id)
+                self.delete_record(id, false)
             }
             .await;
             self.lock()?.deleting.remove(&id);
             result
         } else {
-            self.delete_record(id)
+            self.delete_record(id, true)
         }
     }
 
-    /// Removes local records; worktree runtimes have already been stopped and reaped.
-    fn delete_record(&self, id: Uuid) -> Result<(), ThreadError> {
+    /// Deletes only this session when its working folder remains available.
+    fn delete_record(&self, id: Uuid, delete_session: bool) -> Result<(), ThreadError> {
         let agents = self.agents.lock().map_err(|_| unavailable())?;
         let mut state = self.lock()?;
         let entry = state.entries.get_mut(&id).ok_or_else(not_found)?;
         let mut current = entry.state.lock().map_err(|_| unavailable())?;
-        let session_id = current
-            .thread
-            .worktree
-            .is_none()
+        let session_id = delete_session
             .then(|| current.thread.session_id.clone())
             .flatten();
         let agent = session_id.as_ref().and_then(|_| {

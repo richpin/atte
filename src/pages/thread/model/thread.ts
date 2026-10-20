@@ -17,6 +17,7 @@ import {
   cancelTurn,
   connectThread,
   createThread,
+  createThreadInExistingWorktree,
   deleteQueuedMessage,
   deleteThread as deleteThreadCommand,
   listThreads,
@@ -853,13 +854,16 @@ export function createThreadModel(
     folder: string,
     agentId: string,
     workingMode: WorkingMode = "local",
+    sourceThreadId?: string,
   ) {
     if (selecting()) return;
     setSelecting(true);
     setError(undefined);
     const attempt = ++selection;
     try {
-      const id = await createThread(folder, agentId, workingMode);
+      const id = sourceThreadId
+        ? await createThreadInExistingWorktree(sourceThreadId, agentId)
+        : await createThread(folder, agentId, workingMode);
       if (disposed) return;
       if (attempt !== selection) return;
       await openThread(id);

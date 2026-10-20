@@ -6531,7 +6531,7 @@ fn worktree_repository() -> tempfile::TempDir {
 }
 
 #[tokio::test]
-async fn blocks_other_threads_from_reconnecting_into_a_worktree_during_deletion() {
+async fn blocks_connections_inputs_and_creation_during_last_worktree_deletion() {
     let repo = worktree_repository();
     let parent = tempfile::tempdir().unwrap();
     let logs = tempfile::tempdir().unwrap();
@@ -6545,17 +6545,9 @@ async fn blocks_other_threads_from_reconnecting_into_a_worktree_during_deletion(
         .create_in_worktree(&repo.path().join("app"), parent.path(), "fixture")
         .await
         .unwrap();
-    let other = threads
-        .create_for_agent(&owner.working_folder, "fixture")
-        .unwrap();
     threads.connect(owner.id).unwrap();
     assert_eq!(
         settle(&threads, owner.id).await.status,
-        ThreadStatus::SessionReady
-    );
-    threads.connect(other.id).unwrap();
-    assert_eq!(
-        settle(&threads, other.id).await.status,
         ThreadStatus::SessionReady
     );
 
@@ -6568,21 +6560,82 @@ async fn blocks_other_threads_from_reconnecting_into_a_worktree_during_deletion(
     })
     .await
     .unwrap();
-    let reconnect_blocked = threads.reconnect(other.id).is_err();
+    let reconnect_blocked = threads.reconnect(owner.id).is_err();
     let input_blocked = threads
-        .send_message(other.id, "must not send".into())
+        .send_message(owner.id, "must not send".into())
         .is_err();
     let creation_blocked = threads
-        .create_for_agent(&other.working_folder, "fixture")
+        .create_for_agent(&owner.working_folder, "fixture")
         .is_err();
+    let creating = threads.clone();
+    let source_id = owner.id;
+    let creation = tokio::spawn(async move {
+        creating
+            .create_in_existing_worktree(source_id, "fixture")
+            .await
+    });
     std::fs::write(&gate, "exit").unwrap();
     deletion.await.unwrap().unwrap();
+    assert!(creation.await.unwrap().is_err());
     threads.shutdown().await;
     assert!(
         reconnect_blocked,
-        "a second thread must not start a new runtime during checkout removal"
+        "a thread must not start a new runtime during checkout removal"
     );
     assert!(input_blocked);
     assert!(creation_blocked);
-    assert!(!other.working_folder.exists());
+    assert!(!owner.working_folder.exists());
+}
+
+#[tokio::test]
+async fn shared_worktree_sessions_run_independently_and_deleting_one_keeps_the_other_running() {
+    let repo = worktree_repository();
+    let parent = tempfile::tempdir().unwrap();
+    let logs = tempfile::tempdir().unwrap();
+    let log = logs.path().join("requests.log");
+    let mut agent = mock_agent();
+    agent.env.insert("FIXTURE_MODE".into(), "concurrent".into());
+    agent.env.insert("DELETE_MODE".into(), "delayed".into());
+    agent
+        .env
+        .insert("REQUEST_LOG".into(), log.to_string_lossy().into());
+    let threads = Threads::new(vec![agent]);
+    let first = threads
+        .create_in_worktree(&repo.path().join("app"), parent.path(), "fixture")
+        .await
+        .unwrap();
+    threads.connect(first.id).unwrap();
+    let first_ready = settle(&threads, first.id).await;
+    threads.send_message(first.id, "hold".into()).unwrap();
+    let second = threads
+        .create_in_existing_worktree(first.id, "fixture")
+        .await
+        .unwrap();
+    threads.connect(second.id).unwrap();
+    let second_ready = settle(&threads, second.id).await;
+    assert_ne!(first_ready.session_id, second_ready.session_id);
+    assert!(second_ready.turns.is_empty());
+    assert_eq!(second_ready.working_folder, first.working_folder);
+    threads.send_message(second.id, "hold".into()).unwrap();
+    assert_eq!(threads.get(first.id).unwrap().status, ThreadStatus::Running);
+    let second_turn = threads.get(second.id).unwrap().turns[0].id;
+    threads.delete(first.id).await.unwrap();
+    wait_for_request(&log, "session/delete remote-1").await;
+    assert!(first.working_folder.exists());
+    assert_eq!(
+        threads.get(second.id).unwrap().status,
+        ThreadStatus::Running
+    );
+    threads.cancel_turn(second.id, second_turn).unwrap();
+    settle(&threads, second.id).await;
+    threads
+        .send_message(second.id, "still usable".into())
+        .unwrap();
+    assert_eq!(
+        settle(&threads, second.id).await.turns[1].response_text(),
+        "reply:still usable"
+    );
+    threads.delete(second.id).await.unwrap();
+    assert!(!first.working_folder.exists());
+    threads.shutdown().await;
 }

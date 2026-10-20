@@ -46,6 +46,225 @@ fn repository() -> tempfile::TempDir {
 }
 
 #[tokio::test]
+async fn shares_current_files_and_subfolder_but_starts_an_empty_conversation() {
+    let repo = repository();
+    let parent = tempfile::tempdir().unwrap();
+    let mut alternative = prepared_codex();
+    alternative.id = "alternative".into();
+    let threads = Threads::new(vec![prepared_codex(), alternative]);
+    let first = threads
+        .create_in_worktree(&repo.path().join("packages/app"), parent.path(), "codex")
+        .await
+        .unwrap();
+    let checkout = first.worktree.as_ref().unwrap();
+    std::fs::write(first.working_folder.join("main.ts"), "dirty shared work").unwrap();
+    std::fs::write(first.working_folder.join("untracked"), "shared file").unwrap();
+    let second = threads
+        .create_in_existing_worktree(first.id, "alternative")
+        .await
+        .unwrap();
+    assert_ne!(first.id, second.id);
+    assert_eq!(second.working_folder, first.working_folder);
+    assert_eq!(second.worktree, first.worktree);
+    assert_eq!(second.agent_id, "alternative");
+    assert!(second.session_id.is_none());
+    assert!(second.turns.is_empty());
+    assert!(second.queued_messages.is_empty());
+    assert!(second.permissions.is_empty());
+    assert!(second.configuration.is_empty());
+    assert_eq!(
+        std::fs::read_to_string(second.working_folder.join("main.ts")).unwrap(),
+        "dirty shared work"
+    );
+    assert_eq!(
+        std::fs::read_to_string(second.working_folder.join("untracked")).unwrap(),
+        "shared file"
+    );
+    assert_eq!(
+        git(repo.path(), &["worktree", "list", "--porcelain"])
+            .matches("worktree ")
+            .count(),
+        2
+    );
+    threads.delete(first.id).await.unwrap();
+    assert!(checkout.root.exists());
+    let third = threads
+        .create_in_existing_worktree(second.id, "codex")
+        .await
+        .unwrap();
+    threads.delete(second.id).await.unwrap();
+    assert!(checkout.root.exists());
+    threads.delete(third.id).await.unwrap();
+    assert!(!checkout.root.exists());
+}
+
+#[tokio::test]
+async fn recognizes_manual_folders_and_repairs_legacy_membership_durably_on_restart() {
+    let repo = repository();
+    let data = tempfile::tempdir().unwrap();
+    let database = data.path().join("atte.sqlite");
+    let store = Arc::new(Store::open(&database).unwrap());
+    let threads = Threads::with_store(vec![prepared_codex()], store).unwrap();
+    let first = threads
+        .create_in_worktree(repo.path(), &data.path().join("worktrees"), "codex")
+        .await
+        .unwrap();
+    let checkout = first.worktree.as_ref().unwrap();
+    let manual = threads
+        .create_for_agent(&checkout.root.join("packages/app"), "codex")
+        .unwrap();
+    assert_eq!(manual.worktree, first.worktree);
+    // Simulate an existing v1 record made before automatic membership recognition.
+    rusqlite::Connection::open(&database)
+        .unwrap()
+        .execute(
+            "UPDATE threads SET worktree=NULL WHERE id=?1",
+            [manual.id.to_string()],
+        )
+        .unwrap();
+    drop(threads);
+    let restored = Threads::with_store(
+        vec![prepared_codex()],
+        Arc::new(Store::open(&database).unwrap()),
+    )
+    .unwrap();
+    assert_eq!(restored.get(manual.id).unwrap().worktree, first.worktree);
+    restored.delete(first.id).await.unwrap();
+    drop(restored);
+    let restored = Threads::with_store(
+        vec![prepared_codex()],
+        Arc::new(Store::open(&database).unwrap()),
+    )
+    .unwrap();
+    assert_eq!(restored.get(manual.id).unwrap().worktree, first.worktree);
+    restored.delete(manual.id).await.unwrap();
+    assert!(!checkout.root.exists());
+}
+
+#[tokio::test]
+async fn failed_shared_creation_never_removes_or_changes_the_checkout() {
+    let repo = repository();
+    let data = tempfile::tempdir().unwrap();
+    let database = data.path().join("atte.sqlite");
+    let threads = Threads::with_store(
+        vec![prepared_codex()],
+        Arc::new(Store::open(&database).unwrap()),
+    )
+    .unwrap();
+    let first = threads
+        .create_in_worktree(repo.path(), &data.path().join("worktrees"), "codex")
+        .await
+        .unwrap();
+    let checkout = first.worktree.as_ref().unwrap();
+    std::fs::write(checkout.root.join("keep"), "shared changes").unwrap();
+    let db = rusqlite::Connection::open(&database).unwrap();
+    db.execute_batch("CREATE TRIGGER reject_insert BEFORE INSERT ON threads BEGIN SELECT RAISE(ABORT, 'rejected'); END;").unwrap();
+    assert!(threads
+        .create_in_existing_worktree(first.id, "codex")
+        .await
+        .is_err());
+    assert_eq!(threads.list().unwrap().len(), 1);
+    assert_eq!(
+        std::fs::read_to_string(checkout.root.join("keep")).unwrap(),
+        "shared changes"
+    );
+    db.execute_batch("DROP TRIGGER reject_insert;").unwrap();
+    let second = threads
+        .create_in_existing_worktree(first.id, "codex")
+        .await
+        .unwrap();
+    db.execute_batch("CREATE TRIGGER reject_delete BEFORE DELETE ON threads BEGIN SELECT RAISE(ABORT, 'rejected'); END;").unwrap();
+    assert!(threads.delete(first.id).await.is_err());
+    assert_eq!(threads.list().unwrap().len(), 2);
+    assert!(checkout.root.exists());
+    db.execute_batch("DROP TRIGGER reject_delete;").unwrap();
+    threads.delete(first.id).await.unwrap();
+    git(
+        &checkout.root,
+        &["worktree", "lock", checkout.root.to_str().unwrap()],
+    );
+    assert!(threads.delete(second.id).await.is_err());
+    assert!(threads.get(second.id).is_ok());
+    assert!(checkout.root.exists());
+    git(
+        &checkout.root,
+        &["worktree", "unlock", checkout.root.to_str().unwrap()],
+    );
+    threads.delete(second.id).await.unwrap();
+}
+
+#[tokio::test]
+async fn rejects_stale_sources_unmanaged_threads_unavailable_agents_and_broken_checkouts() {
+    let repo = repository();
+    let parent = tempfile::tempdir().unwrap();
+    let threads = Threads::new(vec![prepared_codex()]);
+    let local = threads.create(repo.path()).unwrap();
+    assert!(threads
+        .create_in_existing_worktree(local.id, "codex")
+        .await
+        .is_err());
+    let first = threads
+        .create_in_worktree(repo.path(), parent.path(), "codex")
+        .await
+        .unwrap();
+    assert!(threads
+        .create_in_existing_worktree(first.id, "missing")
+        .await
+        .is_err());
+    let second = threads
+        .create_in_existing_worktree(first.id, "codex")
+        .await
+        .unwrap();
+    threads.delete(first.id).await.unwrap();
+    assert!(threads
+        .create_in_existing_worktree(first.id, "codex")
+        .await
+        .is_err());
+    let checkout = second.worktree.as_ref().unwrap();
+    std::fs::remove_file(checkout.root.join(".git")).unwrap();
+    assert!(threads
+        .create_in_existing_worktree(second.id, "codex")
+        .await
+        .is_err());
+    assert!(threads
+        .create_for_agent(&second.working_folder, "codex")
+        .is_err());
+    assert_eq!(threads.list().unwrap().len(), 2);
+}
+
+#[tokio::test]
+async fn creation_and_last_reference_deletion_cannot_leave_a_thread_in_a_removed_checkout() {
+    for create_first in [false, true] {
+        let repo = repository();
+        let parent = tempfile::tempdir().unwrap();
+        let threads = Threads::new(vec![prepared_codex()]);
+        let first = threads
+            .create_in_worktree(repo.path(), parent.path(), "codex")
+            .await
+            .unwrap();
+        let checkout = first.worktree.as_ref().unwrap();
+        let create = threads.create_in_existing_worktree(first.id, "codex");
+        let delete = threads.delete(first.id);
+        let (created, deleted) = if create_first {
+            tokio::join!(biased; create, delete)
+        } else {
+            let (deleted, created) = tokio::join!(biased; delete, create);
+            (created, deleted)
+        };
+        deleted.unwrap();
+        match created {
+            Ok(thread) => {
+                assert!(checkout.root.exists());
+                assert!(threads.get(thread.id).is_ok());
+                threads.delete(thread.id).await.unwrap();
+            }
+            Err(_) => assert!(threads.list().unwrap().is_empty()),
+        }
+        assert!(!checkout.root.exists());
+    }
+}
+
+#[tokio::test]
 async fn isolates_committed_files_at_head_and_preserves_the_selected_subfolder() {
     let repo = repository();
     let parent = tempfile::tempdir().unwrap();

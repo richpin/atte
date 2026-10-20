@@ -24,6 +24,7 @@ export function NewThreadPage(props: {
   agents: NewThreadAgent[];
   selectedAgent: string;
   selectedFolder?: string;
+  fixedWorkingFolder?: boolean;
   workingMode: "local" | "worktree";
   onSelectWorkingMode: (mode: "local" | "worktree") => void;
   worktreeUnavailable: boolean;
@@ -51,7 +52,7 @@ export function NewThreadPage(props: {
           <p class="text-lg text-muted">{t("thread.empty.description")}</p>
         </div>
         <div class="divide-y divide-line rounded-xl border border-line bg-panel px-4">
-          <div class="grid h-[54px] grid-cols-[minmax(0,1fr)_minmax(0,1fr)] @sm:grid-cols-[9.5rem_minmax(0,1fr)] items-center gap-3">
+          <div class="grid min-h-[54px] grid-cols-[minmax(0,1fr)_minmax(0,1fr)] @sm:grid-cols-[9.5rem_minmax(0,1fr)] items-center gap-3">
             <span
               id="new-thread-folder-label"
               class="flex items-center gap-2 whitespace-nowrap text-sm text-muted"
@@ -59,23 +60,35 @@ export function NewThreadPage(props: {
               <Folder aria-hidden="true" class="size-4 shrink-0" />
               {t("thread.workingFolder")}
             </span>
-            <button
-              type="button"
-              aria-describedby="new-thread-folder-label"
-              class="flex min-w-0 items-center justify-between gap-2 rounded-md px-2 py-2 text-left text-sm hover:bg-canvas focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent disabled:opacity-50"
-              disabled={disabled()}
-              onClick={props.onSelectFolder}
+            <Show
+              when={!props.fixedWorkingFolder}
+              fallback={
+                <span
+                  class="min-w-0 break-all px-2 py-2 text-sm"
+                  aria-describedby="new-thread-folder-label"
+                >
+                  {props.selectedFolder}
+                </span>
+              }
             >
-              <span class="min-w-0 truncate">
-                {props.selecting
-                  ? t("thread.selecting")
-                  : folderName() || t("thread.selectFolder")}
-              </span>
-              <ChevronDown
-                aria-hidden="true"
-                class="size-4 shrink-0 text-muted"
-              />
-            </button>
+              <button
+                type="button"
+                aria-describedby="new-thread-folder-label"
+                class="flex min-w-0 items-center justify-between gap-2 rounded-md px-2 py-2 text-left text-sm hover:bg-canvas focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent disabled:opacity-50"
+                disabled={disabled()}
+                onClick={props.onSelectFolder}
+              >
+                <span class="min-w-0 truncate">
+                  {props.selecting
+                    ? t("thread.selecting")
+                    : folderName() || t("thread.selectFolder")}
+                </span>
+                <ChevronDown
+                  aria-hidden="true"
+                  class="size-4 shrink-0 text-muted"
+                />
+              </button>
+            </Show>
           </div>
           <div class="grid h-[54px] grid-cols-[minmax(0,1fr)_minmax(0,1fr)] @sm:grid-cols-[9.5rem_minmax(0,1fr)] items-center gap-3">
             <label
@@ -145,24 +158,26 @@ export function NewThreadPage(props: {
               </Select>
             </Show>
           </div>
-          <Switch
-            class="grid h-[54px] grid-cols-[minmax(0,1fr)_minmax(0,1fr)] @sm:grid-cols-[9.5rem_minmax(0,1fr)] items-center gap-3"
-            checked={props.workingMode === "worktree"}
-            disabled={disabled() || props.worktreeUnavailable}
-            onChange={(checked) =>
-              props.onSelectWorkingMode(checked ? "worktree" : "local")
-            }
-          >
-            <SwitchLabel class="flex items-center gap-2 whitespace-nowrap text-sm font-normal text-muted">
-              <Split aria-hidden="true" class="size-4 shrink-0 rotate-90" />
-              {t("thread.newWorktree")}
-            </SwitchLabel>
-            <div class="flex min-h-9 items-center px-2">
-              <SwitchControl class="h-4.5 w-8.5 border">
-                <SwitchThumb class="size-4 data-[checked]:translate-x-4" />
-              </SwitchControl>
-            </div>
-          </Switch>
+          <Show when={!props.fixedWorkingFolder}>
+            <Switch
+              class="grid h-[54px] grid-cols-[minmax(0,1fr)_minmax(0,1fr)] @sm:grid-cols-[9.5rem_minmax(0,1fr)] items-center gap-3"
+              checked={props.workingMode === "worktree"}
+              disabled={disabled() || props.worktreeUnavailable}
+              onChange={(checked) =>
+                props.onSelectWorkingMode(checked ? "worktree" : "local")
+              }
+            >
+              <SwitchLabel class="flex items-center gap-2 whitespace-nowrap text-sm font-normal text-muted">
+                <Split aria-hidden="true" class="size-4 shrink-0 rotate-90" />
+                {t("thread.newWorktree")}
+              </SwitchLabel>
+              <div class="flex min-h-9 items-center px-2">
+                <SwitchControl class="h-4.5 w-8.5 border">
+                  <SwitchThumb class="size-4 data-[checked]:translate-x-4" />
+                </SwitchControl>
+              </div>
+            </Switch>
+          </Show>
         </div>
         <div class="flex justify-end">
           <Button

@@ -233,6 +233,7 @@ export const ko = {
     },
     openSidebar: "사이드바 열기",
     newWorktree: "새 worktree",
+    newInWorktree: "이 worktree에서 새 스레드",
     worktreeMode: "새 worktree 사용",
     creating: "스레드 생성 중…",
     workingFolder: "작업 폴더",
@@ -361,6 +362,9 @@ export const ko = {
     renameFailed: "스레드 이름을 변경할 수 없습니다. 다시 시도해주세요.",
     deleteFailed: "스레드를 삭제할 수 없습니다. 다시 시도해주세요.",
     worktreeDeleteTitle: "worktree도 함께 삭제됩니다",
+    worktreePreserveTitle: "worktree는 유지됩니다",
+    worktreePreserveDescription:
+      "다른 스레드가 이 worktree를 사용하고 있어 작업 폴더와 파일은 유지됩니다.",
     worktreeDeleteDescription:
       "이 스레드의 worktree 폴더와 미커밋 변경·미추적 파일을 포함한 모든 파일이 삭제됩니다. 필요한 작업은 먼저 원본 브랜치에 반영하거나 별도로 보관해주세요.",
     deleteTitle: "스레드를 삭제할까요?",
@@ -397,6 +401,7 @@ export const ko = {
     logoutFailed: "로그아웃하지 못했습니다. 다시 시도해주세요.",
   },
   backend: {
+    worktreeRequired: "이 스레드는 관리 worktree를 사용하지 않습니다.",
     worktreeGitMissing: "Git을 실행할 수 없습니다. Git 설치를 확인해주세요.",
     worktreeNoCommit: "Worktree를 만들려면 먼저 커밋을 만들어주세요.",
     worktreeBare: "bare 저장소에서는 worktree를 시작할 수 없습니다.",

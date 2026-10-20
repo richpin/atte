@@ -13,6 +13,7 @@ import {
   RotateCcw,
   Search,
   Settings,
+  SquarePen,
 } from "lucide-solid";
 import { AgentManagementPage } from "pages/agent-management";
 import { GeneralPage } from "pages/general";
@@ -395,6 +396,17 @@ function ShellContent(props: { shell: AppShellModel }) {
                   {t("thread.reconnect")}
                 </DropdownMenuItem>
                 <OpenWorkingFolderMenu threadId={threads.selectedThreadId()} />
+                <Show when={threads.thread()?.worktree}>
+                  <DropdownMenuItem
+                    onSelect={() => {
+                      const id = threads.selectedThreadId();
+                      if (id) shell.showNewThreadInWorktree(id);
+                    }}
+                  >
+                    <SquarePen aria-hidden="true" class="size-4" />
+                    {t("thread.newInWorktree")}
+                  </DropdownMenuItem>
+                </Show>
               </DropdownMenuContent>
             </DropdownMenu>
           </div>
@@ -405,6 +417,7 @@ function ShellContent(props: { shell: AppShellModel }) {
           agents={shell.agents()}
           selectedAgent={shell.agentId()}
           selectedFolder={shell.selectedFolder()}
+          fixedWorkingFolder={Boolean(shell.existingWorktreeSource())}
           workingMode={shell.workingMode()}
           onSelectWorkingMode={shell.setWorkingMode}
           worktreeUnavailable={shell.worktreeUnavailable()}

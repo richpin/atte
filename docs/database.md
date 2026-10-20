@@ -49,7 +49,7 @@ Registry 갱신은 `registry_metadata`만 트랜잭션으로 교체한다. 목�
 | `id` | TEXT PRIMARY KEY NOT NULL | Atte가 발급한 스레드 UUID |
 | `title` | TEXT NOT NULL | 잠정 제목 또는 에이전트가 제공한 제목; 명시적 해제는 빈 문자열 |
 | `working_folder` | TEXT NOT NULL | 에이전트가 실제로 작업하는 폴더의 경로 |
-| `worktree` | TEXT, nullable | worktree 생성 스레드의 `sourceFolder`·`root` 경로 JSON. 기존 폴더를 사용하는 스레드는 NULL |
+| `worktree` | TEXT, nullable | 관리 worktree를 사용하는 각 스레드의 `sourceFolder`·`root` 경로 JSON. 같은 checkout은 같은 root를 공유하며 일반 폴더 스레드는 NULL |
 | `agent_id` | TEXT NOT NULL | 스레드에 고정된 에이전트 ID |
 | `session_id` | TEXT | 에이전트의 원격 세션 ID |
 | `created_at` | INTEGER NOT NULL | 생성 Unix 초 |
@@ -70,7 +70,7 @@ Registry 갱신은 `registry_metadata`만 트랜잭션으로 교체한다. 목�
 
 연결 시작 전 상태가 `failed`이고 `lastPromptAt`이 NULL이면 다음 Reconnect 또는 재진입에서 원격 세션 참조를 비우고 `session/new`를 호출한다. Atte 스레드 ID와 대기 메시지는 유지하며 새 세션의 설정은 ACP 응답을 사용한다. 실패 직후 자동 재시도는 하지 않는다. 전송 시각이 있으면 기존 세션을 복원하며 실패를 새 세션으로 대체하지 않는다. 초기 스키마 v1만 수정하며 기존 개발 DB 변환·초기화나 과거 값으로 미전송 여부를 추정하는 처리는 하지 않는다.
 
-worktree 스레드를 삭제하면 프로세스를 종료·회수하고 checkout을 제거한 뒤 스레드 DB 행을 삭제한다. worktree 제거 실패 시 DB 행은 유지한다. checkout 제거 이후 DB 삭제 실패 시에는 기록이 남고 파일은 이미 제거되며, 같은 삭제를 재시도할 수 있다. 일반 스레드 삭제는 기존 작업 폴더를 보존한다. 자세한 정책은 [worktree 수명](worktrees.md)을 따른다.
+관리 worktree의 참조 수는 스레드 정보에서 계산하며 별도 저장하지 않는다. 재시작 시 저장된 관리 worktree 내부를 가리키는 일반 스레드는 worktree 메타데이터를 보완해 저장한다. 다른 참조가 있으면 삭제 대상 스레드와 에이전트 세션만 정리하고 checkout은 유지한다. 마지막 참조를 삭제할 때 프로세스를 종료·회수하고 checkout을 제거한 뒤 스레드 DB 행을 삭제한다. worktree 제거 실패 시 DB 행은 유지한다. checkout 제거 이후 DB 삭제 실패 시에는 기록이 남고 파일은 이미 제거되며, 같은 삭제를 재시도할 수 있다. 일반 스레드 삭제는 기존 작업 폴더를 보존한다. 자세한 정책은 [worktree 수명](worktrees.md)을 따른다.
 
 ### 스레드 행의 대기열
 

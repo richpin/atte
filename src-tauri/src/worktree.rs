@@ -203,15 +203,21 @@ pub fn validate(worktree: &Worktree, folder: &Path) -> Result<(), String> {
     Ok(())
 }
 
-/// Removes a thread-owned checkout after its agent processes have stopped.
+/// Removes an unreferenced managed checkout after its agent processes have stopped.
 /// Creation rollback deliberately uses a separate, non-forced removal path.
-pub async fn remove(worktree: &Worktree, id: Uuid) -> Result<(), String> {
+pub async fn remove(worktree: &Worktree) -> Result<(), String> {
     let remove = async {
         let parent = worktree
             .root
             .parent()
             .ok_or("Worktree 경로가 올바르지 않습니다.")?;
-        if parent.file_name() != Some(std::ffi::OsStr::new(&id.to_string())) || parent.is_symlink()
+        let container_id = parent
+            .file_name()
+            .and_then(|name| name.to_str())
+            .and_then(|name| Uuid::parse_str(name).ok());
+        if !container_id
+            .is_some_and(|id| parent.file_name() == Some(std::ffi::OsStr::new(&id.to_string())))
+            || parent.is_symlink()
         {
             return Err("Worktree 경로가 올바르지 않습니다.".to_owned());
         }

@@ -24,6 +24,8 @@ export function createAppShellModel() {
   const [selectedAgent, setSelectedAgent] = createSignal("");
   const [selectedFolder, setSelectedFolder] = createSignal<string>();
   const [workingMode, setWorkingMode] = createSignal<WorkingMode>("local");
+  const [existingWorktreeSource, setExistingWorktreeSource] =
+    createSignal<string>();
   const [folderInfo] = createResource(selectedFolder, async (folder) => {
     try {
       return await inspectWorkingFolder(folder);
@@ -56,8 +58,24 @@ export function createAppShellModel() {
 
   function showNewThread(folder?: string) {
     threads.startNewThread();
+    setExistingWorktreeSource(undefined);
     setWorkingMode("local");
     if (folder !== undefined) setSelectedFolder(folder);
+    setView("new-thread");
+  }
+
+  function showNewThreadInWorktree(id: string) {
+    const current = threads.thread();
+    const source =
+      current?.id === id
+        ? current
+        : threads.history().find((thread) => thread.id === id);
+    if (!source?.worktree) return;
+    threads.startNewThread();
+    setExistingWorktreeSource(id);
+    setSelectedFolder(source.workingFolder);
+    setSelectedAgent(source.agentId);
+    setWorkingMode("local");
     setView("new-thread");
   }
 
@@ -94,7 +112,12 @@ export function createAppShellModel() {
       (workingMode() === "worktree" && worktreeUnavailable())
     )
       return;
-    await threads.createInFolder(folder, agent, workingMode());
+    await threads.createInFolder(
+      folder,
+      agent,
+      workingMode(),
+      existingWorktreeSource(),
+    );
     if (threads.selectedThreadId()) setView("thread");
   }
 
@@ -144,6 +167,7 @@ export function createAppShellModel() {
     agentsFailed,
     agentId,
     selectedFolder,
+    existingWorktreeSource,
     workingMode,
     setWorkingMode,
     folderInfo,
@@ -151,6 +175,7 @@ export function createAppShellModel() {
     newThreadError,
     setSelectedAgent,
     showNewThread,
+    showNewThreadInWorktree,
     openThread,
     showGeneral,
     showAgents,

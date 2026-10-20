@@ -206,9 +206,16 @@ async fn create_thread(
 ) -> Result<Uuid, ThreadError> {
     let folder = std::path::Path::new(&folder);
     match working_mode {
-        worktree::WorkingMode::Local => threads
-            .create_for_agent(folder, &agent_id)
-            .map(|thread| thread.id),
+        worktree::WorkingMode::Local => {
+            let folder = folder.to_owned();
+            tauri::async_runtime::spawn_blocking(move || {
+                app.state::<Threads>()
+                    .create_for_agent(&folder, &agent_id)
+                    .map(|thread| thread.id)
+            })
+            .await
+            .map_err(|error| ThreadError::Unavailable(error.to_string()))?
+        }
         worktree::WorkingMode::Worktree => {
             let root = app
                 .path()
@@ -221,6 +228,24 @@ async fn create_thread(
                 .map(|thread| thread.id)
         }
     }
+}
+
+#[tauri::command]
+async fn create_thread_in_existing_worktree(
+    app: tauri::AppHandle,
+    source_thread_id: Uuid,
+    agent_id: String,
+) -> Result<Uuid, ThreadError> {
+    // Checkout validation invokes synchronous Git; keep it off the async executor.
+    tauri::async_runtime::spawn_blocking(move || {
+        tauri::async_runtime::block_on(
+            app.state::<Threads>()
+                .create_in_existing_worktree(source_thread_id, &agent_id),
+        )
+        .map(|thread| thread.id)
+    })
+    .await
+    .map_err(|error| ThreadError::Unavailable(error.to_string()))?
 }
 
 #[tauri::command]
@@ -527,6 +552,7 @@ pub fn run() {
                 rename_thread,
                 list_threads,
                 create_thread,
+                create_thread_in_existing_worktree,
                 inspect_working_folder,
                 delete_queued_message,
                 retry_queued_message,

@@ -227,6 +227,7 @@ export const en = {
     },
     openSidebar: "Open sidebar",
     newWorktree: "New worktree",
+    newInWorktree: "New thread in this worktree",
     worktreeMode: "Use new worktree",
     creating: "Creating thread…",
     workingFolder: "Working folder",
@@ -356,6 +357,9 @@ export const en = {
     renameFailed: "The thread could not be renamed. Try again.",
     deleteFailed: "The thread could not be deleted. Try again.",
     worktreeDeleteTitle: "The worktree will also be deleted",
+    worktreePreserveTitle: "The worktree will be kept",
+    worktreePreserveDescription:
+      "Other threads use this worktree, so its working folder and files will be kept.",
     worktreeDeleteDescription:
       "This thread's worktree folder and all files, including uncommitted changes and untracked files, will be deleted. Merge any work you need into the original branch or save it elsewhere first.",
     deleteTitle: "Delete this thread?",
@@ -392,6 +396,7 @@ export const en = {
     logoutFailed: "Logout failed. Try again.",
   },
   backend: {
+    worktreeRequired: "This thread does not use a managed worktree.",
     worktreeGitMissing:
       "Git could not be started. Check your Git installation.",
     worktreeNoCommit: "Create a commit before creating a worktree.",

@@ -102,6 +102,16 @@ export function createThread(
   return invoke<string>("create_thread", { folder, agentId, workingMode });
 }
 
+export function createThreadInExistingWorktree(
+  sourceThreadId: string,
+  agentId: string,
+) {
+  return invoke<string>("create_thread_in_existing_worktree", {
+    sourceThreadId,
+    agentId,
+  });
+}
+
 export function cancelTurn(id: string, turn: string) {
   return invoke<void>("cancel_turn", { id, turn });
 }

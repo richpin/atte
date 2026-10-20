@@ -5264,6 +5264,218 @@ it("ignores stale folder inspection results", async () => {
 });
 
 it.each(["light", "dark"])(
+  "starts a fresh conversation only from the header worktree menu in %s theme and retries without losing selections",
+  async (theme) => {
+    localStorage.setItem("atte.theme", theme);
+    const source = {
+      ...responseThread("shared-source"),
+      title: "Source worktree thread",
+      workingFolder: "/isolated/checkout/repository/packages/app",
+      worktree: {
+        root: "/isolated/checkout/repository",
+        sourceFolder: "/work/repository/packages/app",
+      },
+    };
+    const created = {
+      ...source,
+      id: "shared-created",
+      title: "새 스레드",
+      agentId: "fixture",
+      sessionId: null,
+    };
+    const firstAttempt = deferred<string>();
+    const creation = vi
+      .fn()
+      .mockReturnValueOnce(firstAttempt.promise)
+      .mockResolvedValue(created.id);
+    const original = vi.mocked(invoke).getMockImplementation();
+    vi.mocked(invoke).mockImplementation((command, args) => {
+      if (command === "list_threads") return Promise.resolve([source]);
+      if (command === "prepared_agents")
+        return Promise.resolve([
+          { id: "codex", name: "Codex" },
+          { id: "fixture", name: "Fixture" },
+        ]);
+      if (command === "subscribe_thread") {
+        const id = (args as { id: string }).id;
+        return subscribeWith(args, id === source.id ? source : created);
+      }
+      if (command === "create_thread_in_existing_worktree")
+        return creation(args);
+      return original?.(command, args) ?? Promise.resolve();
+    });
+    render(() => <App />);
+    await userEvent.click(
+      await screen.findByRole("button", {
+        name: source.title,
+      }),
+    );
+    await userEvent.click(threadMenu(source.title));
+    expect(
+      screen.queryByRole("menuitem", { name: "이 worktree에서 새 스레드" }),
+    ).toBeNull();
+    await userEvent.keyboard("{Escape}");
+    await userEvent.click(screen.getByRole("button", { name: "스레드 메뉴" }));
+    const menuitem = screen.getByRole("menuitem", {
+      name: "이 worktree에서 새 스레드",
+    });
+    menuitem.focus();
+    await userEvent.keyboard("{Enter}");
+    expect(screen.getByText(source.workingFolder)).toBeTruthy();
+    expect(screen.queryByRole("switch", { name: "새 worktree" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "폴더 선택" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "app" })).toBeNull();
+    expect(
+      screen.getByRole("button", { name: /^새 스레드 에이전트/ }).textContent,
+    ).toContain("Codex");
+    await selectNewThreadAgent("Fixture");
+    const start = screen.getByRole("button", { name: "스레드 시작" });
+    fireEvent.click(start);
+    fireEvent.click(start);
+    await waitFor(() => expect(creation).toHaveBeenCalledTimes(1));
+    expect(creation).toHaveBeenCalledWith({
+      sourceThreadId: source.id,
+      agentId: "fixture",
+    });
+    expect(
+      screen.getByRole("button", { name: "스레드 생성 중…" }),
+    ).toHaveProperty("disabled", true);
+    firstAttempt.reject(new Error("shared creation failed"));
+    await waitFor(() =>
+      expect(
+        screen.getByRole("button", { name: "스레드 시작" }),
+      ).toHaveProperty("disabled", false),
+    );
+    expect(screen.getByText(source.workingFolder)).toBeTruthy();
+    expect(
+      screen.getByRole("button", { name: /^새 스레드 에이전트/ }).textContent,
+    ).toContain("Fixture");
+    await userEvent.click(screen.getByRole("button", { name: "스레드 시작" }));
+    await waitFor(() =>
+      expect(invoke).toHaveBeenCalledWith(
+        "subscribe_thread",
+        expect.objectContaining({ id: created.id }),
+      ),
+    );
+    expect(creation).toHaveBeenCalledTimes(2);
+    expect(invoke).not.toHaveBeenCalledWith("create_thread", expect.anything());
+    await userEvent.click(getNewThreadButton());
+    expect(screen.getByRole("switch", { name: "새 worktree" })).toHaveProperty(
+      "checked",
+      false,
+    );
+  },
+);
+
+it("requires a new agent choice when the source worktree agent is unavailable", async () => {
+  const source = {
+    ...responseThread("unavailable-source"),
+    agentId: "removed-agent",
+    worktree: {
+      root: "/isolated/repository",
+      sourceFolder: "/work/repository",
+    },
+  };
+  const original = vi.mocked(invoke).getMockImplementation();
+  vi.mocked(invoke).mockImplementation((command, args) => {
+    if (command === "list_threads") return Promise.resolve([source]);
+    if (command === "subscribe_thread") return subscribeWith(args, source);
+    return original?.(command, args) ?? Promise.resolve();
+  });
+  render(() => <App />);
+  await userEvent.click(
+    await screen.findByRole("button", { name: source.title }),
+  );
+  await userEvent.click(screen.getByRole("button", { name: "스레드 메뉴" }));
+  await userEvent.click(
+    screen.getByRole("menuitem", { name: "이 worktree에서 새 스레드" }),
+  );
+  expect(screen.getByRole("button", { name: "스레드 시작" })).toHaveProperty(
+    "disabled",
+    true,
+  );
+  await selectNewThreadAgent("Codex");
+  expect(screen.getByRole("button", { name: "스레드 시작" })).toHaveProperty(
+    "disabled",
+    false,
+  );
+});
+
+it.each(["light", "dark"])(
+  "updates shared worktree deletion guidance from the live list in %s theme",
+  async (theme) => {
+    localStorage.setItem("atte.theme", theme);
+    const source = {
+      ...responseThread("delete-source"),
+      worktree: {
+        root: "/isolated/repository",
+        sourceFolder: "/work/repository",
+      },
+    };
+    const other = {
+      ...source,
+      id: "delete-other",
+      title: "Remaining shared thread",
+    };
+    let receiveList!: (entries: (typeof source)[]) => void;
+    const original = vi.mocked(invoke).getMockImplementation();
+    vi.mocked(invoke).mockImplementation((command, args) => {
+      if (command === "list_threads") return Promise.resolve([source, other]);
+      if (command === "subscribe_thread_list") {
+        receiveList = (args as { channel: { onmessage: typeof receiveList } })
+          .channel.onmessage;
+        return Promise.resolve("list");
+      }
+      return original?.(command, args) ?? Promise.resolve();
+    });
+    render(() => <App />);
+    await screen.findByRole("button", { name: source.title });
+    await userEvent.click(threadMenu(source.title));
+    await userEvent.click(screen.getByRole("menuitem", { name: "삭제" }));
+    expect(
+      screen.getByRole("note", { name: "worktree는 유지됩니다" }).textContent,
+    ).toContain(source.worktree.root);
+    expect(
+      screen.queryByRole("note", { name: "worktree도 함께 삭제됩니다" }),
+    ).toBeNull();
+    receiveList([source]);
+    await screen.findByRole("note", { name: "worktree도 함께 삭제됩니다" });
+    receiveList([source, other]);
+    await screen.findByRole("note", { name: "worktree는 유지됩니다" });
+    await userEvent.click(screen.getByRole("button", { name: "삭제" }));
+    await waitFor(() =>
+      expect(invoke).toHaveBeenCalledWith("delete_thread", { id: source.id }),
+    );
+    expect(
+      await screen.findByRole("button", { name: other.title }),
+    ).toBeTruthy();
+  },
+);
+
+it("hides worktree sharing from both menus on ordinary folder threads", async () => {
+  const source = responseThread("ordinary-folder");
+  const original = vi.mocked(invoke).getMockImplementation();
+  vi.mocked(invoke).mockImplementation((command, args) => {
+    if (command === "list_threads") return Promise.resolve([source]);
+    if (command === "subscribe_thread") return subscribeWith(args, source);
+    return original?.(command, args) ?? Promise.resolve();
+  });
+  render(() => <App />);
+  await userEvent.click(
+    await screen.findByRole("button", { name: source.title }),
+  );
+  await userEvent.click(screen.getByRole("button", { name: "스레드 메뉴" }));
+  expect(
+    screen.queryByRole("menuitem", { name: "이 worktree에서 새 스레드" }),
+  ).toBeNull();
+  await userEvent.keyboard("{Escape}");
+  await userEvent.click(threadMenu(source.title));
+  expect(
+    screen.queryByRole("menuitem", { name: "이 worktree에서 새 스레드" }),
+  ).toBeNull();
+});
+
+it.each(["light", "dark"])(
   "groups worktree threads by source and shows the rotated icon in %s theme",
   async (theme) => {
     localStorage.setItem("atte.theme", theme);
