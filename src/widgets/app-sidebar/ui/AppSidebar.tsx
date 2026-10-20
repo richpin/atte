@@ -1,5 +1,6 @@
 import {
   Bot,
+  ChevronsUpDown,
   EllipsisVertical,
   FolderClosed,
   FolderOpen,
@@ -13,6 +14,7 @@ import {
 import { useI18n } from "shared/i18n";
 import {
   AgentIcon,
+  AppSymbol,
   Button,
   Callout,
   Dialog,
@@ -500,15 +502,20 @@ export function AppSidebar(props: {
             </nav>
           </SidebarContent>
 
-          <SidebarFooter class="flex items-end border-line border-t">
-            <DropdownMenu placement="top-end">
+          <SidebarFooter class="border-line border-t">
+            <DropdownMenu placement="top-start" sameWidth>
               <DropdownMenuTrigger
-                aria-label={t("settings.openMenu")}
-                class="grid size-8 place-items-center rounded-md text-muted outline-none hover:bg-canvas hover:text-ink focus-visible:ring-2 focus-visible:ring-accent"
+                as={SidebarMenuButton}
+                aria-label={t("sidebar.openAppMenu")}
+                class="h-9 data-[expanded]:bg-sidebar-accent"
               >
-                <Settings aria-hidden="true" class="size-4" />
+                <span class="grid size-6 shrink-0 place-items-center">
+                  <AppSymbol aria-hidden="true" class="size-5" />
+                </span>
+                <span class="min-w-0 flex-1 truncate">Atte</span>
+                <ChevronsUpDown aria-hidden="true" class="text-muted" />
               </DropdownMenuTrigger>
-              <DropdownMenuContent class="w-40">
+              <DropdownMenuContent>
                 <DropdownMenuItem
                   aria-current={props.view === "general" ? "page" : undefined}
                   class="aria-[current=page]:bg-menu-hover aria-[current=page]:font-medium"

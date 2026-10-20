@@ -415,7 +415,7 @@ it("opens conversation find from the thread menu and restores the menu trigger f
 });
 
 async function openAgentManagement() {
-  await userEvent.click(screen.getByRole("button", { name: "설정 메뉴 열기" }));
+  await userEvent.click(screen.getByRole("button", { name: "Atte 메뉴 열기" }));
   await userEvent.click(screen.getByRole("menuitem", { name: "에이전트" }));
   await waitFor(() =>
     expect(screen.queryByRole("menuitem", { name: "에이전트" })).toBeNull(),
@@ -425,7 +425,7 @@ async function openAgentManagement() {
 it("opens settings pages from the sidebar menu and keeps language selection there", async () => {
   render(() => <App />);
 
-  const settings = screen.getByRole("button", { name: "설정 메뉴 열기" });
+  const settings = screen.getByRole("button", { name: "Atte 메뉴 열기" });
   settings.focus();
   expect(document.activeElement).toBe(settings);
   await userEvent.keyboard("{Enter}");
@@ -469,9 +469,7 @@ it("opens settings pages from the sidebar menu and keeps language selection ther
   expect(await screen.findByRole("heading", { name: "General" })).toBeTruthy();
   expect(localStorage.getItem("atte.locale")).toBe("en");
 
-  await userEvent.click(
-    screen.getByRole("button", { name: "Open settings menu" }),
-  );
+  await userEvent.click(screen.getByRole("button", { name: "Open Atte menu" }));
   expect(
     screen
       .getByRole("menuitem", { name: "General" })
@@ -628,7 +626,7 @@ it("shares thread information visibility across navigation and resets for each a
   ).toBe("false");
   expect(screen.queryByRole("heading", { name: "Context" })).toBeNull();
 
-  await userEvent.click(screen.getByRole("button", { name: "설정 메뉴 열기" }));
+  await userEvent.click(screen.getByRole("button", { name: "Atte 메뉴 열기" }));
   await userEvent.click(screen.getByRole("menuitem", { name: "일반" }));
   await screen.findByRole("heading", { name: "일반" });
   expect(screen.queryByRole("button", { name: "스레드 정보" })).toBeNull();

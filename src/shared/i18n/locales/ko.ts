@@ -71,7 +71,6 @@ export const ko = {
     },
   },
   settings: {
-    openMenu: "설정 메뉴 열기",
     general: "일반",
     agents: "에이전트",
     themeDescription: "이 기기에서 사용할 Atte의 화면 모드를 선택합니다.",
@@ -330,6 +329,7 @@ export const ko = {
     settingOff: "꺼짐",
   },
   sidebar: {
+    openAppMenu: "Atte 메뉴 열기",
     navigation: "앱 탐색",
     newThread: "새 스레드",
     collapse: "사이드바 접기",

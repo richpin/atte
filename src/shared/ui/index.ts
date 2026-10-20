@@ -1,4 +1,5 @@
 export { AgentIcon } from "./agent-icon";
+export { AppSymbol } from "./app-symbol";
 export { Button, type ButtonProps } from "./button";
 export { Callout } from "./callout";
 export {

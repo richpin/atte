@@ -65,7 +65,6 @@ export const en = {
     },
   },
   settings: {
-    openMenu: "Open settings menu",
     general: "General",
     agents: "Agents",
     themeDescription: "Choose how Atte looks on this device.",
@@ -325,6 +324,7 @@ export const en = {
     settingOff: "Off",
   },
   sidebar: {
+    openAppMenu: "Open Atte menu",
     navigation: "App navigation",
     newThread: "New Thread",
     collapse: "Collapse sidebar",
