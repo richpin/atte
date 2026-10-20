@@ -65,6 +65,16 @@ pub(crate) async fn run(folder: &Path, args: &[&OsStr]) -> Result<Vec<u8>, Error
     stdout(output)
 }
 
+/// Stream output with pipe backpressure; dropping the child also stops Git.
+pub(crate) fn spawn(folder: &Path, args: &[&OsStr]) -> Result<tokio::process::Child, Error> {
+    Ok(tokio::process::Command::from(command(folder, args))
+        .kill_on_drop(true)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()?)
+}
+
 /// Execute from a blocking worker; never call on an async runtime worker.
 pub(crate) fn run_blocking(folder: &Path, args: &[&OsStr]) -> Result<Vec<u8>, Error> {
     stdout(command(folder, args).output()?)

@@ -34,6 +34,7 @@
     "@solid-primitives/resize-observer": "^2.2.0",
     "@solid-primitives/storage": "^4.4.0",
     "@tanstack/solid-query": "^5.103.1",
+    "@tanstack/solid-virtual": "^3.13.48",
     "@tauri-apps/api": "^2",
     "@tauri-apps/plugin-opener": "^2",
     "class-variance-authority": "^0.7.1",

@@ -5,6 +5,39 @@ type Localized<T> = {
 };
 
 export const ko = {
+  git: {
+    title: "Git",
+    allBranches: "모든 브랜치",
+    branch: "브랜치로 필터",
+    refresh: "Git 이력 새로고침",
+    readOnly: "읽기 전용",
+    history: "커밋 이력",
+    loaded: "{{count}}개 불러옴",
+    loading: "커밋 이력을 불러오는 중…",
+    loadingDiff: "파일 변경사항을 불러오는 중…",
+    loadMore: "이전 커밋 더 보기",
+    localSnapshot: "로컬 refs 기준 · 새 변경사항은 새로고침으로 확인",
+    shallow: "Shallow clone · 로컬에 있는 이력만 표시합니다.",
+    shallowBoundary:
+      "Shallow clone에 이 커밋의 부모가 없어 변경사항을 표시할 수 없습니다.",
+    empty: "아직 커밋이 없는 저장소입니다.",
+    notRepository: "작업 폴더가 Git 저장소가 아닙니다.",
+    unavailable: "스레드 또는 이력을 사용할 수 없습니다. 새로고침해주세요.",
+    failed: "Git 정보를 불러오지 못했습니다. 다시 시도해주세요.",
+    commitChanges: "커밋 변경사항",
+    firstParent: "첫 부모 기준",
+    compare: "비교 기준",
+    emptyTree: "빈 tree",
+    files: "변경 파일 {{count}}개",
+    emptyCommit: "파일 변경사항이 없는 커밋입니다.",
+    metadataOnly:
+      "텍스트 줄 변경이 없습니다. 파일 상태와 메타데이터를 확인해주세요.",
+    binary: "바이너리 파일이 변경되었습니다. 텍스트 diff를 제공하지 않습니다.",
+    tooLarge: "파일 또는 diff가 미리보기 한도인 2 MiB를 초과합니다.",
+    unsupported: "UTF-8 텍스트가 아니므로 미리보기를 제공하지 않습니다.",
+    submodule:
+      "Submodule 참조가 변경되었습니다. 텍스트 diff를 제공하지 않습니다.",
+  },
   diff: {
     title: "변경 사항",
     tabTitle: "변경 사항",

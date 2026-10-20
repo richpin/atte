@@ -6,16 +6,54 @@ import {
   type FilesManager,
   WorkspaceFiles,
 } from "features/workspace-files";
-import { FileDiff, FolderTree, Globe } from "lucide-solid";
+import { FileDiff, FolderTree, GitBranch, Globe } from "lucide-solid";
 import type { PreparedFileChange } from "shared/diff";
 import { useI18n } from "shared/i18n";
 import { Button } from "shared/ui";
 import { createSignal, Show } from "solid-js";
+import type { GitCommit } from "../api/git-history";
 import { createThreadPanelModel as createModel } from "../model/thread-panel";
+import { CommitReview } from "./git/CommitReview";
+import { GitHistory } from "./git/GitHistory";
 
 export function createThreadPanelModel(manager?: FilesManager) {
   const { t } = useI18n();
   const files = manager ?? createFilesManager(t);
+  const openCommit = (
+    threadId: string,
+    repository: string,
+    commit: GitCommit,
+  ) => {
+    model.openTab(threadId, {
+      id: `commit:${repository}:${commit.oid}`,
+      title: () => commit.oid.slice(0, 7),
+      icon: FileDiff,
+      content: (props) => (
+        <CommitReview
+          threadId={threadId}
+          oid={commit.oid}
+          visible={props.visible}
+        />
+      ),
+    });
+  };
+  const openGit = (threadId: string, placeholder: string) => {
+    model.openTab(threadId, {
+      id: `git:${threadId}`,
+      title: () => t("git.title"),
+      icon: GitBranch,
+      content: (props) => (
+        <GitHistory
+          threadId={threadId}
+          visible={props.visible}
+          onOpenCommit={(repository, commit) =>
+            openCommit(threadId, repository, commit)
+          }
+        />
+      ),
+    });
+    model.closeTab(threadId, placeholder);
+  };
   const openFiles = (threadId: string, placeholder: string) => {
     const fileModel = files.get(threadId);
     const id = `files:${threadId}`;
@@ -65,6 +103,13 @@ export function createThreadPanelModel(manager?: FilesManager) {
               <Button variant="outline" onClick={() => setKind("web")}>
                 <Globe class="size-4" />
                 {t("webBrowser.title")}
+              </Button>
+              <Button
+                variant="outline"
+                onClick={() => openGit(threadId, web.id)}
+              >
+                <GitBranch class="size-4" />
+                {t("git.title")}
               </Button>
             </div>
           }

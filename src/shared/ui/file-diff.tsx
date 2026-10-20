@@ -13,7 +13,9 @@ import { Button } from "./button";
 import type { createFileDiffRenderer } from "./file-diff-renderer";
 
 export function FileDiff(props: {
-  comparison: PreparedComparison;
+  comparison: Pick<PreparedComparison, "diff"> &
+    Partial<Pick<PreparedComparison, "before" | "after">>;
+  fallback?: string;
   scrollRoot: () => HTMLElement;
   scrollContent: () => HTMLElement;
   visible: boolean;
@@ -115,9 +117,8 @@ export function FileDiff(props: {
           {t("diff.failed")}
         </p>
         <pre class="overflow-auto whitespace-pre-wrap break-words px-3 py-2 text-xs">
-          {props.comparison.before ?? ""}
-          {"\n→\n"}
-          {props.comparison.after ?? ""}
+          {props.fallback ??
+            `${props.comparison.before ?? ""}\n→\n${props.comparison.after ?? ""}`}
         </pre>
       </Show>
       <div ref={container} />

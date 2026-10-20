@@ -5,6 +5,7 @@ mod agent_runtime;
 mod browser;
 mod file_selection;
 mod git;
+mod git_history;
 mod installation;
 mod installation_files;
 mod lifecycle;
@@ -263,9 +264,11 @@ async fn delete_thread(
     id: Uuid,
     threads: State<'_, Threads>,
     files: State<'_, workspace_files::WorkspaceFiles>,
+    history: State<'_, git_history::GitHistory>,
 ) -> Result<(), ThreadError> {
     threads.delete(id).await?;
     files.forget(id);
+    history.forget(id);
     Ok(())
 }
 
@@ -489,6 +492,7 @@ pub fn run() {
             Ok(())
         })
         .manage(Subscriptions::default())
+        .manage(git_history::GitHistory::default())
         .manage(SelectedFiles::default())
         .manage(workspace_files::WorkspaceFiles::default())
         .manage(lifecycle::Lifecycle::default())
@@ -508,6 +512,7 @@ pub fn run() {
             }
             if matches!(event, tauri::WindowEvent::Destroyed) {
                 window.state::<workspace_files::WorkspaceFiles>().clear();
+                window.state::<git_history::GitHistory>().clear();
                 let forgotten = window.state::<SelectedFiles>().forget_owner(window.label());
                 remove_forgotten_media(&window.state::<Threads>(), forgotten);
                 if let Ok(mut entries) = window.state::<Subscriptions>().0.lock() {
@@ -523,6 +528,11 @@ pub fn run() {
                 return true;
             }
             let handler: fn(tauri::ipc::Invoke) -> bool = tauri::generate_handler![
+                git_history::open_git_history,
+                git_history::read_git_history_page,
+                git_history::close_git_history,
+                git_history::read_git_commit,
+                git_history::read_git_commit_file,
                 workspace_files::subscribe_workspace_files,
                 workspace_files::unsubscribe_workspace_files,
                 workspace_files::read_workspace_file,
