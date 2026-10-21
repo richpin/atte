@@ -16,6 +16,7 @@ import type { Attachment, ResponsePart, Turn } from "../model/types";
 import { AttachmentChip } from "./AttachmentChip";
 import { Plan } from "./Plan";
 import { PlanContent } from "./PlanContent";
+import { ResponseContentView } from "./ResponseContent";
 import { Thought } from "./Thought";
 import { ToolCall } from "./ToolCall";
 import { TurnChangesSummary } from "./TurnChangesSummary";
@@ -107,6 +108,9 @@ function UserMessage(props: { message: string; attachments: Attachment[] }) {
 
 export function Message(props: {
   turns: Turn[];
+  threadId?: string;
+  visible?: boolean;
+  onOpenFile?: (path: string) => void;
   streamingTurnId?: string;
   thinkingTurnId?: string;
   respondingTurnId?: string;
@@ -136,6 +140,26 @@ export function Message(props: {
             <Index each={turn().responseParts}>
               {(part, index) => (
                 <Switch>
+                  <Match
+                    when={
+                      part().kind === "content" &&
+                      (part() as Extract<ResponsePart, { kind: "content" }>)
+                    }
+                  >
+                    {(content) => (
+                      <div
+                        data-message-participant="agent"
+                        data-thread-search-root=""
+                      >
+                        <ResponseContentView
+                          content={content().content}
+                          threadId={props.threadId}
+                          visible={props.visible}
+                          onOpenFile={props.onOpenFile}
+                        />
+                      </div>
+                    )}
+                  </Match>
                   <Match
                     when={
                       part().kind === "thought" &&
@@ -187,6 +211,9 @@ export function Message(props: {
                     {(tool) => (
                       <ToolCall
                         tool={tool().tool}
+                        threadId={props.threadId}
+                        visible={props.visible}
+                        onOpenFile={props.onOpenFile}
                         active={turn().id === props.streamingTurnId}
                         interrupted={
                           turn().stopReason === "cancelled" ||

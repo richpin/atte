@@ -20,6 +20,7 @@ import {
 import { createSignal, For, Show } from "solid-js";
 import { Dynamic } from "solid-js/web";
 import type { ToolCall as ToolCallData, ToolContent } from "../model/types";
+import { ResponseContentView } from "./ResponseContent";
 
 function plainValue(value: unknown): string {
   if (value === undefined || value === null) return "";
@@ -28,6 +29,9 @@ function plainValue(value: unknown): string {
 
 export function ToolCall(props: {
   tool: ToolCallData;
+  threadId?: string;
+  visible?: boolean;
+  onOpenFile?: (path: string) => void;
   active: boolean;
   interrupted?: boolean;
   approvalPending: boolean;
@@ -76,23 +80,37 @@ export function ToolCall(props: {
         : spinning()
           ? Tailspin
           : Circle;
-  const textContent = () =>
-    (props.tool.content ?? []).flatMap((item) =>
-      item.type === "content" &&
-      item.content.type === "text" &&
-      item.content.text
-        ? [item.content.text]
-        : [],
+  const hasContent = () =>
+    (props.tool.content ?? []).some((item) => item.type === "content");
+  const hasVisibleResults = () =>
+    (props.tool.content ?? []).some(
+      (item) => item.type === "content" && item.content.type !== "text",
     );
-  const output = () =>
-    textContent().length
-      ? textContent().join("\n\n")
-      : plainValue(props.tool.rawOutput);
-  const placeholder = (item: ToolContent) => {
-    if (item.type === "diff") return `${t("thread.tool.diff")}: ${item.path}`;
-    if (item.type === "terminal") return t("thread.tool.terminal");
-    return `${t("thread.tool.content")}: ${item.content.type}${item.content.name ? ` — ${item.content.name}` : ""}${item.content.uri || item.content.resource?.uri ? ` — ${item.content.uri ?? item.content.resource?.uri}` : ""}`;
-  };
+  const placeholder = (item: ToolContent) =>
+    item.type === "diff"
+      ? `${t("thread.tool.diff")}: ${item.path}`
+      : t("thread.tool.terminal");
+  const results = () => (
+    <For each={props.tool.content ?? []}>
+      {(item) => (
+        <Show
+          when={item.type === "content" && item}
+          fallback={
+            <p class="break-all text-xs text-muted">{placeholder(item)}</p>
+          }
+        >
+          {(entry) => (
+            <ResponseContentView
+              content={entry().content}
+              threadId={props.threadId}
+              visible={props.visible}
+              onOpenFile={props.onOpenFile}
+            />
+          )}
+        </Show>
+      )}
+    </For>
+  );
   return (
     <Collapsible
       open={expanded()}
@@ -148,30 +166,26 @@ export function ToolCall(props: {
             </section>
           )}
         </Show>
-        <Show when={output()}>
-          {(result) => (
-            <section>
-              <p data-thread-search-ignore="" class="mb-1 text-xs text-muted">
-                {t("thread.tool.output")}
-              </p>
+        <Show when={plainValue(props.tool.rawOutput)}>
+          <Show
+            when={hasContent()}
+            fallback={
               <pre class="max-h-64 overflow-auto whitespace-pre-wrap break-words text-xs">
-                {result()}
+                {plainValue(props.tool.rawOutput)}
               </pre>
-            </section>
-          )}
-        </Show>
-        <Show when={textContent().length && plainValue(props.tool.rawOutput)}>
-          {(raw) => (
+            }
+          >
             <details>
               <summary class="cursor-pointer text-xs text-muted">
                 {t("thread.tool.rawOutput")}
               </summary>
               <pre class="mt-1 max-h-64 overflow-auto whitespace-pre-wrap break-words text-xs">
-                {raw()}
+                {plainValue(props.tool.rawOutput)}
               </pre>
             </details>
-          )}
+          </Show>
         </Show>
+        <Show when={!hasVisibleResults() && expanded()}>{results()}</Show>
         <For each={props.tool.locations ?? []}>
           {(location) => (
             <p class="break-all font-mono text-xs text-muted">
@@ -180,16 +194,15 @@ export function ToolCall(props: {
             </p>
           )}
         </For>
-        <For
-          each={(props.tool.content ?? []).filter(
-            (item) => item.type !== "content" || item.content.type !== "text",
-          )}
-        >
-          {(item) => (
-            <p class="break-all text-xs text-muted">{placeholder(item)}</p>
-          )}
-        </For>
       </CollapsibleContent>
+      <Show when={hasVisibleResults()}>
+        <div
+          data-thread-search-root=""
+          class="flex min-w-0 flex-col gap-3 border-t border-line px-3 py-3"
+        >
+          {results()}
+        </div>
+      </Show>
     </Collapsible>
   );
 }

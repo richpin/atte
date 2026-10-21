@@ -495,6 +495,7 @@ export function createThreadModel(
     const parts = current.turns[turnIndex].responseParts;
     if (
       update.kind === "toolUpdate" ||
+      update.kind === "contentUpdate" ||
       update.kind === "planUpdate" ||
       update.kind === "planContentUpdate"
     ) {

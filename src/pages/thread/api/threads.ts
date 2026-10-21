@@ -10,6 +10,17 @@ import type {
   UserInput,
 } from "../model/types";
 
+export const readResponseContent = (threadId: string, contentId: string) =>
+  invoke<ArrayBuffer>("read_response_content", { threadId, contentId });
+export const saveResponseContent = (
+  threadId: string,
+  contentId: string,
+  dialogTitle: string,
+) =>
+  invoke<void>("save_response_content", { threadId, contentId, dialogTitle });
+export const openResponseFile = (threadId: string, contentId: string) =>
+  invoke<string | null>("open_response_file", { threadId, contentId });
+
 export function listThreads() {
   return invoke<ThreadMetadata[]>("list_threads");
 }

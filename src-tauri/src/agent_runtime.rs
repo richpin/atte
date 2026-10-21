@@ -26,7 +26,7 @@ use agent_client_protocol::{
             SelectedPermissionOutcome, SessionConfigKind, SessionConfigOption,
             SessionConfigOptionValue, SessionConfigOptionsCapabilities, SessionConfigSelectOption,
             SessionConfigSelectOptions, SessionId, SessionNotification, SessionUpdate,
-            SetSessionConfigOptionRequest, ToolCallContent,
+            SetSessionConfigOptionRequest,
         },
         MaybeUndefined, ProtocolVersion,
     },
@@ -191,10 +191,7 @@ pub(crate) async fn run(
                 let fields = route.updates.update_tool(turn, request.tool_call)?;
                 let details = [
                     fields.raw_input.as_ref().and_then(|value| serde_json::to_string_pretty(value).ok()),
-                    fields.content.as_ref().and_then(|content| {
-                        let visible: Vec<_> = content.iter().filter(|item| !matches!(item, ToolCallContent::Terminal(_))).collect();
-                        (!visible.is_empty()).then(|| serde_json::to_string_pretty(&visible).ok()).flatten()
-                    }),
+                    fields.content.as_ref().and_then(|content| crate::thread::content::permission_details(content)),
                     fields.locations.as_ref().filter(|locations| !locations.is_empty()).and_then(|value| serde_json::to_string_pretty(value).ok()),
                 ].into_iter().flatten().collect::<Vec<_>>().join("\n");
                 route.updates.request_permission(turn, PermissionRequest {
@@ -285,7 +282,7 @@ pub(crate) async fn run(
                         update if route.active.is_some() => {
                             if let Some(active) = &mut route.active {
                                 match update {
-                                    SessionUpdate::AgentMessageChunk(chunk) => if let ContentBlock::Text(text) = chunk.content { route.updates.append_text(active.turn, text.text); },
+                                    SessionUpdate::AgentMessageChunk(chunk) => { route.updates.append_content(active.turn, chunk); },
                                     SessionUpdate::AgentThoughtChunk(chunk) => if let ContentBlock::Text(text) = chunk.content { route.updates.append_thought(active.turn, text.text, chunk.message_id.map(|id| id.to_string())); },
                                     SessionUpdate::Plan(plan) => { route.updates.update_plan(active.turn, plan); },
                                     SessionUpdate::ToolCall(tool) => { route.updates.update_tool(active.turn, tool.into()); },

@@ -83,4 +83,4 @@ export { Tailspin } from "./tailspin";
 export { TextField, TextFieldInput, TextFieldLabel } from "./text-field";
 export { showErrorToast, ToastHost } from "./toast";
 export { Tooltip, TooltipContent, TooltipTrigger } from "./tooltip";
-export { WebLinkProvider } from "./web-link";
+export { useWebLink, WebLinkProvider } from "./web-link";

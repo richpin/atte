@@ -3,6 +3,7 @@ pub(crate) mod interaction;
 mod list;
 use interaction::PendingReply;
 pub use interaction::{ElicitationAnswer, FormRequest, PendingInteraction};
+pub(crate) mod content;
 mod response;
 use crate::agent::{prepared_codex, AgentDefinition, PreparedAgent};
 use crate::agent_management::authentication::AuthenticationObservation;
@@ -1408,6 +1409,43 @@ impl Threads {
         let entry = state.entries.get(&id).ok_or_else(not_found)?;
         let thread = entry.state.lock().map_err(|_| unavailable())?.snapshot();
         Ok(thread)
+    }
+
+    pub(crate) fn response_content(
+        &self,
+        id: Uuid,
+        content_id: &str,
+    ) -> Result<content::ResponseContent, ThreadError> {
+        let state = self.lock()?;
+        let entry = state.entries.get(&id).ok_or_else(not_found)?;
+        let state = entry.state.lock().map_err(|_| unavailable())?;
+        for part in state
+            .thread
+            .turns
+            .iter()
+            .flat_map(|turn| &turn.response_parts)
+        {
+            match part {
+                ResponsePart::Content { content, .. }
+                    if content::content_id(&content.0) == content_id =>
+                {
+                    return Ok(content.clone())
+                }
+                ResponsePart::Tool { tool, .. } => {
+                    for item in tool.content.iter().flatten() {
+                        if let agent_client_protocol::schema::v1::ToolCallContent::Content(item) =
+                            item
+                        {
+                            if content::content_id(&item.content) == content_id {
+                                return Ok(content::ResponseContent::new(item.content.clone()));
+                            }
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        Err(not_found())
     }
 
     /// Renames an app-owned thread and publishes the saved title to subscribers.
@@ -2918,6 +2956,13 @@ fn next_prompt_at() -> u64 {
 #[derive(Clone, Debug, Serialize)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum ThreadUpdate {
+    ContentUpdate {
+        #[serde(rename = "threadId")]
+        thread_id: Uuid,
+        #[serde(rename = "turnId")]
+        turn_id: Uuid,
+        part: ResponsePart,
+    },
     Thread {
         thread: Box<Thread>,
     },
@@ -3525,7 +3570,11 @@ impl RuntimeUpdates {
         }
     }
 
-    pub fn append_text(&self, turn: Uuid, text: String) {
+    pub fn append_content(
+        &self,
+        turn: Uuid,
+        chunk: agent_client_protocol::schema::v1::ContentChunk,
+    ) {
         let Ok(mut state) = self.state.lock() else {
             return;
         };
@@ -3541,12 +3590,19 @@ impl RuntimeUpdates {
         let Some(last) = state.thread.turns.last_mut() else {
             return;
         };
-        let part_id = last.append_response_text(&text);
-        let change = ThreadUpdate::TextDelta {
-            thread_id: state.thread.id,
-            turn_id: turn,
-            part_id,
-            text,
+        let part = last.append_message(chunk);
+        let change = match part {
+            ResponsePart::Text { id, text, .. } => ThreadUpdate::TextDelta {
+                thread_id: state.thread.id,
+                turn_id: turn,
+                part_id: id,
+                text,
+            },
+            part => ThreadUpdate::ContentUpdate {
+                thread_id: state.thread.id,
+                turn_id: turn,
+                part,
+            },
         };
         state
             .subscribers
@@ -3793,6 +3849,41 @@ mod title_tests {
             state,
             generation,
         }
+    }
+
+    #[test]
+    fn response_payload_access_is_thread_scoped_and_tracks_the_current_transcript() {
+        use agent_client_protocol::schema::v1::{ContentBlock, ContentChunk};
+        let folder = tempfile::tempdir().unwrap();
+        let threads = Threads::new(vec![prepared_codex()]);
+        let draft = threads.create(folder.path()).unwrap();
+        let other = threads.create(folder.path()).unwrap();
+        let updates = updates_for(&threads, draft.id);
+        let mut turn = Turn {
+            id: Uuid::new_v4(),
+            message: String::new(),
+            attachments: vec![],
+            response_parts: vec![],
+            stop_reason: None,
+        };
+        let source: ContentBlock = serde_json::from_value(
+            serde_json::json!({"type":"audio","mimeType":"audio/wav","data":"YXVkaW8="}),
+        )
+        .unwrap();
+        let id = content::content_id(&source);
+        turn.append_message(ContentChunk::new(source));
+        updates.history_restored(vec![turn]);
+        assert_eq!(
+            threads
+                .response_content(draft.id, &id)
+                .unwrap()
+                .bytes()
+                .unwrap(),
+            b"audio"
+        );
+        assert!(threads.response_content(other.id, &id).is_err());
+        updates.history_restored(vec![]);
+        assert!(threads.response_content(draft.id, &id).is_err());
     }
 
     #[test]

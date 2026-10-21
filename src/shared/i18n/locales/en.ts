@@ -172,6 +172,20 @@ export const en = {
     newTabDescription: "Explore your project here.",
   },
   thread: {
+    content: {
+      resource: "Resource",
+      loading: "Loading preview…",
+      previewFailed:
+        "Preview unavailable. Save the content to open it in another app.",
+      enlarge: "Enlarge {{name}}",
+      close: "Close",
+      showText: "Show contents",
+      unsupported: "Preview is not available for this content type.",
+      copyText: "Copy",
+      copied: "Copied",
+      save: "Save as…",
+      actionFailed: "Couldn’t complete the action.",
+    },
     elicitation: {
       title: "Agent question",
       yes: "Yes",

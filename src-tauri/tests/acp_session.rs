@@ -4852,7 +4852,18 @@ impl TranscriptSubscription {
                 let turn = thread.turns.last_mut().unwrap();
                 assert_eq!(turn_id, turn.id);
                 if let Some(atte_lib::thread::ResponsePart::Text { text: previous, .. }) = turn.response_parts.iter_mut().find(|part| matches!(part, atte_lib::thread::ResponsePart::Text { id, .. } if id == &part_id)) { previous.push_str(&text); }
-                else { turn.response_parts.push(atte_lib::thread::ResponsePart::Text { id: part_id, text }); }
+                else { turn.response_parts.push(atte_lib::thread::ResponsePart::Text { id: part_id, text, message_id: None }); }
+            }
+            ThreadUpdate::ContentUpdate {
+                thread_id,
+                turn_id,
+                part,
+            } => {
+                let thread = self.thread.as_mut().unwrap();
+                assert_eq!(thread.id, thread_id);
+                let turn = thread.turns.last_mut().unwrap();
+                assert_eq!(turn.id, turn_id);
+                turn.response_parts.push(part);
             }
             ThreadUpdate::ThoughtDelta {
                 thread_id,
@@ -6352,6 +6363,94 @@ async fn cancellation_preserves_previous_completion_and_empty_approval_completes
 }
 
 #[tokio::test]
+async fn mixed_response_content_keeps_live_snapshot_and_replay_order() {
+    let folder = tempfile::tempdir().unwrap();
+    let mut agent = mock_agent();
+    agent
+        .env
+        .insert("FIXTURE_MODE".into(), "mixed-content".into());
+    agent.env.insert(
+        "SESSION_FILE".into(),
+        folder.path().join("history.json").to_string_lossy().into(),
+    );
+    let threads = Threads::new(vec![agent]);
+    let draft = threads.create(folder.path()).unwrap();
+    threads.connect(draft.id).unwrap();
+    settle(&threads, draft.id).await;
+    let mut stream = subscribe(&threads, draft.id);
+    threads
+        .send_message(draft.id, "Show results".into())
+        .unwrap();
+    let live = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let next = stream.recv().await.unwrap();
+            if next.status == ThreadStatus::SessionReady && !next.turns.is_empty() {
+                break next;
+            }
+        }
+    })
+    .await
+    .unwrap();
+    let parts = serde_json::to_value(&live.turns[0].response_parts).unwrap();
+    let kinds: Vec<_> = parts
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|part| {
+            part["content"]["type"]
+                .as_str()
+                .unwrap_or(part["kind"].as_str().unwrap())
+        })
+        .collect();
+    assert_eq!(
+        kinds,
+        [
+            "text",
+            "image",
+            "text",
+            "audio",
+            "resource",
+            "resource_link",
+            "tool",
+            "text",
+            "text"
+        ]
+    );
+    let contents = parts[6]["tool"]["content"].as_array().unwrap();
+    assert_eq!(
+        contents
+            .iter()
+            .map(|item| item["content"]["type"].as_str().unwrap())
+            .collect::<Vec<_>>(),
+        ["text", "image", "text", "resource"]
+    );
+    assert_eq!(parts[6]["tool"]["status"], "completed");
+    assert!(!parts.to_string().contains("aW1hZ2U="));
+    assert_eq!(parts[4]["content"]["text"], "<h1>literal report</h1>");
+    let mut snapshot = threads.subscribe(draft.id).unwrap();
+    let atte_lib::thread::ThreadUpdate::Thread { thread } = snapshot.recv().await.unwrap() else {
+        panic!("snapshot");
+    };
+    assert_eq!(
+        serde_json::to_value(&thread.turns[0].response_parts).unwrap(),
+        parts
+    );
+    threads.reconnect(draft.id).unwrap();
+    let replay = settle(&threads, draft.id).await;
+    let without_part_ids = |mut value: serde_json::Value| {
+        for part in value.as_array_mut().unwrap() {
+            part.as_object_mut().unwrap().remove("id");
+        }
+        value
+    };
+    assert_eq!(
+        without_part_ids(serde_json::to_value(&replay.turns[0].response_parts).unwrap()),
+        without_part_ids(parts)
+    );
+    threads.shutdown().await;
+}
+
+#[tokio::test]
 async fn streams_interleaved_tool_updates_and_restores_the_same_results() {
     use atte_lib::thread::ResponsePart;
     let folder = tempfile::tempdir().unwrap();
@@ -7049,5 +7148,74 @@ async fn shared_worktree_sessions_run_independently_and_deleting_one_keeps_the_o
     );
     threads.delete(second.id).await.unwrap();
     assert!(!first.working_folder.exists());
+    threads.shutdown().await;
+}
+
+#[tokio::test]
+async fn manual_content_demo_sends_playable_audio_links_and_restores_the_same_results() {
+    use atte_lib::thread::ResponsePart;
+    let folder = tempfile::tempdir().unwrap();
+    let mut agent = mock_agent();
+    agent
+        .env
+        .insert("FIXTURE_MODE".into(), "content-demo".into());
+    agent.env.insert(
+        "SESSION_FILE".into(),
+        folder.path().join("history.json").to_string_lossy().into(),
+    );
+    let threads = Threads::new(vec![agent]);
+    let draft = threads.create(folder.path()).unwrap();
+    threads.connect(draft.id).unwrap();
+    settle(&threads, draft.id).await;
+    let mut stream = subscribe(&threads, draft.id);
+    threads.send_message(draft.id, "test".into()).unwrap();
+    let live = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let next = stream.recv().await.unwrap();
+            if next.status == ThreadStatus::SessionReady && !next.turns.is_empty() {
+                break next;
+            }
+        }
+    })
+    .await
+    .unwrap();
+    let parts = &live.turns[0].response_parts;
+    let ResponsePart::Content { content, .. } = &parts[1] else {
+        panic!("audio part")
+    };
+    let wav = content.bytes().unwrap();
+    assert_eq!(&wav[..4], b"RIFF");
+    assert_eq!(&wav[8..16], b"WAVEfmt ");
+    assert_eq!(wav.len(), 32_044);
+    assert!(wav[44..].iter().any(|byte| *byte != 0));
+    let expected = serde_json::to_value(parts).unwrap();
+    assert_eq!(expected[2]["content"]["uri"], "https://example.com");
+    let path = tauri::Url::parse(expected[3]["content"]["uri"].as_str().unwrap())
+        .unwrap()
+        .to_file_path()
+        .unwrap();
+    assert_eq!(
+        path,
+        folder.path().canonicalize().unwrap().join("preview.html")
+    );
+    assert!(std::fs::read_to_string(path)
+        .unwrap()
+        .contains("ACP local resource link works"));
+    assert_eq!(
+        expected[5]["tool"]["content"][1]["content"]["type"],
+        "audio"
+    );
+    threads.reconnect(draft.id).unwrap();
+    let restored = settle(&threads, draft.id).await;
+    let without_ids = |mut value: serde_json::Value| {
+        for part in value.as_array_mut().unwrap() {
+            part.as_object_mut().unwrap().remove("id");
+        }
+        value
+    };
+    assert_eq!(
+        without_ids(serde_json::to_value(&restored.turns[0].response_parts).unwrap()),
+        without_ids(expected)
+    );
     threads.shutdown().await;
 }

@@ -25,6 +25,7 @@ export function ThreadPage(props: {
   model: ThreadModel;
   agents: PreparedAgent[];
   onManage: () => void;
+  onOpenFile?: (path: string) => void;
   onOpenChanges?: (turnId: string, files: PreparedFileChange[]) => void;
 }) {
   const { t } = useI18n();
@@ -244,6 +245,9 @@ export function ThreadPage(props: {
                   </button>
                 </Show>
                 <Message
+                  threadId={selectedThreadId()}
+                  visible={props.active}
+                  onOpenFile={props.onOpenFile}
                   turns={thread()?.turns ?? []}
                   changesActiveTurnId={streamingTurnId()}
                   onOpenChanges={props.onOpenChanges}

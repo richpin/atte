@@ -1,5 +1,6 @@
 //! Deterministic ACP peer. Stdout contains only newline-delimited JSON-RPC.
 mod concurrent;
+mod content_demo;
 mod elicitation;
 use serde_json::{json, Value};
 use std::{
@@ -493,6 +494,47 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         json!({"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"Answer"}}),
                         json!({"sessionUpdate":"agent_thought_chunk","content":{"type":"text","text":"Review"}}),
                     ];
+                    for update in updates {
+                        send(
+                            &mut output,
+                            json!({"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"remote-1","update":update}}),
+                        )?;
+                        history.push(update);
+                    }
+                    if let Some(path) = env::var_os("SESSION_FILE") {
+                        fs::write(path, serde_json::to_vec(&history)?)?;
+                    }
+                    send(
+                        &mut output,
+                        json!({"jsonrpc":"2.0","id":request["id"],"result":{"stopReason":"end_turn"}}),
+                    )?;
+                    continue;
+                }
+                if matches!(mode.as_str(), "mixed-content" | "content-demo") {
+                    let image = json!({"type":"image","mimeType":"image/png","data":"aW1hZ2U="});
+                    let audio = json!({"type":"audio","mimeType":"audio/wav","data":"YXVkaW8="});
+                    let resource = json!({"type":"resource","resource":{"uri":"file:///report.txt","mimeType":"text/plain","text":"<h1>literal report</h1>"}});
+                    let updates = if mode == "content-demo" {
+                        content_demo::updates()?
+                    } else {
+                        vec![
+                            json!({"sessionUpdate":"agent_message_chunk","messageId":"a","content":{"type":"text","text":"Before"}}),
+                            json!({"sessionUpdate":"agent_message_chunk","content":image}),
+                            json!({"sessionUpdate":"agent_message_chunk","messageId":"b","content":{"type":"text","text":"After image"}}),
+                            json!({"sessionUpdate":"agent_message_chunk","content":audio}),
+                            json!({"sessionUpdate":"agent_message_chunk","content":resource}),
+                            json!({"sessionUpdate":"agent_message_chunk","content":{"type":"resource_link","uri":"https://example.com/report","name":"Report"}}),
+                            json!({"sessionUpdate":"tool_call","toolCallId":"mixed-tool","title":"Inspect results","status":"in_progress","content":[
+                                {"type":"content","content":{"type":"text","text":"Tool before"}},
+                                {"type":"content","content":image},
+                                {"type":"content","content":{"type":"text","text":"Tool after"}},
+                                {"type":"content","content":resource}
+                            ]}),
+                            json!({"sessionUpdate":"agent_message_chunk","messageId":"c","content":{"type":"text","text":"End"}}),
+                            json!({"sessionUpdate":"agent_message_chunk","messageId":"d","content":{"type":"text","text":"Separate message"}}),
+                            json!({"sessionUpdate":"tool_call_update","toolCallId":"mixed-tool","status":"completed"}),
+                        ]
+                    };
                     for update in updates {
                         send(
                             &mut output,

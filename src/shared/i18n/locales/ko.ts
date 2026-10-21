@@ -179,6 +179,20 @@ export const ko = {
     newTabDescription: "여기에서 프로젝트를 탐색할 수 있습니다.",
   },
   thread: {
+    content: {
+      resource: "리소스",
+      loading: "미리보기 불러오는 중…",
+      previewFailed:
+        "미리보기를 표시할 수 없습니다. 저장 후 다른 앱에서 열어보세요.",
+      enlarge: "{{name}} 크게 보기",
+      close: "닫기",
+      showText: "내용 보기",
+      unsupported: "이 형식의 미리보기는 지원하지 않습니다.",
+      copyText: "복사",
+      copied: "복사됨",
+      save: "다른 이름으로 저장…",
+      actionFailed: "작업을 완료할 수 없습니다.",
+    },
     elicitation: {
       title: "에이전트 질문",
       yes: "예",

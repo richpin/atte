@@ -11,6 +11,7 @@ mod installation_files;
 mod lifecycle;
 mod notifications;
 mod open_working_folder;
+mod response_content;
 pub mod storage;
 pub mod thread;
 mod workspace_files;
@@ -538,6 +539,9 @@ pub fn run() {
                 return true;
             }
             let handler: fn(tauri::ipc::Invoke) -> bool = tauri::generate_handler![
+                response_content::read_response_content,
+                response_content::save_response_content,
+                response_content::open_response_file,
                 git_history::open_git_history,
                 git_history::read_git_history_page,
                 git_history::close_git_history,

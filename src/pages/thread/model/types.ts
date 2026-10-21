@@ -197,16 +197,22 @@ export interface ToolCall {
   content?: ToolContent[];
 }
 
+export interface ResponseContent {
+  id?: string;
+  type: string;
+  name?: string;
+  text?: string;
+  uri?: string;
+  mimeType?: string;
+  description?: string;
+  size?: number;
+  hasData?: boolean;
+}
+
 export type ToolContent =
   | {
       type: "content";
-      content: {
-        type: string;
-        text?: string;
-        name?: string;
-        uri?: string;
-        resource?: { uri?: string };
-      };
+      content: ResponseContent;
     }
   | { type: "diff"; path: string; oldText?: string | null; newText: string }
   | { type: "terminal"; terminalId: string };
@@ -227,6 +233,7 @@ export type PlanContent =
   | { type: "file"; uri: string };
 
 export type ResponsePart =
+  | { kind: "content"; id: string; content: ResponseContent }
   | { kind: "text"; id: string; text: string }
   | { kind: "thought"; id: string; text: string }
   | { kind: "tool"; id: string; tool: ToolCall }
@@ -259,6 +266,12 @@ export interface PreparedAgent {
 }
 
 export type ThreadUpdate =
+  | {
+      kind: "contentUpdate";
+      threadId: string;
+      turnId: string;
+      part: Extract<ResponsePart, { kind: "content" }>;
+    }
   | { kind: "thread"; thread: Thread }
   | {
       kind: "patch";

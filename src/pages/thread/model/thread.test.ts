@@ -64,6 +64,59 @@ const running = (id: string) =>
     ],
   });
 
+it("keeps content updates between text chunks and accepts the same restored snapshot", async () => {
+  const model = setup();
+  await open(model, "A", running("A"));
+  const receive = stream("A");
+  receive({
+    kind: "textDelta",
+    threadId: "A",
+    turnId: "turn",
+    partId: "before",
+    text: "Before",
+  });
+  receive({
+    kind: "contentUpdate",
+    threadId: "A",
+    turnId: "turn",
+    part: {
+      kind: "content",
+      id: "media",
+      content: {
+        id: "image",
+        type: "image",
+        mimeType: "image/png",
+        hasData: true,
+      },
+    },
+  });
+  receive({
+    kind: "textDelta",
+    threadId: "A",
+    turnId: "turn",
+    partId: "after",
+    text: "After",
+  });
+  const parts = JSON.parse(
+    JSON.stringify(model.thread()?.turns[0].responseParts),
+  ) as ResponsePart[];
+  expect(parts?.map((part) => part.kind)).toEqual(["text", "content", "text"]);
+  receive({
+    kind: "thread",
+    thread: thread("A", {
+      turns: [
+        {
+          id: "turn",
+          message: "hello",
+          responseParts: parts ?? [],
+          stopReason: "end_turn",
+        },
+      ],
+    }),
+  });
+  expect(model.thread()?.turns[0].responseParts).toEqual(parts);
+});
+
 let dispose: () => void;
 let streams: Map<string, ((update: ThreadUpdate) => void)[]>;
 let receiveList: (entries: ThreadMetadata[]) => void;

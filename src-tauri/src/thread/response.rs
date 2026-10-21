@@ -1,6 +1,9 @@
 //! Ordered response content shared by live notifications and history replay.
+use super::content::{serialize_tool, ResponseContent};
 use super::Turn;
-use agent_client_protocol::schema::v1::{Plan, ToolCallUpdate, ToolCallUpdateFields};
+use agent_client_protocol::schema::v1::{
+    ContentBlock, ContentChunk, Plan, ToolCallUpdate, ToolCallUpdateFields,
+};
 use serde::Serialize;
 use uuid::Uuid;
 
@@ -56,6 +59,12 @@ pub enum ResponsePart {
     Text {
         id: String,
         text: String,
+        #[serde(skip)]
+        message_id: Option<String>,
+    },
+    Content {
+        id: String,
+        content: ResponseContent,
     },
     Thought {
         id: String,
@@ -75,6 +84,7 @@ pub enum ResponsePart {
     },
     Tool {
         id: String,
+        #[serde(serialize_with = "serialize_tool")]
         tool: Box<ToolCallUpdateFields>,
     },
 }
@@ -82,16 +92,49 @@ pub enum ResponsePart {
 impl Turn {
     /// Append consecutive text to one part; activity forms boundaries between text parts.
     pub fn append_response_text(&mut self, text: &str) -> String {
-        if let Some(ResponsePart::Text { id, text: previous }) = self.response_parts.last_mut() {
-            previous.push_str(text);
-            return id.clone();
+        self.append_message_text(text, None)
+    }
+
+    fn append_message_text(&mut self, text: &str, message_id: Option<String>) -> String {
+        if let Some(ResponsePart::Text {
+            id,
+            text: previous,
+            message_id: known,
+        }) = self.response_parts.last_mut()
+        {
+            if message_id.is_none() || known.is_none() || message_id == *known {
+                previous.push_str(text);
+                if message_id.is_some() {
+                    *known = message_id;
+                }
+                return id.clone();
+            }
         }
         let id = Uuid::new_v4().to_string();
         self.response_parts.push(ResponsePart::Text {
             id: id.clone(),
             text: text.to_owned(),
+            message_id,
         });
         id
+    }
+
+    pub fn append_message(&mut self, chunk: ContentChunk) -> ResponsePart {
+        let message_id = chunk.message_id.map(|id| id.to_string());
+        if let ContentBlock::Text(text) = chunk.content {
+            let id = self.append_message_text(&text.text, message_id);
+            return ResponsePart::Text {
+                id,
+                text: text.text,
+                message_id: None,
+            };
+        }
+        let part = ResponsePart::Content {
+            id: Uuid::new_v4().to_string(),
+            content: ResponseContent::new(chunk.content),
+        };
+        self.response_parts.push(part.clone());
+        part
     }
 
     /// Append published reasoning, retaining its message identity only in the backend.
@@ -191,6 +234,7 @@ impl Turn {
                 ResponsePart::Tool { .. }
                 | ResponsePart::Plan { .. }
                 | ResponsePart::PlanContent { .. }
+                | ResponsePart::Content { .. }
                 | ResponsePart::Thought { .. } => None,
             })
             .collect()
@@ -201,6 +245,44 @@ impl Turn {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn replacing_tool_content_retires_old_references_without_moving_the_call() {
+        let mut turn = Turn {
+            id: Uuid::new_v4(),
+            message: String::new(),
+            attachments: vec![],
+            response_parts: vec![],
+            stop_reason: None,
+        };
+        let update = |data: &str| {
+            serde_json::from_value(json!({"toolCallId":"image","content":[{"type":"content","content":{"type":"image","mimeType":"image/png","data":data}}]})).unwrap()
+        };
+        turn.update_tool(update("b2xk"));
+        let original = serde_json::to_value(&turn.response_parts).unwrap();
+        turn.append_response_text("After tool");
+        turn.update_tool(
+            serde_json::from_value(json!({"toolCallId":"image","status":"completed"})).unwrap(),
+        );
+        assert_eq!(
+            serde_json::to_value(&turn.response_parts).unwrap()[0]["tool"]["content"],
+            original[0]["tool"]["content"]
+        );
+        turn.update_tool(update("bmV3"));
+        let replaced = serde_json::to_value(&turn.response_parts).unwrap();
+        assert_ne!(
+            replaced[0]["tool"]["content"][0]["content"]["id"],
+            original[0]["tool"]["content"][0]["content"]["id"]
+        );
+        assert_eq!(replaced[1]["text"], "After tool");
+        turn.update_tool(
+            serde_json::from_value(json!({"toolCallId":"image","content":[]})).unwrap(),
+        );
+        assert_eq!(
+            serde_json::to_value(&turn.response_parts).unwrap()[0]["tool"]["content"],
+            json!([])
+        );
+    }
 
     #[test]
     fn thoughts_group_by_known_message_and_do_not_leak_into_answers_or_wire_metadata() {

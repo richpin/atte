@@ -195,18 +195,40 @@ fn read_target(root: &Path, relative: &str) -> Result<(PathBuf, bool), FileError
     }
     Ok((target, link))
 }
+fn image_extension(relative: &str) -> Option<String> {
+    let extension = Path::new(relative)
+        .extension()?
+        .to_str()?
+        .to_ascii_lowercase();
+    match extension.as_str() {
+        "jpg" | "jpeg" => Some("jpg".into()),
+        "png" | "gif" | "webp" | "bmp" | "ico" => Some(extension),
+        _ => None,
+    }
+}
+
+pub(crate) fn supports_preview(root: &Path, relative: &str) -> Result<bool, FileError> {
+    let result = if image_extension(relative).is_some() {
+        image_file(root, relative).map(|_| true)
+    } else {
+        text_file(root, relative).map(|file| {
+            infer::get(file.text.as_bytes()).is_none_or(|kind| {
+                kind.mime_type().starts_with("text/") || kind.mime_type() == "image/svg+xml"
+            })
+        })
+    };
+    match result {
+        Ok(supported) => Ok(supported),
+        Err(FileError::Unsupported | FileError::UnsupportedImage | FileError::ImageTooLarge) => {
+            Ok(false)
+        }
+        Err(error) => Err(error),
+    }
+}
+
 fn image_file(root: &Path, relative: &str) -> Result<Vec<u8>, FileError> {
     let (target, _) = read_target(root, relative)?;
-    let extension = Path::new(relative)
-        .extension()
-        .and_then(|extension| extension.to_str())
-        .unwrap_or_default()
-        .to_ascii_lowercase();
-    let expected = match extension.as_str() {
-        "jpg" | "jpeg" => "jpg",
-        "png" | "gif" | "webp" | "bmp" | "ico" => extension.as_str(),
-        _ => return Err(FileError::UnsupportedImage),
-    };
+    let expected = image_extension(relative).ok_or(FileError::UnsupportedImage)?;
     let (bytes, _) = regular_bytes(&target, MAX_IMAGE_BYTES)?;
     if !infer::get(&bytes).is_some_and(|kind| kind.extension() == expected) {
         return Err(FileError::UnsupportedImage);

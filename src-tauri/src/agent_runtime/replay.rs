@@ -98,10 +98,8 @@ impl Replay {
                         stop_reason: None,
                     });
                 }
-                if let (Some(turn), ContentBlock::Text(text)) =
-                    (self.turns.last_mut(), chunk.content)
-                {
-                    turn.append_response_text(&text.text);
+                if let Some(turn) = self.turns.last_mut() {
+                    turn.append_message(chunk);
                 }
                 self.user_chunk = false;
             }

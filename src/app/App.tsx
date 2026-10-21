@@ -444,6 +444,10 @@ function ShellContent(props: { shell: AppShellModel }) {
             }}
           >
             <ThreadPage
+              onOpenFile={(path) => {
+                const id = threads.selectedThreadId();
+                if (id) shell.threadPanels.openFile(id, path);
+              }}
               onOpenChanges={(turnId, files) => {
                 const id = threads.selectedThreadId();
                 if (id) shell.threadPanels.openChangesTab(id, turnId, files);

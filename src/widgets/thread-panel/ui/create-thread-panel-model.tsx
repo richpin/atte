@@ -54,7 +54,7 @@ export function createThreadPanelModel(manager?: FilesManager) {
     });
     model.closeTab(threadId, placeholder);
   };
-  const openFiles = (threadId: string, placeholder: string) => {
+  const openFiles = (threadId: string, placeholder?: string) => {
     const fileModel = files.get(threadId);
     const id = `files:${threadId}`;
     model.openTab(threadId, {
@@ -74,7 +74,7 @@ export function createThreadPanelModel(manager?: FilesManager) {
         />
       ),
     });
-    model.closeTab(threadId, placeholder);
+    if (placeholder) model.closeTab(threadId, placeholder);
   };
   const model = createModel((number, threadId) => {
     const web = createWebTab(threadId, {
@@ -121,6 +121,10 @@ export function createThreadPanelModel(manager?: FilesManager) {
   });
   return {
     ...model,
+    openFile: (threadId: string, path: string) => {
+      openFiles(threadId);
+      void files.get(threadId).open(path);
+    },
     Guard: () => <FilesDialogs manager={files} />,
     confirmForget: (threadId: string) => files.guard(threadId),
     forget: (threadId: string) => {
