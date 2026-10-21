@@ -121,7 +121,7 @@ export function Message(props: {
   const responseStatus = () =>
     t(
       props.approvalPending
-        ? "thread.status.waitingForApproval"
+        ? "thread.status.waitingForInput"
         : "thread.status.running",
     );
   return (

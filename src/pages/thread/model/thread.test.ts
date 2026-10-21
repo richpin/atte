@@ -49,7 +49,7 @@ function thread(id: string, changes: Partial<Thread> = {}): Thread {
     completedTurnId: null,
     turns: [],
     notice: null,
-    permissions: [],
+    pendingInteractions: [],
     queuedMessages: [],
     ...changes,
     configuration: changes.configuration ?? [],
@@ -130,6 +130,122 @@ beforeEach(() => {
 afterEach(() => {
   dispose?.();
   vi.useRealTimers();
+});
+
+it("keeps connecting question drafts across navigation and validation failures until a subscription resolves them", async () => {
+  const model = setup();
+  const question = {
+    kind: "elicitation" as const,
+    id: "q1",
+    toolCallId: null,
+    message: "Choose",
+    schema: {
+      properties: {
+        mode: {
+          type: "string" as const,
+          enum: ["safe", "fast"],
+          default: "safe",
+        },
+      },
+    },
+  };
+  const waiting = thread("A", {
+    status: "waitingForInput",
+    pendingInteractions: [question],
+  });
+  await open(model, "A", waiting);
+  model.setDraft("keep the prompt");
+  model.changeForm(question, "mode", "fast");
+  commands.set("answer_elicitation", () =>
+    Promise.reject({
+      code: "invalidForm",
+      message: { "/mode": "Invalid choice" },
+    }),
+  );
+  await model.answerQuestion(question, "accept");
+  expect(model.questionErrors(question)).toEqual({ "/mode": "Invalid choice" });
+  expect(model.thread()?.pendingInteractions).toHaveLength(1);
+  await open(model, "B");
+  await open(model, "A", waiting);
+  expect(model.formDraft(question)).toEqual({ mode: "fast" });
+  model.changeForm(question, "mode", undefined);
+  expect(model.formDraft(question)).toEqual({});
+  model.changeForm(question, "mode", "fast");
+  expect(model.draft()).toBe("keep the prompt");
+  commands.set("answer_elicitation", () => Promise.resolve());
+  await model.answerQuestion(question, "accept");
+  expect(invoke).toHaveBeenLastCalledWith("answer_elicitation", {
+    id: "A",
+    request: "q1",
+    answer: { action: "accept", values: { mode: "fast" } },
+  });
+  expect(model.thread()?.pendingInteractions).toHaveLength(1);
+  stream("A")({
+    kind: "thread",
+    thread: thread("A", { status: "connecting" }),
+  });
+  expect(model.formDraft(question)).toEqual({ mode: "safe" });
+});
+
+it("preserves the ordinary draft and blocks sending while a question is pending", async () => {
+  const model = setup();
+  const question = {
+    kind: "elicitation" as const,
+    id: "question",
+    message: "Continue?",
+    toolCallId: null,
+    schema: { properties: { confirm: { type: "boolean" as const } } },
+  };
+  await open(
+    model,
+    "A",
+    thread("A", { status: "waitingForInput", pendingInteractions: [question] }),
+  );
+  commands.set("send_message", async () => undefined);
+  model.setDraft("Run additional checks afterwards");
+  expect(model.canSend()).toBe(false);
+  await model.send();
+  expect(invoke).not.toHaveBeenCalledWith("send_message", expect.anything());
+  expect(model.draft()).toBe("Run additional checks afterwards");
+  expect(model.thread()?.pendingInteractions).toEqual([question]);
+  expect(invoke).not.toHaveBeenCalledWith(
+    "answer_elicitation",
+    expect.anything(),
+  );
+});
+
+it("blocks question responses during a subscription failure and keeps their draft", async () => {
+  const model = setup();
+  const question = {
+    kind: "elicitation" as const,
+    id: "question",
+    message: "Name",
+    toolCallId: null,
+    schema: { properties: { name: { type: "string" as const } } },
+  };
+  await open(
+    model,
+    "A",
+    thread("A", { status: "waitingForInput", pendingInteractions: [question] }),
+  );
+  model.changeForm(question, "name", "keep this answer");
+  stream("A")({
+    kind: "textDelta",
+    threadId: "A",
+    turnId: "unknown",
+    partId: "unknown",
+    text: "invalid",
+  });
+  expect(model.subscriptionError()).toBe(true);
+  vi.mocked(invoke).mockClear();
+  await model.answerQuestion(question, "accept");
+  await model.answerQuestion(question, "decline");
+  await model.answerQuestion(question, "cancel");
+  expect(invoke).not.toHaveBeenCalledWith(
+    "answer_elicitation",
+    expect.anything(),
+  );
+  expect(model.formDraft(question)).toEqual({ name: "keep this answer" });
 });
 
 it("opens a thread from the subscription snapshot without fetching it", async () => {
@@ -215,13 +331,13 @@ it("applies lightweight patches without replacing existing turns", async () => {
   const initialTurns = model.thread()?.turns;
   const initialTurn = initialTurns?.[0];
   const { turns: _, ...patch } = thread("A", {
-    status: "waitingForApproval",
+    status: "waitingForInput",
     updatedAt: 2,
   });
 
   stream("A")({ kind: "patch", thread: patch, turnUpdates: [] });
 
-  expect(model.thread()?.status).toBe("waitingForApproval");
+  expect(model.thread()?.status).toBe("waitingForInput");
   expect(model.thread()?.turns).toBe(initialTurns);
   expect(model.thread()?.turns[0]).toBe(initialTurn);
 });

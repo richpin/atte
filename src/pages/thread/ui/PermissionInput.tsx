@@ -1,5 +1,6 @@
+import { ShieldCheck } from "lucide-solid";
 import { useI18n } from "shared/i18n";
-import { For, Show } from "solid-js";
+import { For, type JSX, Show } from "solid-js";
 import type { PermissionRequest } from "../model/types";
 
 export function PermissionInput(props: {
@@ -7,12 +8,19 @@ export function PermissionInput(props: {
   workingFolder: string;
   hideDetails?: boolean;
   disabled: boolean;
+  headerActions?: JSX.Element;
   onAnswer: (request: string, option: string) => void;
 }) {
   const { t } = useI18n();
   return (
     <section aria-label={t("thread.permission")}>
-      <p class="mb-2 text-xs text-muted">{t("thread.permission")}</p>
+      <div class="mb-2 flex items-center justify-between gap-2">
+        <p class="flex items-center gap-2 text-xs text-muted">
+          <ShieldCheck aria-hidden="true" class="size-4 shrink-0" />
+          {t("thread.permission")}
+        </p>
+        {props.headerActions}
+      </div>
       <h2 class="break-words text-sm font-medium">{props.request.title}</h2>
       <Show when={!props.hideDetails && props.request.details}>
         <pre class="mt-2 max-h-48 overflow-auto whitespace-pre-wrap break-words text-xs text-muted">

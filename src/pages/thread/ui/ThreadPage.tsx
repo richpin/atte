@@ -193,7 +193,9 @@ export function ThreadPage(props: {
 
   const loading = () =>
     Boolean(selectedThreadId()) &&
-    (!thread() || connecting() || thread()?.status === "connecting");
+    (!thread() ||
+      ((connecting() || thread()?.status === "connecting") &&
+        !thread()?.pendingInteractions?.length));
 
   return (
     <main class="relative flex h-full min-h-0 flex-col overflow-hidden bg-canvas text-ink">
@@ -255,16 +257,16 @@ export function ThreadPage(props: {
                       ? activeTurnId()
                       : undefined
                   }
-                  permissionToolIds={thread()?.permissions?.map(
-                    (request) => request.toolCallId,
+                  permissionToolIds={thread()?.pendingInteractions?.map(
+                    (request) => request.toolCallId ?? "",
                   )}
                   interrupted={thread()?.interrupted}
                   agentId={thread()?.agentId}
-                  approvalPending={thread()?.status === "waitingForApproval"}
+                  approvalPending={thread()?.status === "waitingForInput"}
                   respondingTurnId={
                     !props.model.subscriptionError() &&
                     !thread()?.failure &&
-                    ["running", "waitingForApproval"].includes(
+                    ["running", "waitingForInput"].includes(
                       thread()?.status ?? "",
                     )
                       ? activeTurnId()
@@ -335,6 +337,17 @@ export function ThreadPage(props: {
                     onSend={() => void send()}
                     onCancel={() => void cancel()}
                     onAnswer={answer}
+                    agentName={
+                      props.agents.find(
+                        (agent) => agent.id === currentThread().agentId,
+                      )?.name
+                    }
+                    formValues={model.formDraft}
+                    formErrors={model.questionErrors}
+                    onFormChange={model.changeForm}
+                    onAnswerQuestion={(request, action) =>
+                      void model.answerQuestion(request, action)
+                    }
                     onConfigure={(configId, value) =>
                       void configure(configId, value)
                     }

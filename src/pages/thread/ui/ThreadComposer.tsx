@@ -26,13 +26,18 @@ import {
 import { createSignal, For, Show } from "solid-js";
 import type {
   Attachment,
+  ElicitationRequest,
+  FormValues,
   MediaKind,
+  PermissionRequest,
   Thread,
   ThreadConfiguration,
   ThreadConfigurationChoice,
   ThreadConfigurationValue,
 } from "../model/types";
 import { AttachmentChip } from "./AttachmentChip";
+import { ElicitationInput } from "./ElicitationInput";
+import { InteractionNavigation } from "./InteractionNavigation";
 import { PermissionInput } from "./PermissionInput";
 import { PromptInput } from "./PromptInput";
 import { QueuedMessage } from "./QueuedMessage";
@@ -61,6 +66,18 @@ export function ThreadComposer(props: {
   onSend: () => void;
   onCancel: () => void;
   onAnswer: (request: string, option: string) => void;
+  agentName?: string;
+  formValues?: (request: ElicitationRequest) => FormValues;
+  formErrors?: (request: ElicitationRequest) => Record<string, string>;
+  onFormChange?: (
+    request: ElicitationRequest,
+    name: string,
+    value: FormValues[string] | undefined,
+  ) => void;
+  onAnswerQuestion?: (
+    request: ElicitationRequest,
+    action: "accept" | "decline" | "cancel",
+  ) => void;
   onConfigure: (configId: string, value: ThreadConfigurationValue) => void;
   onDeleteQueued: (id: string) => Promise<void>;
   onRetryQueued: (id: string) => Promise<void>;
@@ -72,8 +89,43 @@ export function ThreadComposer(props: {
   const submit = () => {
     if (props.canSend && !authenticationRequired()) props.onSend();
   };
+  const [selectedInteraction, setSelectedInteraction] = createSignal<{
+    threadId: string;
+    requestId: string;
+  }>();
+  const interactions = () => props.thread.pendingInteractions ?? [];
+  const interactionIndex = () => {
+    const selected = selectedInteraction();
+    if (selected?.threadId !== props.thread.id) return 0;
+    return Math.max(
+      0,
+      interactions().findIndex((request) => request.id === selected.requestId),
+    );
+  };
+  const currentInteraction = () => interactions()[interactionIndex()];
+  const interactionsDisabled = () =>
+    !props.actionsEnabled || props.answerPending || props.cancelPending;
+  const navigateInteraction = (direction: number) => {
+    if (interactionsDisabled()) return;
+    const request = interactions()[interactionIndex() + direction];
+    if (request)
+      setSelectedInteraction({
+        threadId: props.thread.id,
+        requestId: request.id,
+      });
+  };
+  const navigation = () => (
+    <InteractionNavigation
+      index={interactionIndex()}
+      count={interactions().length}
+      disabled={interactionsDisabled()}
+      onPrevious={() => navigateInteraction(-1)}
+      onNext={() => navigateInteraction(1)}
+    />
+  );
   const planReviewDisplayed = () => {
-    const review = props.thread.permissions?.[0]?.planReview;
+    const first = currentInteraction();
+    const review = first?.kind === "permission" ? first.planReview : undefined;
     return (
       !!review &&
       review.content.trim().length > 0 &&
@@ -90,163 +142,217 @@ export function ThreadComposer(props: {
   };
 
   return (
-    <div class="max-h-thread-composer mx-auto flex w-full max-w-4xl flex-col overflow-hidden px-6">
+    <div
+      class="mx-auto flex w-full max-w-4xl flex-col gap-3 overflow-hidden px-6"
+      classList={{
+        "max-h-thread-composer": !props.thread.pendingInteractions?.length,
+        "max-h-thread-composer-with-interaction":
+          !!props.thread.pendingInteractions?.length,
+      }}
+    >
       <QueuedMessage
         messages={props.thread.queuedMessages ?? []}
         disabled={!props.actionsEnabled}
         onDelete={props.onDeleteQueued}
         onRetry={props.onRetryQueued}
       />
-      <form
-        ref={composer}
-        class="max-h-thread-composer-form shrink-0 overflow-y-auto overscroll-contain rounded-3xl border border-line bg-input-surface p-4 shadow-sm"
-        onSubmit={(event) => {
-          event.preventDefault();
-          submit();
-        }}
-      >
-        <Show
-          when={props.thread.permissions?.[0]}
-          fallback={
-            <>
-              <Show when={(props.draftAttachments?.length ?? 0) > 0}>
-                <div class="mb-3 flex flex-wrap gap-2">
-                  <For each={props.draftAttachments}>
-                    {(attachment) => (
-                      <AttachmentChip
-                        name={attachment.name}
-                        kind={attachment.kind}
-                        onRemove={() =>
-                          props.onRemoveAttachment?.(attachment.id)
-                        }
-                      />
-                    )}
-                  </For>
-                </div>
-              </Show>
-              <PromptInput
-                value={props.draft}
-                selectedCommand={props.draftCommand}
-                commands={props.thread.availableCommands}
-                menuAnchor={composer}
-                focusScope={props.thread.id}
-                disabled={!props.canSend && !authenticationRequired()}
-                inputRef={props.promptRef}
-                focusKey={
-                  props.active &&
-                  !props.signInOpen &&
-                  props.thread.status === "sessionReady"
-                    ? props.thread.id
-                    : undefined
-                }
-                onInput={props.onDraftChange}
-                onSubmit={submit}
-                onPasteImage={
-                  props.thread.promptCapabilities?.image
-                    ? props.onPasteImage
-                    : undefined
-                }
-                onUnsupportedImagePaste={props.onUnsupportedImagePaste}
-              />
-            </>
-          }
-        >
-          {(request) => (
-            <PermissionInput
-              request={request()}
-              workingFolder={props.thread.workingFolder}
-              hideDetails={planReviewDisplayed()}
-              disabled={
-                !props.actionsEnabled ||
-                props.answerPending ||
-                props.cancelPending
-              }
-              onAnswer={props.onAnswer}
-            />
-          )}
-        </Show>
-        <div class="mt-3 flex items-end justify-between gap-3 text-xs text-muted">
-          <div class="flex min-w-0 flex-wrap items-center gap-2">
-            <DropdownMenu placement="top-start">
-              <DropdownMenuTrigger
-                aria-label={t("thread.addAttachment")}
-                disabled={!props.canSend}
-                class="grid size-7 shrink-0 place-items-center rounded-full text-muted transition-colors hover:bg-panel focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent disabled:opacity-40"
-              >
-                <Plus
-                  aria-hidden="true"
-                  size={16}
-                  style={{ "stroke-width": "2.5px" }}
-                />
-              </DropdownMenuTrigger>
-              <DropdownMenuContent>
-                <DropdownMenuItem
-                  class="px-3 py-2"
-                  onSelect={() => props.onSelectFiles?.()}
-                >
-                  <FileIcon aria-hidden="true" class="size-3.5" />
-                  {t("thread.file")}
-                </DropdownMenuItem>
-                <Show when={props.thread.promptCapabilities?.image}>
-                  <DropdownMenuItem
-                    class="px-3 py-2"
-                    onSelect={() => props.onSelectMedia?.("image")}
-                  >
-                    <ImageIcon aria-hidden="true" class="size-3.5" />
-                    {t("thread.image")}
-                  </DropdownMenuItem>
-                </Show>
-                <Show when={props.thread.promptCapabilities?.audio}>
-                  <DropdownMenuItem
-                    class="px-3 py-2"
-                    onSelect={() => props.onSelectMedia?.("audio")}
-                  >
-                    <AudioLines aria-hidden="true" class="size-3.5" />
-                    {t("thread.audio")}
-                  </DropdownMenuItem>
-                </Show>
-              </DropdownMenuContent>
-            </DropdownMenu>
-            <For each={props.thread.configuration}>
-              {(configuration) => (
-                <ThreadConfigurationControl
-                  configuration={configuration}
-                  disabled={!props.actionsEnabled}
-                  onChange={(value) =>
-                    props.onConfigure(configuration.id, value)
-                  }
-                />
-              )}
-            </For>
-          </div>
-          <button
-            type={props.showStop ? "button" : "submit"}
-            aria-label={props.showStop ? t("thread.stop") : t("thread.send")}
-            class="grid size-8 shrink-0 place-items-center rounded-full bg-primary text-primary-foreground focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-accent disabled:opacity-40"
-            disabled={
-              props.showStop
-                ? !props.actionsEnabled || props.stopping
-                : !props.canSend ||
-                  authenticationRequired() ||
-                  (!props.draft.trim() &&
-                    !(props.draftAttachments?.length ?? 0))
-            }
-            onClick={() => {
-              if (props.showStop) props.onCancel();
+      <Show when={currentInteraction()}>
+        {(request) => (
+          <form
+            class="min-h-0 shrink overflow-y-auto overscroll-contain rounded-3xl border border-line bg-input-surface p-4 shadow-sm"
+            onSubmit={(event) => {
+              event.preventDefault();
+              if (
+                request().kind === "elicitation" &&
+                props.actionsEnabled &&
+                !props.answerPending &&
+                !props.cancelPending
+              )
+                props.onAnswerQuestion?.(
+                  request() as ElicitationRequest,
+                  "accept",
+                );
             }}
           >
             <Show
-              when={props.showStop}
-              fallback={<ArrowUp aria-hidden="true" class="size-[18px]" />}
+              when={request().kind === "permission"}
+              fallback={
+                <ElicitationInput
+                  request={request() as ElicitationRequest}
+                  headerActions={navigation()}
+                  agentName={props.agentName ?? props.thread.agentId}
+                  values={
+                    props.formValues?.(request() as ElicitationRequest) ?? {}
+                  }
+                  errors={
+                    props.formErrors?.(request() as ElicitationRequest) ?? {}
+                  }
+                  disabled={
+                    !props.actionsEnabled ||
+                    props.answerPending ||
+                    props.cancelPending
+                  }
+                  onChange={(name, value) =>
+                    props.onFormChange?.(
+                      request() as ElicitationRequest,
+                      name,
+                      value,
+                    )
+                  }
+                  onAnswer={(action) =>
+                    props.onAnswerQuestion?.(
+                      request() as ElicitationRequest,
+                      action,
+                    )
+                  }
+                />
+              }
             >
-              <span
-                aria-hidden="true"
-                class="size-3 rounded-[2px] bg-current"
+              <PermissionInput
+                request={request() as PermissionRequest}
+                headerActions={navigation()}
+                workingFolder={props.thread.workingFolder}
+                hideDetails={planReviewDisplayed()}
+                disabled={
+                  !props.actionsEnabled ||
+                  props.answerPending ||
+                  props.cancelPending
+                }
+                onAnswer={props.onAnswer}
               />
             </Show>
-          </button>
-        </div>
-      </form>
+          </form>
+        )}
+      </Show>
+      <Show when={!props.thread.pendingInteractions?.length}>
+        <form
+          ref={composer}
+          class="max-h-thread-composer-form shrink-0 overflow-y-auto overscroll-contain rounded-3xl border border-line bg-input-surface p-4 shadow-sm"
+          onSubmit={(event) => {
+            event.preventDefault();
+            submit();
+          }}
+        >
+          <Show when={(props.draftAttachments?.length ?? 0) > 0}>
+            <div class="mb-3 flex flex-wrap gap-2">
+              <For each={props.draftAttachments}>
+                {(attachment) => (
+                  <AttachmentChip
+                    name={attachment.name}
+                    kind={attachment.kind}
+                    onRemove={() => props.onRemoveAttachment?.(attachment.id)}
+                  />
+                )}
+              </For>
+            </div>
+          </Show>
+          <PromptInput
+            value={props.draft}
+            selectedCommand={props.draftCommand}
+            commands={props.thread.availableCommands}
+            menuAnchor={composer}
+            focusScope={props.thread.id}
+            disabled={!props.canSend && !authenticationRequired()}
+            inputRef={props.promptRef}
+            focusKey={
+              props.active &&
+              !props.signInOpen &&
+              props.thread.status === "sessionReady"
+                ? props.thread.id
+                : undefined
+            }
+            onInput={props.onDraftChange}
+            onSubmit={submit}
+            onPasteImage={
+              props.thread.promptCapabilities?.image
+                ? props.onPasteImage
+                : undefined
+            }
+            onUnsupportedImagePaste={props.onUnsupportedImagePaste}
+          />
+          <div class="mt-3 flex items-end justify-between gap-3 text-xs text-muted">
+            <div class="flex min-w-0 flex-wrap items-center gap-2">
+              <DropdownMenu placement="top-start">
+                <DropdownMenuTrigger
+                  aria-label={t("thread.addAttachment")}
+                  disabled={!props.canSend}
+                  class="grid size-7 shrink-0 place-items-center rounded-full text-muted transition-colors hover:bg-panel focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent disabled:opacity-40"
+                >
+                  <Plus
+                    aria-hidden="true"
+                    size={16}
+                    style={{ "stroke-width": "2.5px" }}
+                  />
+                </DropdownMenuTrigger>
+                <DropdownMenuContent>
+                  <DropdownMenuItem
+                    class="px-3 py-2"
+                    onSelect={() => props.onSelectFiles?.()}
+                  >
+                    <FileIcon aria-hidden="true" class="size-3.5" />
+                    {t("thread.file")}
+                  </DropdownMenuItem>
+                  <Show when={props.thread.promptCapabilities?.image}>
+                    <DropdownMenuItem
+                      class="px-3 py-2"
+                      onSelect={() => props.onSelectMedia?.("image")}
+                    >
+                      <ImageIcon aria-hidden="true" class="size-3.5" />
+                      {t("thread.image")}
+                    </DropdownMenuItem>
+                  </Show>
+                  <Show when={props.thread.promptCapabilities?.audio}>
+                    <DropdownMenuItem
+                      class="px-3 py-2"
+                      onSelect={() => props.onSelectMedia?.("audio")}
+                    >
+                      <AudioLines aria-hidden="true" class="size-3.5" />
+                      {t("thread.audio")}
+                    </DropdownMenuItem>
+                  </Show>
+                </DropdownMenuContent>
+              </DropdownMenu>
+              <For each={props.thread.configuration}>
+                {(configuration) => (
+                  <ThreadConfigurationControl
+                    configuration={configuration}
+                    disabled={!props.actionsEnabled}
+                    onChange={(value) =>
+                      props.onConfigure(configuration.id, value)
+                    }
+                  />
+                )}
+              </For>
+            </div>
+            <button
+              type={props.showStop ? "button" : "submit"}
+              aria-label={props.showStop ? t("thread.stop") : t("thread.send")}
+              class="grid size-8 shrink-0 place-items-center rounded-full bg-primary text-primary-foreground focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-accent disabled:opacity-40"
+              disabled={
+                props.showStop
+                  ? !props.actionsEnabled || props.stopping
+                  : !props.canSend ||
+                    authenticationRequired() ||
+                    (!props.draft.trim() &&
+                      !(props.draftAttachments?.length ?? 0))
+              }
+              onClick={() => {
+                if (props.showStop) props.onCancel();
+              }}
+            >
+              <Show
+                when={props.showStop}
+                fallback={<ArrowUp aria-hidden="true" class="size-[18px]" />}
+              >
+                <span
+                  aria-hidden="true"
+                  class="size-3 rounded-[2px] bg-current"
+                />
+              </Show>
+            </button>
+          </div>
+        </form>
+      </Show>
     </div>
   );
 }

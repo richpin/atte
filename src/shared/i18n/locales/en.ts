@@ -77,7 +77,7 @@ export const en = {
     description:
       "Notify me while Atte is inactive. Dock badges remain independent of these settings.",
     completion: "Response completion notifications",
-    permission: "Approval request notifications",
+    permission: "Approval and question notifications",
     allow: "Allow notifications",
     openSettings: "Open macOS notification settings",
     retry: "Reconnect",
@@ -172,6 +172,18 @@ export const en = {
     newTabDescription: "Explore your project here.",
   },
   thread: {
+    elicitation: {
+      title: "Agent question",
+      yes: "Yes",
+      no: "No",
+      clear: "Clear selection",
+      submit: "Submit",
+      decline: "Decline",
+      cancel: "Dismiss question",
+      navigation: "Pending requests",
+      previous: "Previous request",
+      next: "Next request",
+    },
     find: {
       menuLabel: "Find",
       label: "Find in conversation",
@@ -204,7 +216,7 @@ export const en = {
       in_progress: "Running",
       completed: "Completed",
       failed: "Failed",
-      approval: "Approval required",
+      approval: "Response needed",
       interrupted: "Interrupted",
       unconfirmed: "Completion unconfirmed",
       input: "Input",
@@ -221,14 +233,14 @@ export const en = {
       sessionReady: "Session ready",
       failed: "Failed",
       running: "Responding…",
-      waitingForApproval: "Waiting for approval",
+      waitingForInput: "Waiting for input",
       cancelling: "Stopping…",
     },
     failure: {
       executableNotFound:
         "The agent executable could not be found. Check the installation and executable path.",
       launchFailed:
-        "The agent could not be launched. Check its permissions and the working folder.",
+        "The agent could not be launched. Check its pendingInteractions and the working folder.",
       initializationFailed: "The agent could not be initialized.",
       sessionCreationFailed: "The thread session could not be created.",
       authenticationRequired: "Sign in to the agent, then reconnect.",
@@ -371,9 +383,9 @@ export const en = {
     project: "Project {{ name }}",
     newThreadIn: "New thread in {{ name }}",
     running: "Running",
-    waitingForApproval: "Waiting for approval",
+    waitingForInput: "Waiting for input",
     connectionError: "Connection error",
-    approvalRequested: "Ask for Approval",
+    approvalRequested: "Response needed",
     connecting: "Connecting",
     restoring: "Restoring thread",
     stopping: "Stopping",
@@ -450,7 +462,7 @@ export const en = {
     appClosing: "The app is closing.",
     openWindowFailed: "The window could not be opened.",
     storage:
-      "App data could not be saved or loaded. Check the app data folder permissions and available space.",
+      "App data could not be saved or loaded. Check the app data folder pendingInteractions and available space.",
     storageFormat: "The saved data format could not be read.",
     storageNewer: "This data was created by a newer version. Update the app.",
     storageUnavailable: "App storage is unavailable.",
@@ -483,9 +495,9 @@ export const en = {
     nodeMissing:
       "Node.js could not be prepared. Check your network and try again.",
     installFailed:
-      "Installation failed. Check your network, available space, and folder permissions, then try again.",
+      "Installation failed. Check your network, available space, and folder pendingInteractions, then try again.",
     removalFailed:
-      "Installed files could not be deleted. Check their location and folder permissions, then try again.",
+      "Installed files could not be deleted. Check their location and folder pendingInteractions, then try again.",
     integrityFailed: "Download verification failed. Reinstall the agent.",
     connectionFailed:
       "The ACP connection failed. Check the installation and try again.",

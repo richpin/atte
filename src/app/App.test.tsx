@@ -73,7 +73,7 @@ async function startNewThreadWithAgent(name = "Codex") {
   await userEvent.click(screen.getByRole("button", { name: "스레드 시작" }));
 }
 
-function getSidebarThreadButton(name: string) {
+function getSidebarThreadButton(name: string | RegExp) {
   const button = screen
     .getAllByRole("button", { name })
     .find((element) => element.dataset.sidebar === "menu-sub-button");
@@ -83,6 +83,59 @@ function getSidebarThreadButton(name: string) {
 
 const receive = (thread: Record<string, unknown>) =>
   receiveUpdate({ kind: "thread", thread });
+
+it("answers a form in its thread while the connection has no ACP session", async () => {
+  const question = {
+    kind: "elicitation",
+    id: "setup-question",
+    message: "Choose connection behavior",
+    toolCallId: null,
+    schema: {
+      properties: {
+        strategy: {
+          type: "string",
+          title: "Strategy",
+          enum: ["safe", "fast"],
+          default: "safe",
+        },
+      },
+      required: ["strategy"],
+    },
+  };
+  const waiting = {
+    id: "setup-thread",
+    title: "Connecting thread",
+    workingFolder: "/project",
+    agentId: "codex",
+    status: "waitingForInput",
+    sessionId: null,
+    authentication: "unknown",
+    turns: [],
+    pendingInteractions: [question],
+    queuedMessages: [],
+    configuration: [],
+    availableCommands: [],
+  };
+  vi.mocked(invoke).mockImplementation(async (command, args) => {
+    if (command === "list_threads") return [waiting];
+    if (command === "prepared_agents") return [{ id: "codex", name: "Codex" }];
+    if (command === "subscribe_thread") return subscribeWith(args, waiting);
+    return "subscription";
+  });
+  render(() => <App />);
+  await userEvent.click(
+    await waitFor(() => getSidebarThreadButton(/Connecting thread/)),
+  );
+  expect(await screen.findByText("Choose connection behavior")).toBeTruthy();
+  expect(screen.queryByRole("button", { name: "현재 작업 중단" })).toBeNull();
+  await userEvent.click(screen.getByRole("button", { name: "제출" }));
+  expect(invoke).toHaveBeenCalledWith("answer_elicitation", {
+    id: "setup-thread",
+    request: "setup-question",
+    answer: { action: "accept", values: { strategy: "safe" } },
+  });
+  expect(screen.getByText("Choose connection behavior")).toBeTruthy();
+});
 function receiveFailure(thread: Record<string, unknown>) {
   receive(thread);
   if (thread.failure || thread.notice) {
@@ -137,7 +190,7 @@ it("keeps project tabs independent per thread, folds without clearing and resets
     status: "sessionReady",
     authentication: "authenticated",
     turns: [],
-    permissions: [],
+    pendingInteractions: [],
     queuedMessages: [],
   };
   const two = { ...one, id: "panel-two", title: "Second panel thread" };
@@ -391,7 +444,7 @@ it("opens conversation find from the thread menu and restores the menu trigger f
     status: "sessionReady",
     authentication: "authenticated",
     turns: [],
-    permissions: [],
+    pendingInteractions: [],
     queuedMessages: [],
   };
   const original = vi.mocked(invoke).getMockImplementation();
@@ -490,7 +543,7 @@ it("starts on new thread and preserves a thread draft across that navigation", a
     status: "sessionReady",
     authentication: "authenticated",
     turns: [],
-    permissions: [],
+    pendingInteractions: [],
     queuedMessages: [],
   };
   const original = vi.mocked(invoke).getMockImplementation();
@@ -530,7 +583,7 @@ it("toggles thread information with pointer and keyboard and reveals the latest 
     status: "sessionReady",
     authentication: "authenticated",
     turns: [],
-    permissions: [],
+    pendingInteractions: [],
     queuedMessages: [],
     contextUsage: { used: 32_000, size: 100_000 },
   };
@@ -590,7 +643,7 @@ it("shares thread information visibility across navigation and resets for each a
     status: "sessionReady",
     authentication: "authenticated",
     turns: [],
-    permissions: [],
+    pendingInteractions: [],
     queuedMessages: [],
     contextUsage: { used: 32_000, size: 100_000 },
   };
@@ -679,7 +732,7 @@ it("shows the thread agent icon beside both titles and keeps the composer free o
     status: "sessionReady",
     authentication: "authenticated",
     turns: [],
-    permissions: [],
+    pendingInteractions: [],
     queuedMessages: [],
   };
   const original = vi.mocked(invoke).getMockImplementation();
@@ -723,7 +776,7 @@ it("updates sidebar and header titles through subscriptions and shows the defaul
     status: "sessionReady",
     authentication: "authenticated",
     turns: [],
-    permissions: [],
+    pendingInteractions: [],
     queuedMessages: [],
   };
   const other = { ...saved, id: "other", title: "Other thread" };
@@ -801,7 +854,7 @@ it("groups threads by folder, collapses projects and creates within the selected
     agentId: "codex",
     status: "sessionReady",
     turns: [],
-    permissions: [],
+    pendingInteractions: [],
     queuedMessages: [],
   };
   const original = vi.mocked(invoke).getMockImplementation();
@@ -840,12 +893,12 @@ it("groups threads by folder, collapses projects and creates within the selected
   ).toBeNull();
   await userEvent.click(project);
   receiveList([
-    { ...saved, status: "waitingForApproval" },
+    { ...saved, status: "waitingForInput" },
     { ...saved, id: "two", title: "Second project task" },
   ]);
   expect(
     await screen.findByRole("button", {
-      name: /^First project task.*승인 요청$/,
+      name: /^First project task.*응답 필요$/,
     }),
   ).toBeTruthy();
   const resizeHandle = screen.getByRole("separator", {
@@ -1017,7 +1070,7 @@ it("presents agent configuration and reconciles it from the thread subscription"
     sessionId: "remote-1",
     authentication: "authenticated",
     turns: [],
-    permissions: [],
+    pendingInteractions: [],
     queuedMessages: [],
     configuration: [
       {
@@ -1236,7 +1289,7 @@ it("keeps cancellation and permission responses usable during configuration reco
         stopReason: null,
       },
     ],
-    permissions: [],
+    pendingInteractions: [],
     queuedMessages: [],
     configuration: [
       {
@@ -1314,9 +1367,10 @@ it("keeps cancellation and permission responses usable during configuration reco
 
   const waiting = {
     ...saved,
-    status: "waitingForApproval",
-    permissions: [
+    status: "waitingForInput",
+    pendingInteractions: [
       {
+        kind: "permission",
         id: "permission-1",
         toolCallId: "tool-1",
         title: "Write file",
@@ -1346,6 +1400,10 @@ it("keeps cancellation and permission responses usable during configuration reco
     option: "allow",
   });
   expect(
+    screen.queryByRole("button", { name: "Reasoning effort Low" }),
+  ).toBeNull();
+  receive({ ...waiting, status: "running", pendingInteractions: [] });
+  expect(
     screen.getByRole("button", { name: "Reasoning effort Low" }),
   ).toBeTruthy();
   expect(screen.queryByRole("option", { name: "High" })).toBeNull();
@@ -1361,7 +1419,7 @@ it("renames through subscriptions, supports cancel and leaves later agent title 
     status: "sessionReady",
     authentication: "authenticated",
     turns: [],
-    permissions: [],
+    pendingInteractions: [],
     queuedMessages: [],
   };
   let receiveList!: (entries: (typeof saved)[]) => void;
@@ -1528,7 +1586,7 @@ it("keeps confirmation open while deleting the selected thread and ignores late 
     sessionId: null,
     authentication: "authenticated",
     turns: [],
-    permissions: [],
+    pendingInteractions: [],
     queuedMessages: [],
   };
   const other = { ...selected, id: "other", title: "남은 스레드" };
@@ -1596,7 +1654,7 @@ it("does not reopen a deleted thread when an overlapping open finishes late", as
     status: "disconnected",
     sessionId: null,
     turns: [],
-    permissions: [],
+    pendingInteractions: [],
     queuedMessages: [],
   };
   let finishOpen!: (thread: typeof saved) => void;
@@ -1640,7 +1698,7 @@ it("preserves the selected thread and draft when deleting another thread", async
     status: "sessionReady",
     authentication: "authenticated",
     turns: [],
-    permissions: [],
+    pendingInteractions: [],
     queuedMessages: [],
   };
   const other = { ...current, id: "other", title: "다른 스레드" };
@@ -1716,7 +1774,7 @@ it("keeps the saved list accessible without agents and restores on selection onl
     status: "disconnected",
     sessionId: "remote-7",
     turns: [],
-    permissions: [],
+    pendingInteractions: [],
     failure: null,
   };
   vi.mocked(invoke).mockImplementation(async (command, args) => {
@@ -1772,7 +1830,7 @@ it("loads selected history once and keeps newer list metadata when an older thre
     status: "disconnected",
     sessionId: "remote-7",
     turns: [],
-    permissions: [],
+    pendingInteractions: [],
     failure: null,
   };
   const original = vi.mocked(invoke).getMockImplementation();
@@ -1838,7 +1896,7 @@ it("keeps authentication discovery failures inline and retries on request", asyn
     status: "disconnected",
     sessionId: "same-remote",
     turns: [],
-    permissions: [],
+    pendingInteractions: [],
     failure: null,
   };
   let connectAttempts = 0;
@@ -2159,7 +2217,7 @@ it("automatically blocks the thread with sign-in while preserving the composer",
     storageError: null,
     turns: [],
     notice: null,
-    permissions: [],
+    pendingInteractions: [],
     queuedMessages: [],
   };
   const original = vi.mocked(invoke).getMockImplementation();
@@ -2250,7 +2308,7 @@ function mockSignInThread() {
     interrupted: false,
     storageError: null,
     turns: [],
-    permissions: [],
+    pendingInteractions: [],
     queuedMessages: [],
   };
   const ready = {
@@ -2504,7 +2562,7 @@ it("shares agent login progress and ignores completion after cancellation", asyn
     storageError: null,
     turns: [],
     notice: null,
-    permissions: [],
+    pendingInteractions: [],
     queuedMessages: [],
   });
   const first = failed("auth-a", "First private thread");
@@ -2619,7 +2677,7 @@ it("does not reconnect another same-agent authentication failure when login comp
     storageError: null,
     turns: [],
     notice: null,
-    permissions: [],
+    pendingInteractions: [],
     queuedMessages: [],
   });
   const origin = failed("auth-origin", "Login origin");
@@ -2709,7 +2767,7 @@ it("reconnects the still-selected origin once without sending preserved input", 
     storageError: null,
     turns: [],
     notice: null,
-    permissions: [],
+    pendingInteractions: [],
     queuedMessages: [],
   };
   const failed = {
@@ -2822,7 +2880,7 @@ it("defers reconnect after navigation and reconnects once when the failed thread
     storageError: null,
     turns: [],
     notice: null,
-    permissions: [],
+    pendingInteractions: [],
     queuedMessages: [],
   };
   const other = {
@@ -2926,7 +2984,7 @@ it("returns to login methods when the authenticated reconnect still requires aut
     storageError: null,
     turns: [],
     notice: null,
-    permissions: [],
+    pendingInteractions: [],
     queuedMessages: [],
   };
   const methodResult = {
@@ -3204,7 +3262,7 @@ it("lays the composer over the full-height timeline and reserves its measured he
     agentId: "codex",
     status: "sessionReady",
     turns: [],
-    permissions: [],
+    pendingInteractions: [],
     queuedMessages: [],
   };
   requests.mockResolvedValue(ready);
@@ -3303,7 +3361,7 @@ it("queues input above the composer and preserves it after stopping until delete
         stopReason: null,
       },
     ],
-    permissions: [],
+    pendingInteractions: [],
     queuedMessages: [],
   };
   requests.mockResolvedValue(active);
@@ -3577,7 +3635,7 @@ it("keeps project setup after installation until an agent is explicitly selected
     agentId: "missing",
     status: "disconnected",
     turns: [],
-    permissions: [],
+    pendingInteractions: [],
     queuedMessages: [],
   };
   const original = vi.mocked(invoke).getMockImplementation();
@@ -4052,7 +4110,7 @@ it("keeps an existing thread after logout and follows a later authentication-req
         stopReason: "end_turn",
       },
     ],
-    permissions: [],
+    pendingInteractions: [],
     queuedMessages: [],
   };
   requests.mockResolvedValue(ready);
@@ -4223,14 +4281,14 @@ it("keeps thread content after agent removal and offers setup and explicit retry
   expect(screen.getByRole("textbox")).toHaveProperty("disabled", true);
 });
 
-it("replaces the composer with agent choices and restores the draft after one decision", async () => {
+it("shows agent choices instead of the composer and restores the draft after one decision", async () => {
   const ready = {
     id: "draft-1",
     workingFolder: "/project",
     agentId: "codex",
     status: "sessionReady",
     turns: [],
-    permissions: [],
+    pendingInteractions: [],
   };
   requests.mockResolvedValue(ready);
   render(() => <App />);
@@ -4244,6 +4302,7 @@ it("replaces the composer with agent choices and restores the draft after one de
     stopReason: null,
   };
   const permission = {
+    kind: "permission",
     id: "permission-1",
     toolCallId: "tool-1",
     title: "Write fixture.txt",
@@ -4255,12 +4314,13 @@ it("replaces the composer with agent choices and restores the draft after one de
   };
   receive({
     ...ready,
-    status: "waitingForApproval",
+    status: "waitingForInput",
     turns: [turn],
-    permissions: [permission],
+    pendingInteractions: [permission],
   });
   const approval = await screen.findByRole("region", { name: "승인 요청" });
   expect(screen.queryByRole("textbox")).toBeNull();
+  expect(screen.queryByRole("button", { name: "현재 작업 중단" })).toBeNull();
   expect(approval.textContent).toContain("Write fixture.txt");
   expect(approval.textContent).toContain("/project");
   const choices = Array.from(approval.querySelectorAll("button")).map(
@@ -4288,10 +4348,12 @@ it("replaces the composer with agent choices and restores the draft after one de
     "value",
     "keep this draft",
   );
-  expect(screen.queryByRole("region", { name: "승인 요청" })).toBeNull();
+  await waitFor(() =>
+    expect(screen.queryByRole("region", { name: "승인 요청" })).toBeNull(),
+  );
 });
 
-it.each(["running", "waitingForApproval"])(
+it.each(["running"])(
   "can stop a %s turn and ignores a late thread",
   async (status) => {
     const turn = {
@@ -4306,10 +4368,11 @@ it.each(["running", "waitingForApproval"])(
       agentId: "codex",
       status,
       turns: [turn],
-      permissions:
-        status === "waitingForApproval"
+      pendingInteractions:
+        status === "waitingForInput"
           ? [
               {
+                kind: "permission",
                 id: "p1",
                 title: "Run command",
                 details: "echo test",
@@ -4325,7 +4388,7 @@ it.each(["running", "waitingForApproval"])(
     requests.mockResolvedValue({
       ...waiting,
       status: "cancelling",
-      permissions: [],
+      pendingInteractions: [],
     });
     await userEvent.click(
       screen.getByRole("button", { name: "현재 작업 중단" }),
@@ -4340,7 +4403,7 @@ it.each(["running", "waitingForApproval"])(
     receive({
       ...waiting,
       status: "sessionReady",
-      permissions: [],
+      pendingInteractions: [],
       turns: [{ ...turn, stopReason: "cancelled" }],
     });
     expect(await screen.findByText("취소됨")).toBeTruthy();
@@ -4444,7 +4507,7 @@ it("loads centrally during manual reconnection and restores history and the draf
         stopReason: "end_turn",
       },
     ],
-    permissions: [],
+    pendingInteractions: [],
     queuedMessages: [],
   };
   const original = vi.mocked(invoke).getMockImplementation();
@@ -4532,7 +4595,7 @@ it("keeps the response indicator through streamed text until protocol completion
     authentication: "authenticated",
     failure: null,
     completedTurnId: null,
-    permissions: [],
+    pendingInteractions: [],
     queuedMessages: [],
     configuration: [],
     status: "sessionReady",
@@ -4562,9 +4625,9 @@ it("keeps the response indicator through streamed text until protocol completion
   const indicator = await screen.findByRole("status", { name: "응답 중…" });
   expect(indicator.querySelector(".animate-agent-waiting")).not.toBeNull();
   expect(await screen.findByRole("status", { name: "실행 중" })).toBeDefined();
-  receive({ ...active, status: "waitingForApproval" });
-  expect(await screen.findByText("승인 요청")).toBeDefined();
-  expect(screen.getByRole("status", { name: "승인 대기" })).toBe(indicator);
+  receive({ ...active, status: "waitingForInput" });
+  expect(await screen.findByText("응답 필요")).toBeDefined();
+  expect(screen.getByRole("status", { name: "응답 대기" })).toBe(indicator);
   expect(indicator.querySelector(".animate-agent-waiting")).toBeNull();
   receive(active);
   receiveUpdate({
@@ -4626,7 +4689,7 @@ function responseThread(id: string) {
     authentication: "authenticated",
     failure: null,
     completedTurnId: null as string | null,
-    permissions: [],
+    pendingInteractions: [],
     queuedMessages: [],
     configuration: [],
     status: "sessionReady",
@@ -4978,7 +5041,7 @@ it("keeps actual errors after list recovery and prioritizes subscription failure
   expect(screen.queryByRole("status", { name: "응답 중…" })).toBeNull();
   receive({
     ...recovered,
-    status: "waitingForApproval",
+    status: "waitingForInput",
     failure: "connectionClosed",
   });
   expect(
@@ -5037,7 +5100,7 @@ it("opens each conversation link in a new web tab and routes user and agent link
     agentId: "codex",
     status: "sessionReady",
     authentication: "authenticated",
-    permissions: [],
+    pendingInteractions: [],
     queuedMessages: [],
     turns: [
       {
@@ -5090,7 +5153,7 @@ it("shows the thread body and keeps the sidebar open in a narrow thread layout",
     status: "sessionReady",
     authentication: "authenticated",
     turns: [],
-    permissions: [],
+    pendingInteractions: [],
     queuedMessages: [],
   };
   const original = vi.mocked(invoke).getMockImplementation();
@@ -5491,7 +5554,7 @@ it.each(["light", "dark"])(
       status: "running",
       authentication: "authenticated",
       turns: [],
-      permissions: [],
+      pendingInteractions: [],
       queuedMessages: [],
     };
     const original = vi.mocked(invoke).getMockImplementation();

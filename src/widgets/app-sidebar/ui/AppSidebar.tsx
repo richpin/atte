@@ -303,9 +303,7 @@ export function AppSidebar(props: {
                                           kind: "error" as const,
                                           label: t("sidebar.connectionError"),
                                         };
-                                      if (
-                                        entry().status === "waitingForApproval"
-                                      )
+                                      if (entry().status === "waitingForInput")
                                         return {
                                           kind: "approval" as const,
                                           label: t("sidebar.approvalRequested"),

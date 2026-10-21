@@ -132,6 +132,10 @@
   max-height: 60dvh;
 }
 
+@utility max-h-thread-composer-with-interaction {
+  max-height: 80dvh;
+}
+
 @utility max-h-thread-composer-form {
   max-height: calc(60dvh - 5rem);
 }

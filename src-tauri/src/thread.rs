@@ -1,5 +1,8 @@
 //! Durable thread identity and in-memory content, independent of desktop transport.
+pub(crate) mod interaction;
 mod list;
+use interaction::PendingReply;
+pub use interaction::{ElicitationAnswer, FormRequest, PendingInteraction};
 mod response;
 use crate::agent::{prepared_codex, AgentDefinition, PreparedAgent};
 use crate::agent_management::authentication::AuthenticationObservation;
@@ -52,7 +55,7 @@ pub struct Thread {
     pub completed_turn_id: Option<Uuid>,
     pub turns: Vec<Turn>,
     pub notice: Option<String>,
-    pub permissions: Vec<PermissionRequest>,
+    pub pending_interactions: Vec<PendingInteraction>,
     pub queued_messages: Vec<QueuedMessage>,
     pub configuration: Vec<ThreadConfiguration>,
     pub prompt_capabilities: PromptCapabilities,
@@ -69,7 +72,7 @@ pub struct ThreadPatch {
     pub storage_error: Option<String>,
     pub authentication: AuthenticationStatus,
     pub notice: Option<String>,
-    pub permissions: Vec<PermissionRequest>,
+    pub pending_interactions: Vec<PendingInteraction>,
     pub queued_messages: Vec<QueuedMessage>,
     pub configuration: Vec<ThreadConfiguration>,
     pub prompt_capabilities: PromptCapabilities,
@@ -84,7 +87,7 @@ impl From<&Thread> for ThreadPatch {
             storage_error: thread.storage_error.clone(),
             authentication: thread.authentication.clone(),
             notice: thread.notice.clone(),
-            permissions: thread.permissions.clone(),
+            pending_interactions: thread.pending_interactions.clone(),
             queued_messages: thread.queued_messages.clone(),
             configuration: thread.configuration.clone(),
             prompt_capabilities: thread.prompt_capabilities.clone(),
@@ -130,7 +133,7 @@ impl ThreadPatch {
         thread.storage_error = self.storage_error;
         thread.authentication = self.authentication;
         thread.notice = self.notice;
-        thread.permissions = self.permissions;
+        thread.pending_interactions = self.pending_interactions;
         thread.queued_messages = self.queued_messages;
         thread.configuration = self.configuration;
         thread.prompt_capabilities = self.prompt_capabilities;
@@ -446,7 +449,11 @@ impl Thread {
             created_at: self.created_at,
             updated_at: self.updated_at,
             last_prompt_at: self.last_prompt_at,
-            status: self.status.clone(),
+            status: if self.pending_interactions.is_empty() {
+                self.status.clone()
+            } else {
+                ThreadStatus::WaitingForInput
+            },
             failure: self.failure.clone(),
             completed_turn_id: self.completed_turn_id,
             interrupted: self.interrupted,
@@ -489,7 +496,7 @@ pub enum ThreadStatus {
     Connecting,
     SessionReady,
     Running,
-    WaitingForApproval,
+    WaitingForInput,
     Cancelling,
     Failed,
 }
@@ -537,6 +544,8 @@ pub enum ThreadError {
     /// A thread title must contain non-whitespace text.
     #[error("{0}")]
     InvalidTitle(String),
+    #[error("질문 응답을 확인해주세요.")]
+    InvalidForm(std::collections::BTreeMap<String, String>),
     /// Application state could not be accessed.
     #[error("{0}")]
     Unavailable(String),
@@ -742,7 +751,7 @@ impl Threads {
                 || matches!(
                     saved.status,
                     ThreadStatus::Running
-                        | ThreadStatus::WaitingForApproval
+                        | ThreadStatus::WaitingForInput
                         | ThreadStatus::Cancelling
                 );
             let thread = Thread {
@@ -767,7 +776,7 @@ impl Threads {
                 completed_turn_id: None,
                 turns: Vec::new(),
                 notice: None,
-                permissions: Vec::new(),
+                pending_interactions: Vec::new(),
                 queued_messages: store.queued_messages(saved.id)?,
                 configuration: Vec::new(),
                 prompt_capabilities: PromptCapabilities::default(),
@@ -787,9 +796,10 @@ impl Threads {
                         desired_configuration: HashMap::new(),
                         generation: 0,
                         subscribers: Vec::new(),
-                        permissions: HashMap::new(),
+                        pending_interactions: HashMap::new(),
                         store: Some(store.clone()),
                         media_store: Some(media_store.clone()),
+                        ready_prompts: None,
                         draining: false,
                         dispatch_queue_on_ready: false,
                         dispatching_queued: None,
@@ -925,7 +935,7 @@ impl Threads {
                         && matches!(
                             current.thread.status,
                             ThreadStatus::Running
-                                | ThreadStatus::WaitingForApproval
+                                | ThreadStatus::WaitingForInput
                                 | ThreadStatus::Cancelling
                         )
                 })
@@ -939,7 +949,7 @@ impl Threads {
                     current.generation += 1;
                     current.thread.status = ThreadStatus::Disconnected;
                     current.clear_configuration();
-                    current.clear_permissions();
+                    current.clear_interactions();
                     current.publish();
                     entry.runtime = None;
                 }
@@ -1006,7 +1016,7 @@ impl Threads {
                         && matches!(
                             current.thread.status,
                             ThreadStatus::Running
-                                | ThreadStatus::WaitingForApproval
+                                | ThreadStatus::WaitingForInput
                                 | ThreadStatus::Cancelling
                         )
                 })
@@ -1041,7 +1051,7 @@ impl Threads {
                 }
                 current.generation += 1;
                 current.thread.status = ThreadStatus::Disconnected;
-                current.clear_permissions();
+                current.clear_interactions();
                 current.publish();
             }
             state
@@ -1177,14 +1187,14 @@ impl Threads {
                 current.thread.interrupted |= matches!(
                     current.thread.status,
                     ThreadStatus::Running
-                        | ThreadStatus::WaitingForApproval
+                        | ThreadStatus::WaitingForInput
                         | ThreadStatus::Cancelling
                 );
                 current.thread.status = ThreadStatus::Failed;
                 current.clear_configuration();
                 current.thread.failure = Some(ConnectionFailure::AgentRemoved);
                 current.thread.authentication = AuthenticationStatus::Unknown;
-                current.clear_permissions();
+                current.clear_interactions();
                 if let Some(turn) = current
                     .thread
                     .turns
@@ -1334,7 +1344,7 @@ impl Threads {
             completed_turn_id: None,
             turns: Vec::new(),
             notice: None,
-            permissions: Vec::new(),
+            pending_interactions: Vec::new(),
             queued_messages: Vec::new(),
             configuration: Vec::new(),
             prompt_capabilities: PromptCapabilities::default(),
@@ -1369,9 +1379,10 @@ impl Threads {
                     desired_configuration: HashMap::new(),
                     generation: 0,
                     subscribers: Vec::new(),
-                    permissions: HashMap::new(),
+                    pending_interactions: HashMap::new(),
                     store: self.store.clone(),
                     media_store: self.media_store.clone(),
+                    ready_prompts: None,
                     draining: false,
                     dispatch_queue_on_ready: false,
                     dispatching_queued: None,
@@ -1395,12 +1406,7 @@ impl Threads {
     pub fn get(&self, id: Uuid) -> Result<Thread, ThreadError> {
         let state = self.lock()?;
         let entry = state.entries.get(&id).ok_or_else(not_found)?;
-        let thread = entry
-            .state
-            .lock()
-            .map_err(|_| unavailable())?
-            .thread
-            .clone();
+        let thread = entry.state.lock().map_err(|_| unavailable())?.snapshot();
         Ok(thread)
     }
 
@@ -1483,11 +1489,11 @@ impl Threads {
                     current.thread.interrupted |= matches!(
                         current.thread.status,
                         ThreadStatus::Running
-                            | ThreadStatus::WaitingForApproval
+                            | ThreadStatus::WaitingForInput
                             | ThreadStatus::Cancelling
                     );
                     current.thread.status = ThreadStatus::Disconnected;
-                    current.clear_permissions();
+                    current.clear_interactions();
                     if let Some(turn) = current
                         .thread
                         .turns
@@ -1552,7 +1558,7 @@ impl Threads {
                 .map_err(|error| ThreadError::Unavailable(error.to_string()))?;
         }
         current.generation += 1;
-        current.clear_permissions();
+        current.clear_interactions();
         current.subscribers.clear();
         drop(current);
         let mut removed = state.entries.remove(&id).ok_or_else(not_found)?;
@@ -1671,7 +1677,7 @@ impl Threads {
         if reconnect
             && matches!(
                 thread.status,
-                ThreadStatus::Running | ThreadStatus::WaitingForApproval | ThreadStatus::Cancelling
+                ThreadStatus::Running | ThreadStatus::WaitingForInput | ThreadStatus::Cancelling
             )
         {
             return Err(ThreadError::NotReady(
@@ -1684,7 +1690,7 @@ impl Threads {
                     thread.status,
                     ThreadStatus::SessionReady
                         | ThreadStatus::Running
-                        | ThreadStatus::WaitingForApproval
+                        | ThreadStatus::WaitingForInput
                         | ThreadStatus::Cancelling
                 ))
         {
@@ -1741,6 +1747,7 @@ impl Threads {
             generation: current.generation,
         };
         let (prompts, requests) = mpsc::unbounded_channel();
+        current.ready_prompts = Some(prompts.clone());
         let (cancellations, cancelled) = mpsc::unbounded_channel();
         let (configuration, configuration_requests) = mpsc::unbounded_channel();
         let folder = thread.working_folder.clone();
@@ -1803,7 +1810,7 @@ impl Threads {
         current.cleanup_orphan_media();
         let (sender, receiver) = mpsc::unbounded_channel();
         let _ = sender.send(ThreadUpdate::Thread {
-            thread: Box::new(current.thread.clone()),
+            thread: Box::new(current.snapshot()),
         });
         current
             .subscribers
@@ -1864,9 +1871,10 @@ impl Threads {
                 .queued_messages
                 .first()
                 .is_some_and(|queued| queued.status == QueuedMessageStatus::Failed)
+            || !current.pending_interactions.is_empty()
             || matches!(
                 current.thread.status,
-                ThreadStatus::Running | ThreadStatus::WaitingForApproval | ThreadStatus::Cancelling
+                ThreadStatus::Running | ThreadStatus::WaitingForInput | ThreadStatus::Cancelling
             )
         {
             current.enqueue(input)?;
@@ -1952,7 +1960,7 @@ impl Threads {
                 current.thread.status,
                 ThreadStatus::SessionReady
                     | ThreadStatus::Running
-                    | ThreadStatus::WaitingForApproval
+                    | ThreadStatus::WaitingForInput
                     | ThreadStatus::Cancelling
             ) {
                 return Err(ThreadError::NotReady(
@@ -2169,7 +2177,7 @@ impl Threads {
         }
         if !matches!(
             current.thread.status,
-            ThreadStatus::Running | ThreadStatus::WaitingForApproval
+            ThreadStatus::Running | ThreadStatus::WaitingForInput
         ) {
             return Err(ThreadError::NotReady("진행 중인 작업이 없습니다.".into()));
         }
@@ -2182,12 +2190,12 @@ impl Threads {
             .send(turn)
             .map_err(|_| unavailable())?;
         current.thread.status = ThreadStatus::Cancelling;
-        current.clear_permissions();
+        current.clear_interactions();
         current.publish();
         Ok(())
     }
 
-    /// Consumes one pending request; stale or unadvertised choices are rejected.
+    /// Consumes one pending permission without trusting frontend choices.
     pub fn answer_permission(
         &self,
         id: Uuid,
@@ -2197,28 +2205,84 @@ impl Threads {
         let state = self.lock()?;
         let entry = state.entries.get(&id).ok_or_else(not_found)?;
         let mut current = entry.state.lock().map_err(|_| unavailable())?;
-        if current.thread.status != ThreadStatus::WaitingForApproval
-            || !current.thread.permissions.iter().any(|permission| {
-                permission.id == request
-                    && permission.options.iter().any(|choice| choice.id == option)
-            })
-        {
+        let valid = current
+            .thread
+            .pending_interactions
+            .iter()
+            .filter_map(PendingInteraction::permission)
+            .any(|item| {
+                item.id == request && item.options.iter().any(|choice| choice.id == option)
+            });
+        if !valid {
             return Err(ThreadError::NotReady(
                 "이미 해소되었거나 유효하지 않은 승인 선택입니다.".into(),
             ));
         }
-        let response = current
-            .permissions
-            .remove(&request)
-            .ok_or_else(unavailable)?;
-        let result = response.send(option).map_err(|_| unavailable());
+        let Some(PendingReply::Permission { sender, .. }) =
+            current.pending_interactions.remove(&request)
+        else {
+            return Err(unavailable());
+        };
         current
             .thread
-            .permissions
-            .retain(|permission| permission.id != request);
-        if current.thread.permissions.is_empty() {
-            current.thread.status = ThreadStatus::Running;
+            .pending_interactions
+            .retain(|item| item.id() != request);
+        let result = sender.send(option).map_err(|_| unavailable());
+        current.resume_queue_if_ready();
+        current.publish();
+        result
+    }
+
+    /// Validates and consumes an elicitation once, leaving invalid submissions pending.
+    pub fn answer_elicitation(
+        &self,
+        id: Uuid,
+        request: Uuid,
+        answer: ElicitationAnswer,
+    ) -> Result<(), ThreadError> {
+        let state = self.lock()?;
+        let entry = state.entries.get(&id).ok_or_else(not_found)?;
+        let mut current = entry.state.lock().map_err(|_| unavailable())?;
+        let Some(PendingReply::Elicitation { validator, .. }) =
+            current.pending_interactions.get(&request)
+        else {
+            return Err(ThreadError::NotReady("이미 해소된 질문입니다.".into()));
+        };
+        if let ElicitationAnswer::Accept { values } = &answer {
+            let value = serde_json::Value::Object(values.clone());
+            let errors: std::collections::BTreeMap<_, _> = validator
+                .iter_errors(&value)
+                .map(|error| {
+                    let path = match error.kind() {
+                        jsonschema::error::ValidationErrorKind::Required { property } => format!(
+                            "{}/{}",
+                            error.instance_path(),
+                            property
+                                .as_str()
+                                .unwrap_or_default()
+                                .replace('~', "~0")
+                                .replace('/', "~1")
+                        ),
+                        _ => error.instance_path().to_string(),
+                    };
+                    (path, error.to_string())
+                })
+                .collect();
+            if !errors.is_empty() {
+                return Err(ThreadError::InvalidForm(errors));
+            }
         }
+        let Some(PendingReply::Elicitation { sender, .. }) =
+            current.pending_interactions.remove(&request)
+        else {
+            return Err(unavailable());
+        };
+        current
+            .thread
+            .pending_interactions
+            .retain(|item| item.id() != request);
+        let result = sender.send(answer).map_err(|_| unavailable());
+        current.resume_queue_if_ready();
         current.publish();
         result
     }
@@ -2234,15 +2298,19 @@ impl Threads {
             state.closed = true;
             for entry in state.entries.values() {
                 if let Ok(mut current) = entry.state.lock() {
+                    if !current.pending_interactions.is_empty() {
+                        current.clear_interactions();
+                        current.publish();
+                    }
                     if matches!(
                         current.thread.status,
                         ThreadStatus::Running
-                            | ThreadStatus::WaitingForApproval
+                            | ThreadStatus::WaitingForInput
                             | ThreadStatus::Cancelling
                     ) {
                         current.thread.interrupted = true;
                         current.thread.status = ThreadStatus::Cancelling;
-                        current.clear_permissions();
+                        current.clear_interactions();
                         if let (Some(runtime), Some(turn)) =
                             (&entry.runtime, current.thread.turns.last())
                         {
@@ -2262,8 +2330,9 @@ impl Threads {
                     if entries.iter().all(|entry| {
                         !matches!(
                             entry.status,
-                            ThreadStatus::Running
-                                | ThreadStatus::WaitingForApproval
+                            ThreadStatus::Connecting
+                                | ThreadStatus::Running
+                                | ThreadStatus::WaitingForInput
                                 | ThreadStatus::Cancelling
                         )
                     }) {
@@ -2283,13 +2352,13 @@ impl Threads {
                     current.thread.interrupted |= matches!(
                         current.thread.status,
                         ThreadStatus::Running
-                            | ThreadStatus::WaitingForApproval
+                            | ThreadStatus::WaitingForInput
                             | ThreadStatus::Cancelling
                     );
                     if current.thread.status != ThreadStatus::Failed {
                         current.thread.status = ThreadStatus::Disconnected;
                     }
-                    current.clear_permissions();
+                    current.clear_interactions();
                     if let Some(turn) = current
                         .thread
                         .turns
@@ -2424,7 +2493,8 @@ struct ThreadState {
     desired_configuration: HashMap<String, DesiredConfiguration>,
     generation: u64,
     subscribers: Vec<mpsc::UnboundedSender<ThreadUpdate>>,
-    permissions: HashMap<Uuid, oneshot::Sender<String>>,
+    pending_interactions: HashMap<Uuid, PendingReply>,
+    ready_prompts: Option<mpsc::UnboundedSender<Prompt>>,
     draining: bool,
     dispatch_queue_on_ready: bool,
     dispatching_queued: Option<QueuedMessage>,
@@ -2441,6 +2511,14 @@ struct DesiredConfiguration {
 }
 
 impl ThreadState {
+    fn snapshot(&self) -> Thread {
+        let mut thread = self.thread.clone();
+        if !thread.pending_interactions.is_empty() {
+            thread.status = ThreadStatus::WaitingForInput;
+        }
+        thread
+    }
+
     fn apply_first_prompt_title(&mut self, input: &UserInput) {
         if !self.use_prompt_title {
             return;
@@ -2614,14 +2692,34 @@ impl ThreadState {
         );
     }
 
-    fn clear_permissions(&mut self) {
+    fn resume_queue_if_ready(&mut self) {
+        if self.thread.status == ThreadStatus::SessionReady
+            && self.pending_interactions.is_empty()
+            && !self.draining
+        {
+            if let Some(prompt) = self.prepare_next_queued_prompt() {
+                let sender = self.ready_prompts.clone();
+                let _ = self.send_queued_prompt(sender.as_ref(), prompt);
+            }
+        }
+    }
+
+    fn clear_owned_interactions(&mut self, owner: Uuid) {
+        self.pending_interactions
+            .retain(|_, reply| reply.owner() != Some(owner));
+        self.thread
+            .pending_interactions
+            .retain(|item| self.pending_interactions.contains_key(&item.id()));
+    }
+
+    fn clear_interactions(&mut self) {
         // Dropped senders resolve every pending ACP request as cancelled.
-        self.permissions.clear();
-        self.thread.permissions.clear();
+        self.pending_interactions.clear();
+        self.thread.pending_interactions.clear();
     }
 
     fn prepare_next_queued_prompt(&mut self) -> Option<Prompt> {
-        if self.dispatching_queued.is_some() {
+        if self.dispatching_queued.is_some() || !self.pending_interactions.is_empty() {
             return None;
         }
         let queued = self.thread.queued_messages.first()?;
@@ -2991,7 +3089,7 @@ impl RuntimeUpdates {
         }
         state.thread.status = ThreadStatus::SessionReady;
         state.thread.interrupted = true;
-        state.clear_permissions();
+        state.clear_interactions();
         state.pending_errors.push(ThreadErrorNotification {
             id: Uuid::new_v4(),
             failure: None,
@@ -3174,7 +3272,7 @@ impl RuntimeUpdates {
             }
             state.thread.interrupted |= matches!(
                 state.thread.status,
-                ThreadStatus::Running | ThreadStatus::WaitingForApproval | ThreadStatus::Cancelling
+                ThreadStatus::Running | ThreadStatus::WaitingForInput | ThreadStatus::Cancelling
             );
             state.thread.status = ThreadStatus::Failed;
             state.clear_configuration();
@@ -3193,7 +3291,7 @@ impl RuntimeUpdates {
             }
             state.thread.interrupted |= matches!(
                 state.thread.status,
-                ThreadStatus::Running | ThreadStatus::WaitingForApproval | ThreadStatus::Cancelling
+                ThreadStatus::Running | ThreadStatus::WaitingForInput | ThreadStatus::Cancelling
             );
             state.thread.status = ThreadStatus::Disconnected;
             state.clear_configuration();
@@ -3210,7 +3308,7 @@ impl RuntimeUpdates {
         if state.generation != self.generation
             || !matches!(
                 state.thread.status,
-                ThreadStatus::Running | ThreadStatus::WaitingForApproval | ThreadStatus::Cancelling
+                ThreadStatus::Running | ThreadStatus::WaitingForInput | ThreadStatus::Cancelling
             )
             || state.thread.turns.last().map(|item| item.id) != Some(turn)
         {
@@ -3252,7 +3350,7 @@ impl RuntimeUpdates {
         }
         state.thread.status = ThreadStatus::SessionReady;
         state.thread.authentication = AuthenticationStatus::Authenticated;
-        state.clear_permissions();
+        state.clear_owned_interactions(turn);
         let next = if !state.draining
             && !cancelled
             && reason == agent_client_protocol::schema::v1::StopReason::EndTurn
@@ -3316,18 +3414,103 @@ impl RuntimeUpdates {
         if state.generation != self.generation
             || !matches!(
                 state.thread.status,
-                ThreadStatus::Running | ThreadStatus::WaitingForApproval
+                ThreadStatus::Running | ThreadStatus::WaitingForInput
             )
             || state.thread.turns.last().map(|item| item.id) != Some(turn)
         {
             return None;
         }
         let (sender, receiver) = oneshot::channel();
-        state.permissions.insert(request.id, sender);
-        state.thread.permissions.push(request);
-        state.thread.status = ThreadStatus::WaitingForApproval;
+        state.pending_interactions.insert(
+            request.id,
+            PendingReply::Permission {
+                sender,
+                owner: turn,
+            },
+        );
+        state
+            .thread
+            .pending_interactions
+            .push(PendingInteraction::Permission(request));
         state.publish();
         Some(receiver)
+    }
+
+    pub(crate) fn request_form(
+        &self,
+        request: FormRequest,
+        validator: Arc<jsonschema::Validator>,
+        owner: Option<Uuid>,
+    ) -> Option<oneshot::Receiver<ElicitationAnswer>> {
+        let mut state = self.state.lock().ok()?;
+        if state.generation != self.generation
+            || !matches!(
+                state.thread.status,
+                ThreadStatus::Connecting | ThreadStatus::SessionReady | ThreadStatus::Running
+            )
+        {
+            return None;
+        }
+        let (sender, receiver) = oneshot::channel();
+        state.pending_interactions.insert(
+            request.id,
+            PendingReply::Elicitation {
+                sender,
+                validator,
+                owner,
+            },
+        );
+        state
+            .thread
+            .pending_interactions
+            .push(PendingInteraction::Elicitation(request));
+        state.publish();
+        Some(receiver)
+    }
+
+    pub(crate) fn interaction_finished(&self, id: Uuid) {
+        let Ok(mut state) = self.state.lock() else {
+            return;
+        };
+        if state.generation != self.generation || state.pending_interactions.remove(&id).is_none() {
+            return;
+        }
+        state
+            .thread
+            .pending_interactions
+            .retain(|item| item.id() != id);
+        state.resume_queue_if_ready();
+        state.publish();
+    }
+
+    pub(crate) fn request_finished(&self, owner: Uuid) {
+        let Ok(mut state) = self.state.lock() else {
+            return;
+        };
+        if state.generation != self.generation
+            || !state
+                .pending_interactions
+                .values()
+                .any(|reply| reply.owner() == Some(owner))
+        {
+            return;
+        }
+        state.clear_owned_interactions(owner);
+        state.resume_queue_if_ready();
+        state.publish();
+    }
+
+    pub(crate) fn thread_id(&self) -> Uuid {
+        self.state
+            .lock()
+            .map(|state| state.thread.id)
+            .unwrap_or_default()
+    }
+
+    pub(crate) fn waiting_for_input(&self) -> bool {
+        self.state.lock().is_ok_and(|state| {
+            state.generation == self.generation && !state.pending_interactions.is_empty()
+        })
     }
 
     fn record_authentication(&self, status: AuthenticationStatus) {
@@ -3349,7 +3532,7 @@ impl RuntimeUpdates {
         if state.generation != self.generation
             || !matches!(
                 state.thread.status,
-                ThreadStatus::Running | ThreadStatus::WaitingForApproval
+                ThreadStatus::Running | ThreadStatus::WaitingForInput
             )
             || state.thread.turns.last().map(|item| item.id) != Some(turn)
         {
@@ -3377,7 +3560,7 @@ impl RuntimeUpdates {
         if state.generation != self.generation
             || !matches!(
                 state.thread.status,
-                ThreadStatus::Running | ThreadStatus::WaitingForApproval
+                ThreadStatus::Running | ThreadStatus::WaitingForInput
             )
             || state.thread.turns.last().map(|item| item.id) != Some(turn)
         {
@@ -3409,7 +3592,7 @@ impl RuntimeUpdates {
         if state.generation != self.generation
             || !matches!(
                 state.thread.status,
-                ThreadStatus::Running | ThreadStatus::WaitingForApproval | ThreadStatus::Cancelling
+                ThreadStatus::Running | ThreadStatus::WaitingForInput | ThreadStatus::Cancelling
             )
             || state.thread.turns.last().map(|item| item.id) != Some(turn)
         {
@@ -3438,7 +3621,7 @@ impl RuntimeUpdates {
         if state.generation != self.generation
             || !matches!(
                 state.thread.status,
-                ThreadStatus::Running | ThreadStatus::WaitingForApproval | ThreadStatus::Cancelling
+                ThreadStatus::Running | ThreadStatus::WaitingForInput | ThreadStatus::Cancelling
             )
             || state.thread.turns.last().map(|item| item.id) != Some(turn)
         {
@@ -3473,7 +3656,7 @@ impl RuntimeUpdates {
         if let Some(turn) = current_turn {
             if !matches!(
                 state.thread.status,
-                ThreadStatus::Running | ThreadStatus::WaitingForApproval | ThreadStatus::Cancelling
+                ThreadStatus::Running | ThreadStatus::WaitingForInput | ThreadStatus::Cancelling
             ) || state.thread.turns.last().map(|item| item.id) != Some(turn)
             {
                 return;
@@ -3506,11 +3689,11 @@ impl RuntimeUpdates {
             return;
         }
         update(&mut state);
-        if !matches!(
+        if matches!(
             state.thread.status,
-            ThreadStatus::Running | ThreadStatus::WaitingForApproval
+            ThreadStatus::Disconnected | ThreadStatus::Failed | ThreadStatus::Cancelling
         ) {
-            state.clear_permissions();
+            state.clear_interactions();
         }
         state.publish();
     }
@@ -3679,7 +3862,7 @@ mod title_tests {
         for status in [
             ThreadStatus::Connecting,
             ThreadStatus::Running,
-            ThreadStatus::WaitingForApproval,
+            ThreadStatus::WaitingForInput,
             ThreadStatus::Cancelling,
             ThreadStatus::SessionReady,
         ] {
@@ -3715,7 +3898,7 @@ mod title_tests {
         for (status, used) in [
             (ThreadStatus::Connecting, 32_000),
             (ThreadStatus::Running, 40_000),
-            (ThreadStatus::WaitingForApproval, 42_000),
+            (ThreadStatus::WaitingForInput, 42_000),
             (ThreadStatus::Cancelling, 43_000),
             (ThreadStatus::SessionReady, 12_000),
         ] {
@@ -3823,7 +4006,7 @@ mod title_tests {
         updates.append_thought(turn_id, String::new(), None);
         updates.append_thought(Uuid::new_v4(), "Wrong turn".into(), None);
         assert!(stream.try_recv().is_err());
-        for status in [ThreadStatus::Running, ThreadStatus::WaitingForApproval] {
+        for status in [ThreadStatus::Running, ThreadStatus::WaitingForInput] {
             updates.state.lock().unwrap().thread.status = status;
             updates.append_thought(turn_id, "Accepted".into(), None);
             assert!(matches!(
@@ -3880,7 +4063,7 @@ mod title_tests {
         assert!(stream.try_recv().is_err());
         for status in [
             ThreadStatus::Running,
-            ThreadStatus::WaitingForApproval,
+            ThreadStatus::WaitingForInput,
             ThreadStatus::Cancelling,
         ] {
             updates.state.lock().unwrap().thread.status = status;

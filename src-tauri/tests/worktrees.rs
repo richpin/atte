@@ -70,7 +70,7 @@ async fn shares_current_files_and_subfolder_but_starts_an_empty_conversation() {
     assert!(second.session_id.is_none());
     assert!(second.turns.is_empty());
     assert!(second.queued_messages.is_empty());
-    assert!(second.permissions.is_empty());
+    assert!(second.pending_interactions.is_empty());
     assert!(second.configuration.is_empty());
     assert_eq!(
         std::fs::read_to_string(second.working_folder.join("main.ts")).unwrap(),

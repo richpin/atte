@@ -171,9 +171,9 @@ pub(super) fn show(app: &AppHandle, notice: &Notice, korean: bool) -> Result<(),
         content.setTitle(&NSString::from_str(&notice.title));
         content.setBody(&NSString::from_str(match (notice.kind, korean) {
             (Kind::Completion, true) => "응답이 완료되었습니다.",
-            (Kind::Permission, true) => "승인이 필요합니다.",
+            (Kind::Permission, true) => "승인 또는 질문에 응답해주세요.",
             (Kind::Completion, false) => "Response completed.",
-            (Kind::Permission, false) => "Approval needed.",
+            (Kind::Permission, false) => "Your response is needed.",
         }));
         content.setSound(Some(&UNNotificationSound::defaultSound()));
         content.setThreadIdentifier(&NSString::from_str(&notice.thread_id.to_string()));

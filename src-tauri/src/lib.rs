@@ -360,6 +360,16 @@ async fn answer_permission(
 }
 
 #[tauri::command]
+fn answer_elicitation(
+    id: Uuid,
+    request: Uuid,
+    answer: thread::ElicitationAnswer,
+    threads: State<'_, Threads>,
+) -> Result<(), ThreadError> {
+    threads.answer_elicitation(id, request, answer)
+}
+
+#[tauri::command]
 async fn set_thread_configuration(
     id: Uuid,
     config_id: String,
@@ -580,6 +590,7 @@ pub fn run() {
                 release_files,
                 cancel_turn,
                 answer_permission,
+                answer_elicitation,
                 set_thread_configuration,
                 subscribe_thread,
                 unsubscribe_thread

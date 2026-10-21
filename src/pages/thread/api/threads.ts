@@ -1,5 +1,6 @@
 import { Channel, invoke } from "@tauri-apps/api/core";
 import type {
+  ElicitationAnswer,
   FileSelection,
   MediaKind,
   PreparedAgent,
@@ -118,6 +119,14 @@ export function cancelTurn(id: string, turn: string) {
 
 export function answerPermission(id: string, request: string, option: string) {
   return invoke<void>("answer_permission", { id, request, option });
+}
+
+export function answerElicitation(
+  id: string,
+  request: string,
+  answer: ElicitationAnswer,
+) {
+  return invoke<void>("answer_elicitation", { id, request, answer });
 }
 
 export function setThreadConfiguration(

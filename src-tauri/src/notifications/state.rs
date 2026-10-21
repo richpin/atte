@@ -143,9 +143,9 @@ impl Policy {
             let previous = self.entries.get(&entry.id);
             let new_completion = entry.completed_turn_id.is_some()
                 && previous.is_some_and(|old| old.completed_turn_id != entry.completed_turn_id);
-            let waiting = entry.status == ThreadStatus::WaitingForApproval;
-            let new_permission = waiting
-                && previous.is_some_and(|old| old.status != ThreadStatus::WaitingForApproval);
+            let waiting = entry.status == ThreadStatus::WaitingForInput;
+            let new_permission =
+                waiting && previous.is_some_and(|old| old.status != ThreadStatus::WaitingForInput);
             if !waiting {
                 self.remove_notice(entry.id, Kind::Permission, &mut effects);
             }

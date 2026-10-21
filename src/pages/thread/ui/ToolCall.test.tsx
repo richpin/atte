@@ -59,7 +59,7 @@ it("distinguishes approval, interrupted and unknown completion without guessing 
   ));
   expect(screen.getByText("Waiting")).toBeTruthy();
   setApproval(true);
-  expect(screen.getByText("Approval required")).toBeTruthy();
+  expect(screen.getByText("Response needed")).toBeTruthy();
   setApproval(false);
   setActive(false);
   expect(screen.getByText("Completion unconfirmed")).toBeTruthy();

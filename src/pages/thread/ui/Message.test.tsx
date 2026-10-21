@@ -298,7 +298,7 @@ it("renders tools between text parts and keeps the response indicator after them
   const text = container.textContent ?? "";
   expect(text.indexOf("Before tool")).toBeLessThan(text.indexOf("Read file"));
   expect(text.indexOf("Read file")).toBeLessThan(text.indexOf("After tool"));
-  expect(screen.getByText("Approval required")).toBeTruthy();
+  expect(screen.getByText("Response needed")).toBeTruthy();
   const indicator = screen.getByRole("status", { name: "Responding…" });
   expect(indicator.previousElementSibling?.textContent).toContain("After tool");
 });

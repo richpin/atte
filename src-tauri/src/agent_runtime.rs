@@ -1,4 +1,5 @@
 //! Shared ACP stdio connection with independent, session-scoped execution.
+mod elicitation;
 mod plan;
 mod process;
 mod replay;
@@ -155,6 +156,19 @@ pub(crate) async fn run(
     };
     let routes: Routes = Arc::default();
     let participants = Arc::new(Mutex::new(HashMap::<Uuid, RuntimeUpdates>::new()));
+    let mut first_command = commands.recv().await;
+    let initial_updates = match &first_command {
+        Some(RuntimeCommand::StartSession(session)) => {
+            if let Ok(mut all) = participants.lock() {
+                all.insert(session.id, session.updates.clone());
+            }
+            Some(session.updates.clone())
+        }
+        _ => None,
+    };
+    let owners: elicitation::Owners = Arc::default();
+    let form_owners = owners.clone();
+    let form_routes = routes.clone();
     let permission_routes = routes.clone();
     let notification_routes = routes.clone();
     let auth_status_supported = Arc::new(AtomicBool::new(false));
@@ -166,8 +180,11 @@ pub(crate) async fn run(
     let auth_status_agent = agent.id.clone();
     let mut protocol = Box::pin(Client.builder()
         .on_receive_request(async move |request: RequestPermissionRequest, responder, cx| {
+            let mut request_updates = None;
+            let request_id = Uuid::new_v4();
             let decision = permission_routes.lock().ok().and_then(|mut routes| {
                 let route = routes.get_mut(&request.session_id.to_string())?;
+                request_updates = Some(route.updates.clone());
                 let active = route.active.as_mut()?;
                 let turn = active.turn;
                 let tool_id = request.tool_call.tool_call_id.to_string();
@@ -182,20 +199,53 @@ pub(crate) async fn run(
                 ].into_iter().flatten().collect::<Vec<_>>().join("\n");
                 route.updates.request_permission(turn, PermissionRequest {
                     plan_review: plan::plan_review(&tool_id, &fields, &request.options),
-                    id: Uuid::new_v4(), tool_call_id: tool_id.clone(), title: fields.title.clone().unwrap_or(tool_id), details,
+                    id: request_id, tool_call_id: tool_id.clone(), title: fields.title.clone().unwrap_or(tool_id), details,
                     options: request.options.into_iter().map(|option| PermissionOption { id: option.option_id.to_string(), name: option.name }).collect(),
                 })
             });
             // Waiting for one user's decision must not block another session.
+            let cancellation = responder.cancellation();
             cx.spawn(async move {
                 let outcome = match decision {
-                    Some(decision) => match decision.await {
-                        Ok(option) => RequestPermissionOutcome::Selected(SelectedPermissionOutcome::new(option)),
-                        Err(_) => RequestPermissionOutcome::Cancelled,
+                    Some(decision) => match tokio::select! { biased; _ = cancellation.cancelled() => None, result = decision => result.ok() } {
+                        Some(option) => RequestPermissionOutcome::Selected(SelectedPermissionOutcome::new(option)),
+                        None => RequestPermissionOutcome::Cancelled,
                     },
                     None => RequestPermissionOutcome::Cancelled,
                 };
+                if let Some(updates) = request_updates { updates.interaction_finished(request_id); }
                 responder.respond(RequestPermissionResponse::new(outcome))
+            })
+        }, agent_client_protocol::on_receive_request!())
+
+        .on_receive_request(async move |request: agent_client_protocol::schema::v1::CreateElicitationRequest, responder, cx| {
+            use agent_client_protocol::schema::v1::{ElicitationMode, ElicitationScope, ElicitationAction, CreateElicitationResponse};
+            let ElicitationMode::Form(form) = request.mode else { return responder.respond_with_error(agent_client_protocol::Error::invalid_params()); };
+            let owner = match &form.scope {
+                ElicitationScope::Request(scope) => form_owners.lock().ok().and_then(|all| all.get(&scope.request_id).cloned()),
+                ElicitationScope::Session(scope) => form_routes.lock().ok().and_then(|all| all.get(&scope.session_id.to_string()).map(|route| elicitation::Owner { updates: route.updates.clone(), operation: route.active.as_ref().map(|turn| turn.turn).unwrap_or_else(Uuid::nil) })),
+                _ => None,
+            };
+            let Some(owner) = owner else { return responder.respond(CreateElicitationResponse::new(ElicitationAction::Cancel)); };
+            let (schema, validator) = match crate::thread::interaction::prepare_form(&form.requested_schema) {
+                Ok(prepared) => prepared,
+                Err(error) => return responder.respond_with_error(agent_client_protocol::Error::invalid_params().data(error.to_string())),
+            };
+            let tool_call_id = match &form.scope { ElicitationScope::Session(scope) => scope.tool_call_id.as_ref().map(ToString::to_string), _ => None };
+            let id = Uuid::new_v4();
+            let operation = if owner.operation.is_nil() { form_owners.lock().ok().and_then(|all| all.values().find(|candidate| candidate.updates.thread_id() == owner.updates.thread_id()).map(|candidate| candidate.operation)) } else { Some(owner.operation) };
+            let decision = owner.updates.request_form(crate::thread::FormRequest { id, message: request.message, tool_call_id, schema }, validator, operation);
+            let cancellation = responder.cancellation();
+            cx.spawn(async move {
+                let answer = match decision { Some(decision) => tokio::select! { biased; _ = cancellation.cancelled() => None, answer = decision => answer.ok() }, None => None };
+                owner.updates.interaction_finished(id);
+                let wire = match answer.unwrap_or(crate::thread::ElicitationAnswer::Cancel) {
+                    crate::thread::ElicitationAnswer::Accept { values } => serde_json::json!({"action":"accept", "content":values}),
+                    crate::thread::ElicitationAnswer::Decline => serde_json::json!({"action":"decline"}),
+                    crate::thread::ElicitationAnswer::Cancel => serde_json::json!({"action":"cancel"}),
+                };
+                let response = serde_json::from_value::<CreateElicitationResponse>(wire).map_err(|_| agent_client_protocol::Error::invalid_params())?;
+                responder.respond(response)
             })
         }, agent_client_protocol::on_receive_request!())
         .on_receive_notification(async move |notification: SessionNotification, _cx| {
@@ -267,19 +317,22 @@ pub(crate) async fn run(
         }, agent_client_protocol::on_receive_notification!())
         .connect_with(ByteStreams::new(stdin.compat_write(), stdout.compat()), async |connection: ConnectionTo<Agent>| {
             let initialize = InitializeRequest::new(ProtocolVersion::V1).client_capabilities(
-                ClientCapabilities::new().plan(PlanCapabilities::new()).session(
+                ClientCapabilities::new().elicitation(agent_client_protocol::schema::v1::ElicitationCapabilities::new().form(agent_client_protocol::schema::v1::ElicitationFormCapabilities::new())).plan(PlanCapabilities::new()).session(
                     ClientSessionCapabilities::new().config_options(
                         SessionConfigOptionsCapabilities::new()
                             .boolean(BooleanConfigOptionCapabilities::new()),
                     ),
                 ),
             );
-            let initialized = match tokio::time::timeout(Duration::from_secs(30), connection.send_request(initialize).block_task()).await {
+            let sent = connection.send_request(initialize);
+            let _initial_lease = initial_updates.as_ref().map(|updates| elicitation::Lease::new(&sent, &owners, updates, Uuid::new_v4()));
+            let initialized = match elicitation::timeout(sent.block_task(), || initial_updates.as_ref().is_some_and(RuntimeUpdates::waiting_for_input)).await {
                 Ok(Ok(initialized)) if initialized.protocol_version == ProtocolVersion::V1 => initialized,
                 Ok(Ok(_)) => return Ok(ConnectionFailure::InitializationFailed),
                 Ok(Err(error)) => return Ok(classify(error, ConnectionFailure::InitializationFailed)),
                 Err(_) => return Ok(ConnectionFailure::TimedOut),
             };
+            drop(_initial_lease);
             let logout_supported = initialized.agent_capabilities.auth.logout.is_some();
             if let Ok(mut observations) = authentication_observations.lock() {
                 observations.insert(
@@ -327,7 +380,7 @@ pub(crate) async fn run(
                         if let Some(updates) = updates { updates.connection_failed(failure); }
                         if let Ok(mut routes) = routes.lock() { routes.retain(|_, route| route.owner != id); }
                     },
-                    command = commands.recv() => {
+                    command = async { match first_command.take() { Some(command) => Some(command), None => commands.recv().await } } => {
                         let Some(command) = command else { return Ok(ConnectionFailure::ConnectionClosed); };
                         match command {
                             RuntimeCommand::StartSession(session) => {
@@ -341,13 +394,14 @@ pub(crate) async fn run(
                                 let capabilities = initialized.agent_capabilities.clone();
                                 let folder = folder.clone();
                                 let routes = routes.clone();
+                                let owners = owners.clone();
                                 connection.spawn(async move {
                                     let id = session.id;
                                     let generation = session.updates.generation();
                                     let failure = tokio::select! {
                                         biased;
                                         _ = stopped => ConnectionFailure::ConnectionClosed,
-                                        failure = run_session(connection_task, capabilities, folder, routes, session) => failure,
+                                        failure = run_session(connection_task, capabilities, folder, routes, owners, session) => failure,
                                     };
                                     let _ = finished.send((id, generation, failure));
                                     Ok(())
@@ -503,6 +557,7 @@ async fn run_session(
     capabilities: AgentCapabilities,
     folder: PathBuf,
     routes: Routes,
+    owners: elicitation::Owners,
     mut session: Session,
 ) -> ConnectionFailure {
     let updates = &session.updates;
@@ -520,13 +575,13 @@ async fn run_session(
                 );
             }
             let configuration = if capabilities.load_session {
-                let response = connection
-                    .send_request(LoadSessionRequest::new(id.clone(), &folder))
-                    .block_task()
-                    .await
-                    .map_err(|error| {
-                        classify(error, ConnectionFailure::SessionRestorationFailed)
-                    })?;
+                let response = elicitation::call(
+                    connection.send_request(LoadSessionRequest::new(id.clone(), &folder)),
+                    &owners,
+                    updates,
+                )
+                .await
+                .map_err(|error| classify(error, ConnectionFailure::SessionRestorationFailed))?;
                 let history = routes
                     .lock()
                     .ok()
@@ -536,13 +591,13 @@ async fn run_session(
                 }
                 response.config_options.unwrap_or_default()
             } else if capabilities.session_capabilities.resume.is_some() {
-                let response = connection
-                    .send_request(ResumeSessionRequest::new(id.clone(), &folder))
-                    .block_task()
-                    .await
-                    .map_err(|error| {
-                        classify(error, ConnectionFailure::SessionRestorationFailed)
-                    })?;
+                let response = elicitation::call(
+                    connection.send_request(ResumeSessionRequest::new(id.clone(), &folder)),
+                    &owners,
+                    updates,
+                )
+                .await
+                .map_err(|error| classify(error, ConnectionFailure::SessionRestorationFailed))?;
                 if let Ok(mut routes) = routes.lock() {
                     if let Some(route) = routes.get_mut(id) {
                         route.replay = None;
@@ -558,11 +613,13 @@ async fn run_session(
                 thread_configuration(configuration),
             ))
         } else {
-            let response = connection
-                .send_request(NewSessionRequest::new(&folder))
-                .block_task()
-                .await
-                .map_err(|error| classify(error, ConnectionFailure::SessionCreationFailed))?;
+            let response = elicitation::call(
+                connection.send_request(NewSessionRequest::new(&folder)),
+                &owners,
+                updates,
+            )
+            .await
+            .map_err(|error| classify(error, ConnectionFailure::SessionCreationFailed))?;
             if let Ok(mut routes) = routes.lock() {
                 routes.insert(
                     response.session_id.to_string(),
@@ -596,14 +653,16 @@ async fn run_session(
                         SessionConfigOptionValue::boolean(value)
                     }
                 };
-                match connection
-                    .send_request(SetSessionConfigOptionRequest::new(
+                match elicitation::call(
+                    connection.send_request(SetSessionConfigOptionRequest::new(
                         remote.clone(),
                         remembered.id.clone(),
                         value,
-                    ))
-                    .block_task()
-                    .await
+                    )),
+                    &owners,
+                    updates,
+                )
+                .await
                 {
                     Ok(response) => configuration = thread_configuration(response.config_options),
                     Err(_) => updates.configuration_inheritance_failed(),
@@ -613,7 +672,7 @@ async fn run_session(
         }
     };
     let (remote, configuration) =
-        match tokio::time::timeout(Duration::from_secs(30), handshake).await {
+        match elicitation::timeout(handshake, || updates.waiting_for_input()).await {
             Ok(Ok(remote)) => remote,
             Ok(Err(failure)) => return failure,
             Err(_) => return ConnectionFailure::TimedOut,
@@ -623,6 +682,7 @@ async fn run_session(
         remote.clone(),
         updates.clone(),
         session.configuration,
+        owners.clone(),
     ));
     let mut next_prompt = updates.session_ready(
         remote.to_string(),
@@ -668,37 +728,35 @@ async fn run_session(
             }
         };
         let completed_input = prompt_input.clone();
-        if let Err(error) = connection
-            .send_request(PromptRequest::new(remote.clone(), content))
-            .on_receiving_result(async move |result| {
-                if let Ok(mut routes) = turn_routes.lock() {
-                    if let Some(route) = routes
-                        .get_mut(&turn_session)
-                        .filter(|route| route.updates.generation() == turn_updates.generation())
-                    {
-                        route.active = None;
-                    }
+        let sent = connection.send_request(PromptRequest::new(remote.clone(), content));
+        let lease = elicitation::Lease::new(&sent, &owners, updates, prompt_turn);
+        if let Err(error) = sent.on_receiving_result(async move |result| {
+            drop(lease);
+            if let Ok(mut routes) = turn_routes.lock() {
+                if let Some(route) = routes
+                    .get_mut(&turn_session)
+                    .filter(|route| route.updates.generation() == turn_updates.generation())
+                {
+                    route.active = None;
                 }
-                let completed = match result {
-                    Ok(response) => {
-                        Ok(turn_updates.complete_turn(prompt_turn, response.stop_reason))
-                    }
-                    Err(error) => {
-                        let failure = classify_prompt(error);
-                        report_prompt_failure(
-                            &turn_updates,
-                            &failure,
-                            prompt_turn,
-                            completed_input,
-                            queued_message,
-                        );
-                        Err(failure)
-                    }
-                };
-                let _ = finished.send(completed);
-                Ok(())
-            })
-        {
+            }
+            let completed = match result {
+                Ok(response) => Ok(turn_updates.complete_turn(prompt_turn, response.stop_reason)),
+                Err(error) => {
+                    let failure = classify_prompt(error);
+                    report_prompt_failure(
+                        &turn_updates,
+                        &failure,
+                        prompt_turn,
+                        completed_input,
+                        queued_message,
+                    );
+                    Err(failure)
+                }
+            };
+            let _ = finished.send(completed);
+            Ok(())
+        }) {
             let failure = classify_prompt(error);
             report_prompt_failure(updates, &failure, prompt_turn, prompt_input, queued_message);
             if let Ok(mut routes) = routes.lock() {
@@ -791,6 +849,7 @@ async fn run_configuration_changes(
     session: SessionId,
     updates: RuntimeUpdates,
     mut changes: mpsc::UnboundedReceiver<ConfigurationChange>,
+    owners: elicitation::Owners,
 ) -> ConnectionFailure {
     let mut pending = VecDeque::new();
     loop {
@@ -817,37 +876,37 @@ async fn run_configuration_changes(
         let result_updates = updates.clone();
         let request_id = change.request_id;
         let config_id = change.config_id.clone();
-        if let Err(error) = connection
-            .send_request(SetSessionConfigOptionRequest::new(
-                session.clone(),
-                change.config_id,
-                value,
-            ))
-            .on_receiving_result(async move |result| {
-                let completion = match result {
-                    Ok(response) => {
-                        result_updates.configuration_succeeded(
-                            request_id,
-                            &config_id,
-                            thread_configuration(response.config_options),
-                        );
+        let sent = connection.send_request(SetSessionConfigOptionRequest::new(
+            session.clone(),
+            change.config_id,
+            value,
+        ));
+        let lease = elicitation::Lease::new(&sent, &owners, &updates, request_id);
+        if let Err(error) = sent.on_receiving_result(async move |result| {
+            drop(lease);
+            let completion = match result {
+                Ok(response) => {
+                    result_updates.configuration_succeeded(
+                        request_id,
+                        &config_id,
+                        thread_configuration(response.config_options),
+                    );
+                    Ok(())
+                }
+                Err(_) => {
+                    if result_updates.configuration_failed(request_id, &config_id) {
+                        Err(ThreadError::NotReady(
+                            "스레드 설정을 변경할 수 없습니다.".into(),
+                        ))
+                    } else {
                         Ok(())
                     }
-                    Err(_) => {
-                        if result_updates.configuration_failed(request_id, &config_id) {
-                            Err(ThreadError::NotReady(
-                                "스레드 설정을 변경할 수 없습니다.".into(),
-                            ))
-                        } else {
-                            Ok(())
-                        }
-                    }
-                };
-                let _ = change.complete.send(completion);
-                let _ = finished.send(());
-                Ok(())
-            })
-        {
+                }
+            };
+            let _ = change.complete.send(completion);
+            let _ = finished.send(());
+            Ok(())
+        }) {
             return classify(error, ConnectionFailure::ConnectionClosed);
         }
         loop {

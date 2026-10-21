@@ -38,7 +38,7 @@ export interface Thread {
     | "connecting"
     | "sessionReady"
     | "running"
-    | "waitingForApproval"
+    | "waitingForInput"
     | "cancelling"
     | "failed";
   sessionId: string | null;
@@ -47,7 +47,7 @@ export interface Thread {
   completedTurnId: string | null;
   turns: Turn[];
   notice: string | null;
-  permissions: PermissionRequest[];
+  pendingInteractions: PendingInteraction[];
   queuedMessages: QueuedMessage[];
   configuration: ThreadConfiguration[];
   contextUsage: ContextUsage | null;
@@ -146,6 +146,46 @@ export interface PermissionRequest {
   planReview?: { planId: string; content: string } | null;
   options: { id: string; name: string }[];
 }
+
+export type FormValue = string | boolean | string[];
+export type FormValues = Record<string, FormValue>;
+export interface FormField {
+  type: "string" | "integer" | "number" | "boolean" | "array";
+  title?: string;
+  description?: string;
+  default?: string | number | boolean | string[];
+  enum?: string[];
+  oneOf?: { const: string; title: string }[];
+  items?: { enum?: string[]; anyOf?: { const: string; title: string }[] };
+  minLength?: number;
+  maxLength?: number;
+  minimum?: number;
+  maximum?: number;
+  minItems?: number;
+  maxItems?: number;
+  format?: string;
+}
+export interface ElicitationRequest {
+  kind: "elicitation";
+  id: string;
+  message: string;
+  toolCallId: string | null;
+  schema: {
+    title?: string;
+    description?: string;
+    properties: Record<string, FormField>;
+    required?: string[];
+  };
+}
+export type PendingInteraction =
+  | (PermissionRequest & { kind: "permission" })
+  | ElicitationRequest;
+export type ElicitationAnswer =
+  | {
+      action: "accept";
+      values: Record<string, string | number | boolean | string[]>;
+    }
+  | { action: "decline" | "cancel" };
 
 export interface ToolCall {
   title?: string;

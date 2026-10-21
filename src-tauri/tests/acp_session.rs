@@ -53,6 +53,414 @@ fn mock_agent() -> AgentDefinition {
     }
 }
 
+fn form_agent(log: &std::path::Path, phase: &str) -> AgentDefinition {
+    let mut agent = mock_agent();
+    agent
+        .env
+        .insert("FIXTURE_MODE".into(), "elicitation".into());
+    agent.env.insert("ELICITATION_PHASE".into(), phase.into());
+    agent
+        .env
+        .insert("ELICITATION_LOG".into(), log.to_string_lossy().into());
+    agent
+}
+
+async fn wait_for_forms(
+    threads: &Threads,
+    id: uuid::Uuid,
+    count: usize,
+) -> atte_lib::thread::Thread {
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let thread = threads.get(id).unwrap();
+            if thread.pending_interactions.len() == count {
+                return thread;
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .expect("pending form arrives")
+}
+
+fn accept_strategy() -> atte_lib::thread::ElicitationAnswer {
+    atte_lib::thread::ElicitationAnswer::Accept {
+        values: serde_json::from_value(serde_json::json!({"strategy":"safe"})).unwrap(),
+    }
+}
+
+#[tokio::test]
+async fn forms_route_to_the_thread_during_initialization_creation_and_prompts() {
+    for phase in ["initialize", "session/new", "session/prompt"] {
+        let folder = tempfile::tempdir().unwrap();
+        let log = folder.path().join("wire.jsonl");
+        let threads = Threads::new(vec![form_agent(&log, phase)]);
+        let draft = threads.create(folder.path()).unwrap();
+        threads.connect(draft.id).unwrap();
+        if phase == "session/prompt" {
+            settle(&threads, draft.id).await;
+            threads.send_message(draft.id, "Question".into()).unwrap();
+        }
+        let waiting = wait_for_forms(&threads, draft.id, 1).await;
+        assert_eq!(waiting.status, ThreadStatus::WaitingForInput);
+        let form = &waiting.pending_interactions[0];
+        assert!(matches!(
+            form,
+            atte_lib::thread::PendingInteraction::Elicitation(_)
+        ));
+        let invalid = atte_lib::thread::ElicitationAnswer::Accept {
+            values: Default::default(),
+        };
+        assert!(matches!(
+            threads.answer_elicitation(draft.id, form.id(), invalid),
+            Err(atte_lib::thread::ThreadError::InvalidForm(_))
+        ));
+        assert_eq!(threads.get(draft.id).unwrap().pending_interactions.len(), 1);
+        threads
+            .answer_elicitation(draft.id, form.id(), accept_strategy())
+            .unwrap();
+        assert!(threads
+            .answer_elicitation(draft.id, form.id(), accept_strategy())
+            .is_err());
+        let ready = settle(&threads, draft.id).await;
+        assert_eq!(ready.status, ThreadStatus::SessionReady);
+        let messages: Vec<serde_json::Value> = std::fs::read_to_string(&log)
+            .unwrap()
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect();
+        assert_eq!(
+            messages[0]["params"]["clientCapabilities"]["elicitation"]["form"],
+            serde_json::json!({})
+        );
+        assert!(messages.iter().any(|message| message["result"]
+            == serde_json::json!({"action":"accept","content":{"strategy":"safe"}})));
+        threads.shutdown().await;
+    }
+}
+
+#[tokio::test]
+async fn form_decline_cancel_and_remote_request_cancellation_are_distinct() {
+    use atte_lib::thread::ElicitationAnswer;
+    for (answer, expected, remote_cancel) in [
+        (ElicitationAnswer::Decline, "decline", false),
+        (ElicitationAnswer::Cancel, "cancel", false),
+        (ElicitationAnswer::Cancel, "cancel", true),
+    ] {
+        let folder = tempfile::tempdir().unwrap();
+        let log = folder.path().join("wire.jsonl");
+        let mut agent = form_agent(&log, "session/prompt");
+        if remote_cancel {
+            agent
+                .env
+                .insert("ELICITATION_CANCEL_REQUEST".into(), "1".into());
+        }
+        let threads = Threads::new(vec![agent]);
+        let draft = threads.create(folder.path()).unwrap();
+        threads.connect(draft.id).unwrap();
+        settle(&threads, draft.id).await;
+        threads.send_message(draft.id, "ask".into()).unwrap();
+        if !remote_cancel {
+            let waiting = wait_for_forms(&threads, draft.id, 1).await;
+            threads
+                .answer_elicitation(draft.id, waiting.pending_interactions[0].id(), answer)
+                .unwrap();
+        }
+        let ready = settle(&threads, draft.id).await;
+        assert!(ready.pending_interactions.is_empty());
+        let wire = std::fs::read_to_string(log).unwrap();
+        assert!(wire
+            .lines()
+            .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap())
+            .any(|message| message["result"] == serde_json::json!({"action":expected})));
+        threads.shutdown().await;
+    }
+}
+
+#[tokio::test]
+async fn mixed_approvals_and_forms_preserve_order_and_cancel_together() {
+    let folder = tempfile::tempdir().unwrap();
+    let log = folder.path().join("wire.jsonl");
+    let mut agent = form_agent(&log, "session/prompt");
+    agent.env.insert("ELICITATION_MIXED".into(), "1".into());
+    agent.env.insert(
+        "ELICITATION_SCHEMAS".into(),
+        serde_json::json!([
+            {"type":"object","properties":{}}, {"type":"object","properties":{}}
+        ])
+        .to_string(),
+    );
+    let threads = Threads::new(vec![agent]);
+    let draft = threads.create(folder.path()).unwrap();
+    threads.connect(draft.id).unwrap();
+    settle(&threads, draft.id).await;
+    threads.send_message(draft.id, "ask".into()).unwrap();
+    let waiting = wait_for_forms(&threads, draft.id, 3).await;
+    assert!(waiting.pending_interactions[0].permission().is_some());
+    threads
+        .answer_elicitation(
+            draft.id,
+            waiting.pending_interactions[2].id(),
+            atte_lib::thread::ElicitationAnswer::Decline,
+        )
+        .unwrap();
+    assert_eq!(
+        threads.get(draft.id).unwrap().status,
+        ThreadStatus::WaitingForInput
+    );
+    let form_id = waiting.pending_interactions[1].id();
+    threads.cancel_turn(draft.id, waiting.turns[0].id).unwrap();
+    let ready = settle(&threads, draft.id).await;
+    assert!(ready.pending_interactions.is_empty());
+    assert_eq!(ready.turns[0].stop_reason.as_deref(), Some("cancelled"));
+    assert!(threads
+        .answer_elicitation(draft.id, form_id, accept_strategy())
+        .is_err());
+    threads.shutdown().await;
+}
+
+#[tokio::test]
+async fn form_values_keep_their_types_and_queued_messages_wait_for_every_question() {
+    let folder = tempfile::tempdir().unwrap();
+    let log = folder.path().join("wire.jsonl");
+    let mut agent = form_agent(&log, "session/prompt");
+    let schema = serde_json::json!({"type":"object","properties":{
+        "text":{"type":"string","default":"hello"},"count":{"type":"integer","minimum":1},
+        "fraction":{"type":"number"},"enabled":{"type":"boolean"},
+        "mode":{"type":"string","oneOf":[{"const":"safe","title":"Careful"}]},
+        "checks":{"type":"array","items":{"type":"string","enum":["unit","integration"]}}},"required":["count","enabled"]});
+    agent.env.insert(
+        "ELICITATION_SCHEMAS".into(),
+        serde_json::json!([schema, {"type":"object","properties":{}}]).to_string(),
+    );
+    let threads = Threads::new(vec![agent]);
+    let draft = threads.create(folder.path()).unwrap();
+    threads.connect(draft.id).unwrap();
+    settle(&threads, draft.id).await;
+    threads.send_message(draft.id, "first".into()).unwrap();
+    let waiting = wait_for_forms(&threads, draft.id, 2).await;
+    let values = serde_json::json!({"text":"hello","count":2,"fraction":0.5,"enabled":false,"mode":"safe","checks":["unit"]});
+    threads.send_message(draft.id, "queued".into()).unwrap();
+    threads
+        .answer_elicitation(
+            draft.id,
+            waiting.pending_interactions[0].id(),
+            atte_lib::thread::ElicitationAnswer::Accept {
+                values: serde_json::from_value(values.clone()).unwrap(),
+            },
+        )
+        .unwrap();
+    let pending = threads.get(draft.id).unwrap();
+    assert_eq!(pending.turns.len(), 1);
+    assert_eq!(pending.queued_messages.len(), 1);
+    threads
+        .answer_elicitation(
+            draft.id,
+            waiting.pending_interactions[1].id(),
+            atte_lib::thread::ElicitationAnswer::Decline,
+        )
+        .unwrap();
+    let second = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let current = wait_for_forms(&threads, draft.id, 2).await;
+            if current.turns.len() == 2 {
+                break current;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    for interaction in &second.pending_interactions {
+        threads
+            .answer_elicitation(
+                draft.id,
+                interaction.id(),
+                atte_lib::thread::ElicitationAnswer::Decline,
+            )
+            .unwrap();
+    }
+    assert_eq!(settle(&threads, draft.id).await.turns.len(), 2);
+    let wire = std::fs::read_to_string(log).unwrap();
+    assert!(wire
+        .lines()
+        .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap())
+        .any(
+            |message| message["result"] == serde_json::json!({"action":"accept","content":values})
+        ));
+    threads.shutdown().await;
+}
+
+#[tokio::test]
+async fn forms_during_restoration_and_configuration_return_to_their_execution_phase() {
+    use std::sync::Arc;
+    for phase in [
+        "session/load",
+        "session/resume",
+        "session/set_config_option",
+    ] {
+        let folder = tempfile::tempdir().unwrap();
+        let log = folder.path().join("wire.jsonl");
+        let mut agent = form_agent(&log, phase);
+        if phase == "session/resume" {
+            agent
+                .env
+                .insert("ELICITATION_RESUME_ONLY".into(), "1".into());
+        }
+        let threads = Arc::new(Threads::new(vec![agent]));
+        let draft = threads.create(folder.path()).unwrap();
+        threads.connect(draft.id).unwrap();
+        settle(&threads, draft.id).await;
+        let changing = if phase == "session/set_config_option" {
+            let threads = threads.clone();
+            Some(tokio::spawn(async move {
+                threads
+                    .set_configuration(
+                        draft.id,
+                        "opaque-model".into(),
+                        ThreadConfigurationValue::Select {
+                            value: "model-b".into(),
+                        },
+                    )
+                    .await
+            }))
+        } else {
+            threads.reconnect(draft.id).unwrap();
+            None
+        };
+        let waiting = wait_for_forms(&threads, draft.id, 1).await;
+        assert!(waiting.turns.is_empty());
+        threads
+            .answer_elicitation(
+                draft.id,
+                waiting.pending_interactions[0].id(),
+                accept_strategy(),
+            )
+            .unwrap();
+        if let Some(changing) = changing {
+            changing.await.unwrap().unwrap();
+        }
+        assert_eq!(
+            settle(&threads, draft.id).await.status,
+            ThreadStatus::SessionReady
+        );
+        threads.shutdown().await;
+    }
+}
+
+#[tokio::test]
+async fn concurrent_forms_are_isolated_and_stale_answers_fail_after_reconnection() {
+    let folder = tempfile::tempdir().unwrap();
+    let log = folder.path().join("wire.jsonl");
+    let threads = Threads::new(vec![form_agent(&log, "session/prompt")]);
+    let first = threads.create(folder.path()).unwrap();
+    let second = threads.create(folder.path()).unwrap();
+    threads.connect(first.id).unwrap();
+    threads.connect(second.id).unwrap();
+    settle(&threads, first.id).await;
+    settle(&threads, second.id).await;
+    threads.send_message(first.id, "first".into()).unwrap();
+    threads.send_message(second.id, "second".into()).unwrap();
+    let a = wait_for_forms(&threads, first.id, 1).await;
+    let b = wait_for_forms(&threads, second.id, 1).await;
+    assert!(threads
+        .answer_elicitation(second.id, a.pending_interactions[0].id(), accept_strategy())
+        .is_err());
+    threads.cancel_turn(first.id, a.turns[0].id).unwrap();
+    settle(&threads, first.id).await;
+    assert_eq!(
+        threads.get(second.id).unwrap().status,
+        ThreadStatus::WaitingForInput
+    );
+    threads.reconnect(first.id).unwrap();
+    settle(&threads, first.id).await;
+    assert!(threads
+        .answer_elicitation(first.id, a.pending_interactions[0].id(), accept_strategy())
+        .is_err());
+    threads
+        .answer_elicitation(second.id, b.pending_interactions[0].id(), accept_strategy())
+        .unwrap();
+    settle(&threads, second.id).await;
+    threads.shutdown().await;
+}
+
+#[tokio::test]
+async fn unsupported_or_unowned_forms_resolve_without_hanging_the_agent() {
+    for key in [
+        "ELICITATION_UNKNOWN_OWNER",
+        "ELICITATION_URL",
+        "ELICITATION_SCHEMAS",
+    ] {
+        let folder = tempfile::tempdir().unwrap();
+        let log = folder.path().join("wire.jsonl");
+        let mut agent = form_agent(&log, "session/prompt");
+        let value = if key == "ELICITATION_SCHEMAS" {
+            r#"[{"type":"object","properties":{"nested":{"type":"object"}}}]"#
+        } else {
+            "1"
+        };
+        agent.env.insert(key.into(), value.into());
+        let threads = Threads::new(vec![agent]);
+        let draft = threads.create(folder.path()).unwrap();
+        threads.connect(draft.id).unwrap();
+        settle(&threads, draft.id).await;
+        threads.send_message(draft.id, "ask".into()).unwrap();
+        let ready = settle(&threads, draft.id).await;
+        assert!(ready.pending_interactions.is_empty());
+        let messages: Vec<serde_json::Value> = std::fs::read_to_string(log)
+            .unwrap()
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect();
+        assert!(messages
+            .iter()
+            .any(|message| if key == "ELICITATION_UNKNOWN_OWNER" {
+                message["result"]["action"] == "cancel"
+            } else {
+                message["error"]["code"] == -32602
+            }));
+        threads.shutdown().await;
+    }
+}
+
+#[tokio::test]
+async fn connection_exit_deletion_and_shutdown_clear_pending_forms() {
+    for operation in ["exit", "delete", "shutdown"] {
+        let folder = tempfile::tempdir().unwrap();
+        let log = folder.path().join("wire.jsonl");
+        let mut agent = form_agent(&log, "session/prompt");
+        if operation == "exit" {
+            agent.env.insert("ELICITATION_EXIT".into(), "1".into());
+        }
+        let threads = Threads::new(vec![agent]);
+        let draft = threads.create(folder.path()).unwrap();
+        threads.connect(draft.id).unwrap();
+        settle(&threads, draft.id).await;
+        threads.send_message(draft.id, "ask".into()).unwrap();
+        if operation == "exit" {
+            assert!(settle(&threads, draft.id)
+                .await
+                .pending_interactions
+                .is_empty());
+        } else {
+            let waiting = wait_for_forms(&threads, draft.id, 1).await;
+            if operation == "delete" {
+                threads.delete(draft.id).await.unwrap();
+            } else {
+                threads.shutdown().await;
+            }
+            assert!(threads
+                .answer_elicitation(
+                    draft.id,
+                    waiting.pending_interactions[0].id(),
+                    accept_strategy()
+                )
+                .is_err());
+        }
+        threads.shutdown().await;
+    }
+}
+
 fn add_configuration_gate(agent: &mut AgentDefinition, gate: &std::path::Path) {
     std::fs::create_dir_all(gate).unwrap();
     agent
@@ -655,7 +1063,7 @@ async fn shutdown_stops_all_work_and_restores_queues_without_dispatch() {
             loop {
                 let next = stream.recv().await.unwrap();
                 if (message == "hold" && !next.turns[0].response_text().is_empty())
-                    || next.status == ThreadStatus::WaitingForApproval
+                    || next.status == ThreadStatus::WaitingForInput
                 {
                     break;
                 }
@@ -673,7 +1081,7 @@ async fn shutdown_stops_all_work_and_restores_queues_without_dispatch() {
         let stopped = threads.get(*id).unwrap();
         assert_eq!(stopped.status, ThreadStatus::Disconnected);
         assert_eq!(stopped.turns[0].stop_reason.as_deref(), Some("cancelled"));
-        assert!(stopped.permissions.is_empty());
+        assert!(stopped.pending_interactions.is_empty());
         assert!(threads.send_message(*id, "late".into()).is_err());
     }
     let restored = Threads::with_store(vec![agent], store).unwrap();
@@ -710,7 +1118,7 @@ async fn shutdown_delivers_turn_and_permission_cancellation_before_reaping() {
     threads.send_message(draft.id, "permission".into()).unwrap();
     let mut stream = subscribe(&threads, draft.id);
     tokio::time::timeout(Duration::from_secs(5), async {
-        while stream.recv().await.unwrap().status != ThreadStatus::WaitingForApproval {}
+        while stream.recv().await.unwrap().status != ThreadStatus::WaitingForInput {}
     })
     .await
     .unwrap();
@@ -739,7 +1147,7 @@ async fn shared_connection_isolates_sessions_permissions_and_cancellation() {
     let waiting = tokio::time::timeout(Duration::from_secs(5), async {
         loop {
             let thread = stream.recv().await.unwrap();
-            if !thread.permissions.is_empty() {
+            if !thread.pending_interactions.is_empty() {
                 break thread;
             }
         }
@@ -1241,7 +1649,7 @@ async fn real_codex_concurrent_sessions_keep_approval_and_queue_isolated() {
     let waiting = tokio::time::timeout(Duration::from_secs(120), async {
         loop {
             let thread = first_stream.recv().await.unwrap();
-            if thread.status == ThreadStatus::WaitingForApproval {
+            if thread.status == ThreadStatus::WaitingForInput {
                 break thread;
             }
             assert!(
@@ -1275,7 +1683,7 @@ async fn real_codex_concurrent_sessions_keep_approval_and_queue_isolated() {
     assert!(finished.turns[0].response_text().contains("ATTE-07-SECOND"));
     assert_eq!(
         threads.get(first.id).unwrap().status,
-        ThreadStatus::WaitingForApproval
+        ThreadStatus::WaitingForInput
     );
     threads.cancel_turn(first.id, waiting.turns[0].id).unwrap();
     let stopped = settle(&threads, first.id).await;
@@ -2461,7 +2869,7 @@ async fn failed_restoration_keeps_the_reference_and_never_exposes_partial_replay
         assert_eq!(failed.failure, Some(failure), "{mode}");
         assert_eq!(failed.session_id.as_deref(), Some("remote-1"));
         assert!(failed.turns.is_empty());
-        assert!(failed.permissions.is_empty());
+        assert!(failed.pending_interactions.is_empty());
         agent.env.remove("FIXTURE_MODE");
         restored.register_agent(agent).unwrap();
         assert_eq!(restored.get(draft.id).unwrap().status, ThreadStatus::Failed);
@@ -2494,8 +2902,8 @@ async fn restart_of_an_approval_wait_restores_only_metadata_without_replaying_th
     let permission = tokio::time::timeout(Duration::from_secs(5), async {
         loop {
             let next = stream.recv().await.unwrap();
-            if next.status == ThreadStatus::WaitingForApproval {
-                break next.permissions[0].id;
+            if next.status == ThreadStatus::WaitingForInput {
+                break next.pending_interactions[0].id();
             }
         }
     })
@@ -2504,11 +2912,11 @@ async fn restart_of_an_approval_wait_restores_only_metadata_without_replaying_th
     first.shutdown().await;
     let stopped = first.get(draft.id).unwrap();
     assert_eq!(stopped.turns[0].stop_reason.as_deref(), Some("cancelled"));
-    assert!(stopped.permissions.is_empty());
+    assert!(stopped.pending_interactions.is_empty());
     let restored = Threads::with_store(vec![agent], store).unwrap();
     let thread = restored.get(draft.id).unwrap();
     assert!(thread.interrupted);
-    assert!(thread.permissions.is_empty());
+    assert!(thread.pending_interactions.is_empty());
     assert!(thread.turns.is_empty());
     assert!(restored
         .answer_permission(draft.id, permission, "arbitrary-allow".into())
@@ -3643,7 +4051,7 @@ async fn settle(threads: &Threads, id: uuid::Uuid) -> atte_lib::thread::Thread {
                 thread.status,
                 ThreadStatus::Connecting
                     | ThreadStatus::Running
-                    | ThreadStatus::WaitingForApproval
+                    | ThreadStatus::WaitingForInput
                     | ThreadStatus::Cancelling
             ) {
                 return thread;
@@ -4186,14 +4594,14 @@ async fn permission_preserves_agent_choices_and_answers_exactly_once() {
         let waiting = tokio::time::timeout(Duration::from_secs(5), async {
             loop {
                 let next = stream.recv().await.unwrap();
-                if next.status == ThreadStatus::WaitingForApproval {
+                if next.status == ThreadStatus::WaitingForInput {
                     break next;
                 }
             }
         })
         .await
         .unwrap();
-        let permission = &waiting.permissions[0];
+        let permission = waiting.pending_interactions[0].permission().unwrap();
         assert_eq!(permission.title, "Write fixture.txt");
         assert_eq!(permission.tool_call_id, "tool-1");
         let tool = serde_json::to_value(&waiting.turns[0].response_parts).unwrap();
@@ -4223,7 +4631,7 @@ async fn permission_preserves_agent_choices_and_answers_exactly_once() {
             .answer_permission(draft.id, permission.id, option.into())
             .is_err());
         let completed = settle(&threads, draft.id).await;
-        assert!(completed.permissions.is_empty());
+        assert!(completed.pending_interactions.is_empty());
         assert_eq!(completed.completed_turn_id, Some(completed.turns[0].id));
         assert_eq!(
             threads.list().unwrap()[0].completed_turn_id,
@@ -4264,7 +4672,7 @@ async fn process_exit_during_approval_clears_permissions_and_preserves_the_queue
     let waiting = tokio::time::timeout(Duration::from_secs(5), async {
         loop {
             let next = stream.recv().await.unwrap();
-            if next.status == ThreadStatus::WaitingForApproval {
+            if next.status == ThreadStatus::WaitingForInput {
                 break next;
             }
         }
@@ -4280,7 +4688,7 @@ async fn process_exit_during_approval_clears_permissions_and_preserves_the_queue
     assert_eq!(failed.status, ThreadStatus::Failed);
     assert_eq!(failed.failure, Some(ConnectionFailure::ProcessExited));
     assert!(failed.interrupted);
-    assert!(failed.permissions.is_empty());
+    assert!(failed.pending_interactions.is_empty());
     assert_eq!(failed.session_id, waiting.session_id);
     assert_eq!(failed.turns, waiting.turns);
     assert_eq!(failed.queued_messages.len(), 1);
@@ -4288,7 +4696,7 @@ async fn process_exit_during_approval_clears_permissions_and_preserves_the_queue
     assert!(threads
         .answer_permission(
             draft.id,
-            waiting.permissions[0].id,
+            waiting.pending_interactions[0].id(),
             "arbitrary-allow".into()
         )
         .is_err());
@@ -4313,7 +4721,7 @@ async fn cancelling_permission_resolves_pending_and_late_requests_without_execut
     let waiting = tokio::time::timeout(Duration::from_secs(5), async {
         loop {
             let next = stream.recv().await.unwrap();
-            if next.status == ThreadStatus::WaitingForApproval {
+            if next.status == ThreadStatus::WaitingForInput {
                 break next;
             }
         }
@@ -4324,13 +4732,13 @@ async fn cancelling_permission_resolves_pending_and_late_requests_without_execut
     assert!(threads
         .answer_permission(
             draft.id,
-            waiting.permissions[0].id,
+            waiting.pending_interactions[0].id(),
             "arbitrary-allow".into()
         )
         .is_err());
     let cancelled = settle(&threads, draft.id).await;
     assert_eq!(cancelled.status, ThreadStatus::SessionReady);
-    assert!(cancelled.permissions.is_empty());
+    assert!(cancelled.pending_interactions.is_empty());
     assert_eq!(cancelled.turns[0].stop_reason.as_deref(), Some("cancelled"));
     assert_eq!(cancelled.turns[0].response_text(), "");
     threads.send_message(draft.id, "follow up".into()).unwrap();
@@ -5683,7 +6091,7 @@ async fn removing_an_agent_clears_pending_permissions_and_rejects_late_decisions
     let waiting = tokio::time::timeout(Duration::from_secs(5), async {
         loop {
             let next = stream.recv().await.unwrap();
-            if next.status == ThreadStatus::WaitingForApproval {
+            if next.status == ThreadStatus::WaitingForInput {
                 break next;
             }
         }
@@ -5694,14 +6102,14 @@ async fn removing_an_agent_clears_pending_permissions_and_rejects_late_decisions
     let removed = threads.get(draft.id).unwrap();
     assert_eq!(removed.failure, Some(ConnectionFailure::AgentRemoved));
     assert!(
-        removed.permissions.is_empty(),
+        removed.pending_interactions.is_empty(),
         "removed agents must not leave approval controls visible"
     );
     assert_eq!(removed.turns[0].stop_reason.as_deref(), Some("cancelled"));
     assert!(threads
         .answer_permission(
             draft.id,
-            waiting.permissions[0].id,
+            waiting.pending_interactions[0].id(),
             "arbitrary-allow".into()
         )
         .is_err());
@@ -5763,7 +6171,7 @@ async fn manual_reconnect_isolates_shared_work_and_rejects_busy_threads() {
     let waiting = tokio::time::timeout(Duration::from_secs(5), async {
         loop {
             let state = stream.recv().await.unwrap();
-            if state.status == ThreadStatus::WaitingForApproval {
+            if state.status == ThreadStatus::WaitingForInput {
                 break state;
             }
         }
@@ -5776,8 +6184,8 @@ async fn manual_reconnect_isolates_shared_work_and_rejects_busy_threads() {
     assert_eq!(restored.session_id, ready.session_id);
     assert_eq!(restored.status, ThreadStatus::SessionReady);
     assert_eq!(
-        threads.get(second.id).unwrap().permissions,
-        waiting.permissions
+        threads.get(second.id).unwrap().pending_interactions,
+        waiting.pending_interactions
     );
     threads
         .send_message(first.id, "after reconnect".into())
@@ -5913,7 +6321,7 @@ async fn cancellation_preserves_previous_completion_and_empty_approval_completes
     let waiting = tokio::time::timeout(Duration::from_secs(5), async {
         loop {
             let current = stream.recv().await.unwrap();
-            if current.status == ThreadStatus::WaitingForApproval {
+            if current.status == ThreadStatus::WaitingForInput {
                 break current;
             }
         }
@@ -5923,7 +6331,11 @@ async fn cancellation_preserves_previous_completion_and_empty_approval_completes
     assert_eq!(waiting.completed_turn_id, first.completed_turn_id);
     assert!(waiting.turns[2].response_text().is_empty());
     threads
-        .answer_permission(draft.id, waiting.permissions[0].id, "allow".into())
+        .answer_permission(
+            draft.id,
+            waiting.pending_interactions[0].id(),
+            "allow".into(),
+        )
         .unwrap();
     let completed = settle(&threads, draft.id).await;
     assert_eq!(completed.completed_turn_id, Some(completed.turns[2].id));
@@ -6240,14 +6652,14 @@ async fn plan_review_permissions_link_the_document_and_preserve_both_choices() {
         let waiting = tokio::time::timeout(Duration::from_secs(5), async {
             loop {
                 let next = stream.recv().await.unwrap();
-                if next.status == ThreadStatus::WaitingForApproval {
+                if next.status == ThreadStatus::WaitingForInput {
                     break next;
                 }
             }
         })
         .await
         .unwrap();
-        let permission = &waiting.permissions[0];
+        let permission = waiting.pending_interactions[0].permission().unwrap();
         let content = "# Greeting CLI\n- Add the command";
         assert_eq!(
             permission.plan_review,
@@ -6272,7 +6684,7 @@ async fn plan_review_permissions_link_the_document_and_preserve_both_choices() {
             .answer_permission(draft.id, permission.id, option.into())
             .unwrap();
         let completed = settle(&threads, draft.id).await;
-        assert!(completed.permissions.is_empty());
+        assert!(completed.pending_interactions.is_empty());
         assert!(completed.turns[0]
             .response_text()
             .contains(&format!("selected:{option}")));
@@ -6359,14 +6771,14 @@ async fn real_codex_plan_document_survives_approval_and_reconnection() {
         let waiting = loop {
             let next = stream.recv().await.unwrap();
             assert_ne!(next.status, ThreadStatus::Failed, "plan failed: {:?}", next.failure);
-            if next.status == ThreadStatus::WaitingForApproval { break next; }
+            if next.status == ThreadStatus::WaitingForInput { break next; }
             if !next.turns.is_empty() { assert_ne!(next.status, ThreadStatus::SessionReady, "plan completed without review"); }
         };
         let document = waiting.turns.iter().flat_map(|turn| &turn.response_parts).find_map(|part| match part {
             ResponsePart::PlanContent { plan_id, content: Some(atte_lib::thread::PlanContent::Markdown { content }), .. } if !content.is_empty() => Some((plan_id.clone(), content.clone())),
             _ => None,
         }).expect("typed Markdown plan");
-        let permission = waiting.permissions.iter().find(|permission| permission.tool_call_id.starts_with("plan-review:")).expect("plan review");
+        let permission = waiting.pending_interactions.iter().filter_map(|item| item.permission()).find(|permission| permission.tool_call_id.starts_with("plan-review:")).expect("plan review");
         threads.answer_permission(draft.id, permission.id, "implement_plan".into()).unwrap();
         loop {
             let next = stream.recv().await.unwrap();

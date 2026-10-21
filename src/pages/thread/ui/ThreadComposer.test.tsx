@@ -10,7 +10,15 @@ import { I18nProvider } from "shared/i18n";
 import { ThemeProvider } from "shared/theme";
 import { createSignal } from "solid-js";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import type { ResponsePart, Thread } from "../model/types";
+import { formDefaults } from "../model/elicitation";
+import type {
+  ElicitationRequest,
+  FormField,
+  FormValues,
+  PendingInteraction,
+  ResponsePart,
+  Thread,
+} from "../model/types";
 import { ThreadComposer } from "./ThreadComposer";
 
 beforeEach(() => {
@@ -45,7 +53,7 @@ function readyThread(): Thread {
     completedTurnId: null,
     turns: [],
     notice: null,
-    permissions: [],
+    pendingInteractions: [],
     queuedMessages: [],
     configuration: [],
   };
@@ -146,7 +154,7 @@ it("renders agent-provided thread configuration and sends typed selections", asy
   });
 });
 
-it("switches from PromptInput to PermissionInput when approval is requested", () => {
+it("replaces the message input with the approval card", () => {
   const [thread, setThread] = createSignal(readyThread());
   const onAnswer = vi.fn();
 
@@ -180,10 +188,11 @@ it("switches from PromptInput to PermissionInput when approval is requested", ()
 
   setThread((current) => ({
     ...current,
-    status: "waitingForApproval",
-    permissions: [
+    status: "waitingForInput",
+    pendingInteractions: [
       {
         id: "permission-1",
+        kind: "permission" as const,
         toolCallId: "tool-1",
         title: "Run command?",
         details: "pnpm test",
@@ -201,6 +210,302 @@ it("switches from PromptInput to PermissionInput when approval is requested", ()
   expect(onAnswer).toHaveBeenCalledWith("permission-1", "allow");
 });
 
+it.each<FormField>([
+  { type: "string", default: "sample" },
+  { type: "integer", default: 2 },
+  { type: "number", default: 0.5 },
+  { type: "boolean", default: false },
+  { type: "string", enum: ["safe", "fast"], default: "safe" },
+  {
+    type: "array",
+    items: { enum: ["unit", "integration"] },
+    default: ["unit"],
+  },
+])(
+  "replaces the composer with $type questions and restores the draft and attachments",
+  async (field) => {
+    const question: ElicitationRequest = {
+      kind: "elicitation",
+      id: "question",
+      message: "Choose the approach",
+      toolCallId: null,
+      schema: { properties: { answer: { ...field, title: "Answer" } } },
+    };
+    const onSend = vi.fn();
+    const onAnswerQuestion = vi.fn();
+    const [current, setCurrent] = createSignal<Thread>({
+      ...readyThread(),
+      status: "waitingForInput",
+      pendingInteractions: [question],
+    });
+    render(() => (
+      <I18nProvider>
+        <ThreadComposer
+          active={false}
+          thread={current()}
+          draft="keep this draft"
+          draftAttachments={[
+            {
+              id: "file",
+              kind: "file",
+              name: "notes.txt",
+              uri: "file:///workspace/notes.txt",
+              mimeType: "text/plain",
+            },
+          ]}
+          answerPending={false}
+          cancelPending={false}
+          showStop={true}
+          stopping={false}
+          actionsEnabled={true}
+          canSend={true}
+          onDraftChange={() => {}}
+          onSend={onSend}
+          onCancel={() => {}}
+          onAnswer={() => {}}
+          formValues={formDefaults}
+          onAnswerQuestion={onAnswerQuestion}
+          onConfigure={() => {}}
+          onDeleteQueued={async () => {}}
+          onRetryQueued={async () => {}}
+        />
+      </I18nProvider>
+    ));
+    expect(screen.getByRole("region", { name: "Agent question" })).toBeTruthy();
+    expect(screen.queryByRole("combobox", { name: "Message" })).toBeNull();
+    expect(screen.queryByText("notes.txt")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Add attachment" })).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: "Stop current task" }),
+    ).toBeNull();
+    expect(document.querySelectorAll("form")).toHaveLength(1);
+    await userEvent.click(screen.getByRole("button", { name: "Submit" }));
+    expect(onAnswerQuestion).toHaveBeenCalledExactlyOnceWith(
+      question,
+      "accept",
+    );
+    expect(onSend).not.toHaveBeenCalled();
+    setCurrent(readyThread());
+    const prompt = screen.getByRole("combobox", { name: "Message" });
+    expect(prompt).toHaveProperty("value", "keep this draft");
+    expect(screen.getByText("notes.txt")).toBeTruthy();
+    expect(screen.queryByRole("region", { name: "Agent question" })).toBeNull();
+    prompt.focus();
+    await userEvent.keyboard("{Enter}");
+    expect(onSend).toHaveBeenCalledOnce();
+    expect(onAnswerQuestion).toHaveBeenCalledTimes(1);
+  },
+);
+
+function requestNavigation() {
+  const first: ElicitationRequest = {
+    kind: "elicitation",
+    id: "first",
+    message: "First question",
+    toolCallId: null,
+    schema: {
+      properties: { answer: { type: "string", title: "Answer" } },
+      required: ["answer"],
+    },
+  };
+  const second: ElicitationRequest = {
+    ...first,
+    id: "second",
+    message: "Second question",
+  };
+  const permission: PendingInteraction = {
+    kind: "permission",
+    id: "permission",
+    toolCallId: "tool",
+    title: "Run checks?",
+    details: "pnpm validate",
+    options: [{ id: "allow", name: "Allow once" }],
+  };
+  const [current, setCurrent] = createSignal<Thread>({
+    ...readyThread(),
+    status: "waitingForInput",
+    pendingInteractions: [first, second, permission],
+  });
+  const [drafts, setDrafts] = createSignal<Record<string, FormValues>>({});
+  const [answerPending, setAnswerPending] = createSignal(false);
+  const [actionsEnabled, setActionsEnabled] = createSignal(true);
+  const onAnswerQuestion = vi.fn();
+  const onAnswer = vi.fn();
+  render(() => (
+    <I18nProvider>
+      <ThreadComposer
+        active={true}
+        thread={current()}
+        draft="keep this draft"
+        answerPending={answerPending()}
+        cancelPending={false}
+        showStop={true}
+        stopping={false}
+        actionsEnabled={actionsEnabled()}
+        canSend={false}
+        onDraftChange={() => {}}
+        onSend={() => {}}
+        onCancel={() => {}}
+        onAnswer={onAnswer}
+        formValues={(request) => drafts()[request.id] ?? {}}
+        onFormChange={(request, name, value) =>
+          setDrafts((previous) => ({
+            ...previous,
+            [request.id]: Object.fromEntries(
+              Object.entries({ ...previous[request.id], [name]: value }).filter(
+                ([, item]) => item !== undefined,
+              ),
+            ) as FormValues,
+          }))
+        }
+        onAnswerQuestion={onAnswerQuestion}
+        onConfigure={() => {}}
+        onDeleteQueued={async () => {}}
+        onRetryQueued={async () => {}}
+      />
+    </I18nProvider>
+  ));
+  return {
+    first,
+    second,
+    permission,
+    current,
+    setCurrent,
+    setAnswerPending,
+    setActionsEnabled,
+    onAnswerQuestion,
+    onAnswer,
+  };
+}
+
+it("navigates mixed requests, preserves question drafts and answers only the selected request", async () => {
+  const view = requestNavigation();
+  expect(screen.getByRole("status").textContent).toBe("1 / 3");
+  expect(
+    screen.getByRole("button", { name: "Previous request" }),
+  ).toHaveProperty("disabled", true);
+  const navigation = screen.getByRole("navigation", {
+    name: "Pending requests",
+  });
+  const close = screen.getByRole("button", { name: "Dismiss question" });
+  expect(
+    navigation.compareDocumentPosition(close) &
+      Node.DOCUMENT_POSITION_FOLLOWING,
+  ).toBeTruthy();
+  await userEvent.type(
+    screen.getByRole("textbox", { name: "Answer *" }),
+    "first draft",
+  );
+  screen.getByRole("button", { name: "Next request" }).focus();
+  await userEvent.keyboard("{Enter}");
+  expect(screen.getByRole("status").textContent).toBe("2 / 3");
+  expect(screen.getByText("Second question")).toBeTruthy();
+  await userEvent.type(
+    screen.getByRole("textbox", { name: "Answer *" }),
+    "second draft",
+  );
+  await userEvent.click(
+    screen.getByRole("button", { name: "Previous request" }),
+  );
+  expect(screen.getByRole("textbox", { name: "Answer *" })).toHaveProperty(
+    "value",
+    "first draft",
+  );
+  // An unanswered required field on another page must not block this page's response.
+  await userEvent.clear(screen.getByRole("textbox", { name: "Answer *" }));
+  await userEvent.click(screen.getByRole("button", { name: "Next request" }));
+  expect(screen.getByRole("textbox", { name: "Answer *" })).toHaveProperty(
+    "value",
+    "second draft",
+  );
+  await userEvent.click(screen.getByRole("button", { name: "Submit" }));
+  expect(view.onAnswerQuestion).toHaveBeenCalledExactlyOnceWith(
+    view.second,
+    "accept",
+  );
+  await userEvent.click(screen.getByRole("button", { name: "Next request" }));
+  expect(screen.getByRole("status").textContent).toBe("3 / 3");
+  expect(screen.getByRole("button", { name: "Next request" })).toHaveProperty(
+    "disabled",
+    true,
+  );
+  await userEvent.click(screen.getByRole("button", { name: "Allow once" }));
+  expect(view.onAnswer).toHaveBeenCalledExactlyOnceWith("permission", "allow");
+});
+
+it("keeps the selected request through list updates and recovers when requests resolve or the thread changes", async () => {
+  const view = requestNavigation();
+  await userEvent.click(screen.getByRole("button", { name: "Next request" }));
+  const extra = { ...view.first, id: "extra", message: "New question" };
+  view.setCurrent((current) => ({
+    ...current,
+    pendingInteractions: [extra, view.first, view.second, view.permission],
+  }));
+  expect(screen.getByRole("status").textContent).toBe("3 / 4");
+  expect(screen.getByText("Second question")).toBeTruthy();
+  view.setCurrent((current) => ({
+    ...current,
+    pendingInteractions: [extra, view.second, view.permission],
+  }));
+  expect(screen.getByRole("status").textContent).toBe("2 / 3");
+  view.setCurrent((current) => ({
+    ...current,
+    pendingInteractions: [extra, view.permission],
+  }));
+  expect(screen.getByRole("status").textContent).toBe("1 / 2");
+  expect(screen.getByText("New question")).toBeTruthy();
+  await userEvent.click(screen.getByRole("button", { name: "Next request" }));
+  view.setCurrent((current) => ({
+    ...current,
+    id: "other-thread",
+    pendingInteractions: [view.first, view.second, view.permission],
+  }));
+  expect(screen.getByRole("status").textContent).toBe("1 / 3");
+  view.setCurrent((current) => ({
+    ...current,
+    pendingInteractions: [view.second],
+  }));
+  expect(screen.getByText("Second question")).toBeTruthy();
+  expect(
+    screen.queryByRole("navigation", { name: "Pending requests" }),
+  ).toBeNull();
+  view.setCurrent((current) => ({
+    ...current,
+    pendingInteractions: [],
+    status: "sessionReady",
+  }));
+  expect(screen.getByRole("combobox", { name: "Message" })).toHaveProperty(
+    "value",
+    "keep this draft",
+  );
+});
+
+it("blocks request navigation while responding or without a live subscription", async () => {
+  const view = requestNavigation();
+  await userEvent.click(screen.getByRole("button", { name: "Next request" }));
+  view.setAnswerPending(true);
+  expect(
+    screen.getByRole("button", { name: "Previous request" }),
+  ).toHaveProperty("disabled", true);
+  expect(screen.getByRole("button", { name: "Next request" })).toHaveProperty(
+    "disabled",
+    true,
+  );
+  await userEvent.click(screen.getByRole("button", { name: "Next request" }));
+  expect(screen.getByRole("status").textContent).toBe("2 / 3");
+  view.setAnswerPending(false);
+  view.setActionsEnabled(false);
+  expect(
+    screen.getByRole("button", { name: "Previous request" }),
+  ).toHaveProperty("disabled", true);
+  expect(screen.getByRole("button", { name: "Next request" })).toHaveProperty(
+    "disabled",
+    true,
+  );
+  expect(view.onAnswerQuestion).not.toHaveBeenCalled();
+  expect(view.onAnswer).not.toHaveBeenCalled();
+});
+
 it.each(["light", "dark"])(
   "hides only displayed plan approval details in %s theme",
   (theme) => {
@@ -208,10 +513,11 @@ it.each(["light", "dark"])(
     const content = "# Greeting CLI\n- Add the command";
     const [thread, setThread] = createSignal<Thread>({
       ...readyThread(),
-      status: "waitingForApproval",
-      permissions: [
+      status: "waitingForInput",
+      pendingInteractions: [
         {
           id: "permission-plan",
+          kind: "permission" as const,
           toolCallId: "plan-review:document",
           title: "Implement this plan?",
           details: content,
@@ -322,7 +628,9 @@ it.each(["light", "dark"])(
 
     setThread((current) => ({
       ...current,
-      permissions: [{ ...current.permissions[0], planReview: null }],
+      pendingInteractions: [
+        { ...current.pendingInteractions[0], planReview: null },
+      ],
       turns: [
         {
           ...current.turns[0],
@@ -482,13 +790,14 @@ it("shows media choices only for advertised prompt capabilities", async () => {
 it("disables every thread mutation while the subscription is unavailable", () => {
   const current = {
     ...readyThread(),
-    status: "waitingForApproval" as const,
+    status: "waitingForInput" as const,
     turns: [
       { id: "turn", message: "hello", responseParts: [], stopReason: null },
     ],
-    permissions: [
+    pendingInteractions: [
       {
         id: "permission",
+        kind: "permission" as const,
         toolCallId: "tool-1",
         title: "Run command?",
         details: "pnpm test",
@@ -533,8 +842,8 @@ it("disables every thread mutation while the subscription is unavailable", () =>
     true,
   );
   expect(
-    screen.getByRole("button", { name: "Stop current task" }),
-  ).toHaveProperty("disabled", true);
+    screen.queryByRole("button", { name: "Stop current task" }),
+  ).toBeNull();
   expect(
     screen.getByRole("button", { name: /Delete queued message/ }),
   ).toHaveProperty("disabled", true);

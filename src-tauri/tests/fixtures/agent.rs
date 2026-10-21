@@ -1,5 +1,6 @@
 //! Deterministic ACP peer. Stdout contains only newline-delimited JSON-RPC.
 mod concurrent;
+mod elicitation;
 use serde_json::{json, Value};
 use std::{
     env, fs,
@@ -180,6 +181,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     } else {
         None
     };
+    if env::var("FIXTURE_MODE").is_ok_and(|mode| mode == "elicitation") {
+        elicitation::run()?;
+        return Ok(());
+    }
     let mut input = io::stdin().lock().lines();
     let mut output = io::stdout().lock();
     let mut sessions = 0;

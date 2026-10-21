@@ -51,7 +51,7 @@ fn initial_snapshots_do_not_replay_completion_or_approval() {
     let effects = policy.observe(
         vec![
             entry(1, ThreadStatus::SessionReady, Some(10)),
-            entry(2, ThreadStatus::WaitingForApproval, None),
+            entry(2, ThreadStatus::WaitingForInput, None),
         ],
         false,
     );
@@ -79,7 +79,7 @@ fn foreground_events_are_not_replayed_when_leaving_the_app() {
     assert!(shown(&policy.observe(
         vec![
             entry(1, ThreadStatus::SessionReady, Some(10)),
-            entry(2, ThreadStatus::WaitingForApproval, None)
+            entry(2, ThreadStatus::WaitingForInput, None)
         ],
         true
     ))
@@ -94,7 +94,7 @@ fn returning_only_confirms_the_open_thread_and_preserves_approval() {
     policy.observe(
         vec![
             entry(1, ThreadStatus::SessionReady, Some(10)),
-            entry(2, ThreadStatus::WaitingForApproval, None),
+            entry(2, ThreadStatus::WaitingForInput, None),
         ],
         false,
     );
@@ -144,7 +144,7 @@ fn settings_page_does_not_confirm_completions() {
 #[test]
 fn approval_notifies_once_per_waiting_episode() {
     let mut policy = policy();
-    let waiting = entry(1, ThreadStatus::WaitingForApproval, None);
+    let waiting = entry(1, ThreadStatus::WaitingForInput, None);
     assert_eq!(
         shown(&policy.observe(vec![waiting.clone()], false)).len(),
         1
@@ -159,7 +159,7 @@ fn completion_and_approval_count_the_same_thread_once() {
     let mut policy = policy();
     policy.observe(vec![entry(1, ThreadStatus::SessionReady, Some(10))], false);
     policy.observe(
-        vec![entry(1, ThreadStatus::WaitingForApproval, Some(10))],
+        vec![entry(1, ThreadStatus::WaitingForInput, Some(10))],
         false,
     );
     assert_eq!(policy.badge_count(), 1);
@@ -176,7 +176,7 @@ fn automatic_queued_continuation_only_notifies_at_the_end() {
     assert_eq!(policy.badge_count(), 0);
     assert_eq!(
         shown(&policy.observe(
-            vec![entry(1, ThreadStatus::WaitingForApproval, Some(10))],
+            vec![entry(1, ThreadStatus::WaitingForInput, Some(10))],
             false
         ))
         .len(),
@@ -198,10 +198,7 @@ fn cancellation_and_connection_failure_clear_approval_without_completion() {
         ThreadStatus::SessionReady,
     ] {
         let mut policy = policy();
-        policy.observe(
-            vec![entry(1, ThreadStatus::WaitingForApproval, None)],
-            false,
-        );
+        policy.observe(vec![entry(1, ThreadStatus::WaitingForInput, None)], false);
         let effects = policy.observe(vec![entry(1, status, None)], false);
         assert!(shown(&effects).is_empty());
         assert!(effects

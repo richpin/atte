@@ -13,6 +13,7 @@ import {
 } from "solid-js";
 import { createStore, reconcile } from "solid-js/store";
 import {
+  answerElicitation,
   answerPermission,
   cancelTurn,
   connectThread,
@@ -35,9 +36,12 @@ import {
   subscribeThreadList,
   type WorkingMode,
 } from "../api/threads";
+import { formAnswer, formDefaults } from "./elicitation";
 import type {
   Attachment,
   ConnectionFailure,
+  ElicitationRequest,
+  FormValues,
   MediaKind,
   Thread,
   ThreadConfigurationValue,
@@ -188,13 +192,16 @@ export function createThreadModel(
   const cancelPending = () => Boolean(cancellingTurnId());
   const activeTurnId = () => thread()?.turns?.at(-1)?.id;
   const streamingTurnId = () =>
-    ["running", "waitingForApproval", "cancelling"].includes(
+    ["running", "waitingForInput", "cancelling"].includes(
       thread()?.status ?? "",
     )
       ? activeTurnId()
       : undefined;
   const canCancel = () =>
-    ["running", "waitingForApproval"].includes(thread()?.status ?? "");
+    thread()?.status === "running" ||
+    (thread()?.status === "waitingForInput" &&
+      !connecting() &&
+      thread()?.turns.at(-1)?.stopReason === null);
   const showStop = () => canCancel() || thread()?.status === "cancelling";
   const stopping = () => cancelPending() || thread()?.status === "cancelling";
   const [subscriptionError, setSubscriptionError] = createSignal(false);
@@ -274,9 +281,7 @@ export function createThreadModel(
     updatedThread: Pick<Thread, "id" | "status" | "promptCapabilities">,
   ) {
     if (
-      !["sessionReady", "running", "waitingForApproval", "cancelling"].includes(
-        updatedThread.status,
-      )
+      !["sessionReady", "running", "cancelling"].includes(updatedThread.status)
     )
       return;
     const attachments = draftAttachmentState[updatedThread.id] ?? [];
@@ -718,6 +723,84 @@ export function createThreadModel(
     }
   }
 
+  const [formDrafts, setFormDrafts] = createStore<
+    Record<string, FormValues | undefined>
+  >({});
+  const [formErrors, setFormErrors] = createStore<
+    Record<string, Record<string, string> | undefined>
+  >({});
+  const formKey = (request: ElicitationRequest) =>
+    `${selectedThreadId()}:${request.id}`;
+  const formDraft = (request: ElicitationRequest) =>
+    formDrafts[formKey(request)] ?? formDefaults(request);
+  const questionErrors = (request: ElicitationRequest) =>
+    formErrors[formKey(request)] ?? {};
+  function changeForm(
+    request: ElicitationRequest,
+    name: string,
+    value: FormValues[string] | undefined,
+  ) {
+    const next = {
+      ...formDraft(request),
+      ...(value === undefined ? {} : { [name]: value }),
+    };
+    if (value === undefined) delete next[name];
+    setFormDrafts(formKey(request), reconcile(next));
+    setFormErrors(formKey(request), undefined);
+  }
+  createEffect(() => {
+    const current = thread();
+    if (!current) return;
+    const live = new Set(
+      (current.pendingInteractions ?? []).map(
+        (item) => `${current.id}:${item.id}`,
+      ),
+    );
+    for (const key of new Set([
+      ...Object.keys(formDrafts),
+      ...Object.keys(formErrors),
+    ])) {
+      if (key.startsWith(`${current.id}:`) && !live.has(key)) {
+        setFormDrafts(key, undefined);
+        setFormErrors(key, undefined);
+      }
+    }
+  });
+  async function answerQuestion(
+    request: ElicitationRequest,
+    action: "accept" | "decline" | "cancel",
+  ) {
+    const current = thread();
+    if (!current || !actionsEnabled() || answerPending() || cancelPending())
+      return;
+    const key = formKey(request);
+    const expectedView = view;
+    setAnsweringPermissionId(request.id);
+    setFormErrors(key, undefined);
+    try {
+      await answerElicitation(
+        current.id,
+        request.id,
+        action === "accept"
+          ? formAnswer(request, formDraft(request))
+          : { action },
+      );
+    } catch (cause) {
+      if (
+        typeof cause === "object" &&
+        cause !== null &&
+        "code" in cause &&
+        cause.code === "invalidForm" &&
+        "message" in cause
+      ) {
+        setFormErrors(key, cause.message as Record<string, string>);
+      } else if (isCurrent(expectedView))
+        setError(localizedMessage(cause, "thread.error.answerPermission"));
+    } finally {
+      if (isCurrent(expectedView)) setAnsweringPermissionId(undefined);
+    }
+  }
+
   async function answer(request: string, option: string) {
     const expectedView = view;
     const current = thread();
@@ -880,6 +963,15 @@ export function createThreadModel(
     await deleteThreadCommand(id);
     if (attachments.length)
       void releaseFiles(attachments).catch(() => undefined);
+    for (const key of new Set([
+      ...Object.keys(formDrafts),
+      ...Object.keys(formErrors),
+    ])) {
+      if (key.startsWith(`${id}:`)) {
+        setFormDrafts(key, undefined);
+        setFormErrors(key, undefined);
+      }
+    }
     deleted.add(id);
     setSubscriptionFailures(id, undefined);
     setThreadDraft(id, "");
@@ -939,6 +1031,10 @@ export function createThreadModel(
     deleteQueued,
     retryQueued,
     answer,
+    answerQuestion,
+    formDraft,
+    questionErrors,
+    changeForm,
     cancel,
     configure,
     connect,
