@@ -131,7 +131,7 @@ function stream(id: string, index = (streams.get(id)?.length ?? 1) - 1) {
   return receive;
 }
 
-function setup(notifyError?: (message: string) => void) {
+function setup(notifyError?: (message: string, description?: string) => void) {
   return createRoot((cleanup) => {
     dispose = cleanup;
     const queryClient = new QueryClient({
@@ -1189,6 +1189,73 @@ it("toasts each request failure event once without changing the thread failure",
     ],
   });
   expect(notify).toHaveBeenCalledTimes(2);
+});
+
+it("passes ACP messages to request and configuration toasts without translating them", async () => {
+  const notify = vi.fn();
+  const model = setup(notify);
+  await open(model, "A");
+  const raw = "메시지 실행에 실패했습니다. 다시 시도해주세요.\n<agent-detail>";
+  stream("A")({
+    kind: "patch",
+    thread: thread("A"),
+    turnUpdates: [],
+    errors: [
+      {
+        id: "prompt-raw",
+        message: "메시지 실행에 실패했습니다. 다시 시도해주세요.",
+        operation: "prompt",
+        acpError: { code: -32603, message: raw, data: null },
+      },
+    ],
+  });
+  stream("A")({
+    kind: "patch",
+    thread: thread("A"),
+    turnUpdates: [],
+    errors: [
+      {
+        id: "config-raw",
+        message: "스레드 설정을 변경할 수 없습니다.",
+        operation: "configuration",
+        acpError: { code: -32603, message: raw, data: null },
+      },
+    ],
+  });
+  stream("A")({
+    kind: "patch",
+    thread: thread("A"),
+    turnUpdates: [],
+    errors: [
+      {
+        id: "inherited-config-raw",
+        message:
+          "일부 최근 설정을 적용하지 못했습니다. 스레드 설정을 확인해주세요.",
+        operation: "configurationInheritance",
+        acpError: { code: -32603, message: raw, data: null },
+      },
+    ],
+  });
+  expect(notify.mock.calls).toEqual([
+    [
+      expect.stringMatching(
+        /메시지를 처리하지 못했습니다|The message could not be processed/,
+      ),
+      raw,
+    ],
+    [
+      expect.stringMatching(
+        /스레드 설정을 변경할 수 없습니다|The thread setting could not be changed/,
+      ),
+      raw,
+    ],
+    [
+      expect.stringMatching(
+        /일부 최근 설정을 적용하지 못했습니다|Some recent settings could not be applied/,
+      ),
+      raw,
+    ],
+  ]);
 });
 
 it("toasts a rejected send command without adding a thread failure", async () => {

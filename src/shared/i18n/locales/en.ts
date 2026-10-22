@@ -281,6 +281,8 @@ export const en = {
       create: "The new thread could not be created.",
       agents: "Ready agents could not be loaded.",
       configure: "The thread setting could not be changed.",
+      configurationInheritance: "Some recent settings could not be applied.",
+      requestExecution: "The message could not be processed.",
     },
     openSidebar: "Open sidebar",
     newWorktree: "New worktree",

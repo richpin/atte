@@ -11,6 +11,12 @@ export type ConnectionFailure =
   | "resumptionUnsupported"
   | "sessionRestorationFailed";
 
+export interface AcpError {
+  code: number;
+  message: string;
+  data: unknown | null;
+}
+
 export interface AvailableCommand {
   name: string;
   description: string;
@@ -44,6 +50,7 @@ export interface Thread {
   sessionId: string | null;
   authentication: "unknown" | "required" | "authenticated";
   failure: ConnectionFailure | null;
+  failureDetail?: AcpError | null;
   completedTurnId: string | null;
   turns: Turn[];
   notice: string | null;
@@ -281,6 +288,12 @@ export type ThreadUpdate =
         id: string;
         failure?: ConnectionFailure | null;
         message?: string | null;
+        acpError?: AcpError | null;
+        operation?:
+          | "prompt"
+          | "configuration"
+          | "configurationInheritance"
+          | null;
       }[];
     }
   | {

@@ -4,7 +4,7 @@ import { onCleanup, onMount } from "solid-js";
 import { Portal } from "solid-js/web";
 import { useI18n } from "../i18n";
 
-export function showErrorToast(message: string) {
+export function showErrorToast(message: string, description?: string) {
   toaster.show((props) => (
     <Toast
       toastId={props.toastId}
@@ -12,7 +12,14 @@ export function showErrorToast(message: string) {
       role="alert"
       class="pointer-events-auto flex items-start gap-3 rounded-xl border border-line bg-menu p-4 text-sm text-ink shadow-lg"
     >
-      <Toast.Title class="min-w-0 flex-1 break-words">{message}</Toast.Title>
+      <div class="min-w-0 flex-1">
+        <Toast.Title class="break-words">{message}</Toast.Title>
+        {description?.trim() && (
+          <Toast.Description class="mt-1 max-h-48 overflow-y-auto whitespace-pre-wrap break-words text-muted">
+            {description}
+          </Toast.Description>
+        )}
+      </div>
       <ErrorToastCloseButton />
     </Toast>
   ));

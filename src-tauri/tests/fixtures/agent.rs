@@ -225,7 +225,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     process::exit(12);
                 }
                 if mode == "init-error" {
-                    error = Some(json!({"code": -32603, "message": "initialize rejected"}));
+                    error = Some(
+                        json!({"code": -32603, "message": "initialize rejected", "data": {"source": "fixture"}}),
+                    );
                 }
                 let mut agent_capabilities = if mode == "resume-only" {
                     json!({"sessionCapabilities":{"resume":{}}})
@@ -288,7 +290,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     error = Some(json!({"code": -32000, "message": "Authentication required"}));
                 }
                 if mode == "session-error" {
-                    error = Some(json!({"code": -32603, "message": "session rejected"}));
+                    error = Some(
+                        json!({"code": -32603, "message": "session rejected", "data": {"source": "fixture"}}),
+                    );
                 }
                 if mode == "permission" {
                     send(
@@ -411,7 +415,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         &request["params"]["value"],
                     );
                     if env::var("CONFIGURATION_FAIL_CONFIG").as_deref() == Ok(config_id) {
-                        error = Some(json!({"code": -32603, "message": "configuration rejected"}));
+                        error = Some(
+                            json!({"code": -32603, "message": "configuration rejected", "data": {"source": "fixture"}}),
+                        );
                     }
                     json!({"configOptions": current_configuration.clone()})
                 } else {
@@ -843,7 +849,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     error = Some(json!({"code": -32000, "message": "Authentication required"}));
                 }
                 if mode == "prompt-error" || (mode == "queued-prompt-error-once" && prompts == 2) {
-                    error = Some(json!({"code": -32603, "message": "Prompt failed"}));
+                    error = Some(
+                        json!({"code": -32603, "message": "Prompt failed", "data": {"source": "fixture"}}),
+                    );
                 }
                 json!({"stopReason": if matches!(mode.as_str(), "refusal" | "max_tokens" | "max_turn_requests") { mode.as_str() } else { "end_turn" }})
             }

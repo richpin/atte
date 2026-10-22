@@ -374,6 +374,11 @@ export function ThreadPage(props: {
                 ?.name ?? current().agentId
             }
             state={authentication.state(current().agentId)}
+            failureDetail={
+              current().failure === "authenticationRequired"
+                ? current().failureDetail?.message
+                : null
+            }
             reconnectFailed={
               !connecting() &&
               (authenticationReconnect.blockedByThread[current().id] !==

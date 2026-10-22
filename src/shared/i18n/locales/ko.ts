@@ -289,6 +289,8 @@ export const ko = {
       create: "새 스레드를 만들 수 없습니다.",
       agents: "준비된 에이전트를 불러올 수 없습니다.",
       configure: "스레드 설정을 변경할 수 없습니다.",
+      configurationInheritance: "일부 최근 설정을 적용하지 못했습니다.",
+      requestExecution: "메시지를 처리하지 못했습니다.",
     },
     openSidebar: "사이드바 열기",
     newWorktree: "새 worktree",

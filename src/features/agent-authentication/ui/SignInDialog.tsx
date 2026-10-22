@@ -16,6 +16,7 @@ export function SignInDialog(props: {
   agentName: string;
   state: AgentAuthenticationState;
   reconnectFailed: boolean;
+  failureDetail?: string | null;
   onReconnect: () => void;
   onClosed: () => void;
   onRetry: () => void;
@@ -59,6 +60,11 @@ export function SignInDialog(props: {
         <DialogDescription class="text-muted">
           {t("thread.authentication.choose")}
         </DialogDescription>
+        <Show when={props.failureDetail?.trim()}>
+          <p class="max-h-48 overflow-y-auto whitespace-pre-wrap break-words text-sm text-danger">
+            {props.failureDetail}
+          </p>
+        </Show>
         <Switch>
           <Match
             when={

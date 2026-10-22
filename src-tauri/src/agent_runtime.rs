@@ -9,10 +9,10 @@ use crate::{
         supports_auth_status, AuthStatus, AuthStatusUpdate, AuthenticationObservation,
     },
     thread::{
-        Attachment, AttachmentKind, ConfigurationChange, ConnectionFailure, PermissionOption,
-        PermissionRequest, Prompt, RuntimeUpdates, ThreadConfiguration, ThreadConfigurationChoice,
-        ThreadConfigurationControl, ThreadConfigurationGroup, ThreadConfigurationSelectOptions,
-        ThreadConfigurationValue, ThreadError,
+        AcpError, Attachment, AttachmentKind, ConfigurationChange, ConnectionFailure,
+        PermissionOption, PermissionRequest, Prompt, RuntimeUpdates, ThreadConfiguration,
+        ThreadConfigurationChoice, ThreadConfigurationControl, ThreadConfigurationGroup,
+        ThreadConfigurationSelectOptions, ThreadConfigurationValue,
     },
 };
 use agent_client_protocol::{
@@ -326,7 +326,14 @@ pub(crate) async fn run(
             let initialized = match elicitation::timeout(sent.block_task(), || initial_updates.as_ref().is_some_and(RuntimeUpdates::waiting_for_input)).await {
                 Ok(Ok(initialized)) if initialized.protocol_version == ProtocolVersion::V1 => initialized,
                 Ok(Ok(_)) => return Ok(ConnectionFailure::InitializationFailed),
-                Ok(Err(error)) => return Ok(classify(error, ConnectionFailure::InitializationFailed)),
+                Ok(Err(error)) => {
+                    if !is_transport_closed(&error) {
+                        if let Some(updates) = &initial_updates {
+                            updates.remember_acp_failure(error.clone().into());
+                        }
+                    }
+                    return Ok(classify(error, ConnectionFailure::InitializationFailed));
+                }
                 Err(_) => return Ok(ConnectionFailure::TimedOut),
             };
             drop(_initial_lease);
@@ -517,17 +524,18 @@ fn record_auth_status(
 }
 
 enum PromptFailure {
-    Request,
+    Request(Option<AcpError>),
     Connection(ConnectionFailure),
 }
 
-fn classify_prompt(error: agent_client_protocol::Error) -> PromptFailure {
-    if agent_client_protocol::is_incoming_transport_closed(&error) {
+fn classify_prompt(error: agent_client_protocol::Error, updates: &RuntimeUpdates) -> PromptFailure {
+    if is_transport_closed(&error) {
         PromptFailure::Connection(ConnectionFailure::ConnectionClosed)
     } else if error.code == ErrorCode::AuthRequired {
+        updates.remember_acp_failure(error.into());
         PromptFailure::Connection(ConnectionFailure::AuthenticationRequired)
     } else {
-        PromptFailure::Request
+        PromptFailure::Request(Some(error.into()))
     }
 }
 
@@ -539,7 +547,9 @@ fn report_prompt_failure(
     queued_message: Option<uuid::Uuid>,
 ) {
     match failure {
-        PromptFailure::Request => updates.request_failed(turn, input, queued_message),
+        PromptFailure::Request(error) => {
+            updates.request_failed(turn, input, queued_message, error.clone())
+        }
         PromptFailure::Connection(_) => {
             // connection_failed restores queued input together with the failed connection state.
             if queued_message.is_none() {
@@ -578,7 +588,13 @@ async fn run_session(
                     updates,
                 )
                 .await
-                .map_err(|error| classify(error, ConnectionFailure::SessionRestorationFailed))?;
+                .map_err(|error| {
+                    classify_and_remember(
+                        error,
+                        ConnectionFailure::SessionRestorationFailed,
+                        updates,
+                    )
+                })?;
                 let history = routes
                     .lock()
                     .ok()
@@ -594,7 +610,13 @@ async fn run_session(
                     updates,
                 )
                 .await
-                .map_err(|error| classify(error, ConnectionFailure::SessionRestorationFailed))?;
+                .map_err(|error| {
+                    classify_and_remember(
+                        error,
+                        ConnectionFailure::SessionRestorationFailed,
+                        updates,
+                    )
+                })?;
                 if let Ok(mut routes) = routes.lock() {
                     if let Some(route) = routes.get_mut(id) {
                         route.replay = None;
@@ -616,7 +638,9 @@ async fn run_session(
                 updates,
             )
             .await
-            .map_err(|error| classify(error, ConnectionFailure::SessionCreationFailed))?;
+            .map_err(|error| {
+                classify_and_remember(error, ConnectionFailure::SessionCreationFailed, updates)
+            })?;
             if let Ok(mut routes) = routes.lock() {
                 routes.insert(
                     response.session_id.to_string(),
@@ -662,7 +686,10 @@ async fn run_session(
                 .await
                 {
                     Ok(response) => configuration = thread_configuration(response.config_options),
-                    Err(_) => updates.configuration_inheritance_failed(),
+                    Err(error) if is_transport_closed(&error) => {
+                        return Err(ConnectionFailure::ConnectionClosed);
+                    }
+                    Err(error) => updates.configuration_inheritance_failed(error.into()),
                 }
             }
             Ok((remote, configuration))
@@ -740,7 +767,7 @@ async fn run_session(
             let completed = match result {
                 Ok(response) => Ok(turn_updates.complete_turn(prompt_turn, response.stop_reason)),
                 Err(error) => {
-                    let failure = classify_prompt(error);
+                    let failure = classify_prompt(error, &turn_updates);
                     report_prompt_failure(
                         &turn_updates,
                         &failure,
@@ -754,7 +781,7 @@ async fn run_session(
             let _ = finished.send(completed);
             Ok(())
         }) {
-            let failure = classify_prompt(error);
+            let failure = classify_prompt(error, updates);
             report_prompt_failure(updates, &failure, prompt_turn, prompt_input, queued_message);
             if let Ok(mut routes) = routes.lock() {
                 if let Some(route) = routes.get_mut(&remote.to_string()) {
@@ -762,7 +789,7 @@ async fn run_session(
                 }
             }
             match failure {
-                PromptFailure::Request => continue,
+                PromptFailure::Request(_) => continue,
                 PromptFailure::Connection(failure) => return failure,
             }
         }
@@ -776,7 +803,7 @@ async fn run_session(
                 result = &mut completion => {
                     match result {
                         Ok(Ok(next)) => next_prompt = next,
-                        Ok(Err(PromptFailure::Request)) => {}
+                        Ok(Err(PromptFailure::Request(_))) => {}
                         Ok(Err(PromptFailure::Connection(failure))) => return failure,
                         Err(_) => return ConnectionFailure::ConnectionClosed,
                     }
@@ -784,7 +811,7 @@ async fn run_session(
                 }
                 Some(turn) = session.cancellations.recv() => {
                     if turn == prompt_turn {
-                        if let Err(error) = connection.send_notification(CancelNotification::new(remote.clone())) { return classify(error, ConnectionFailure::ConnectionClosed); }
+                        if let Err(error) = connection.send_notification(CancelNotification::new(remote.clone())) { return classify_and_remember(error, ConnectionFailure::ConnectionClosed, updates); }
                     }
                 }
                 failure = &mut configuration_changes => return failure,
@@ -806,16 +833,19 @@ fn prompt_content(
         content.push(match attachment.kind {
             AttachmentKind::File => ContentBlock::ResourceLink(ResourceLink::new(
                 attachment.name.clone(),
-                attachment.uri.clone().ok_or(PromptFailure::Request)?,
+                attachment.uri.clone().ok_or(PromptFailure::Request(None))?,
             )),
             AttachmentKind::Image => ContentBlock::Image(
                 ImageContent::new(
                     BASE64.encode(
                         updates
                             .media_bytes(attachment.id)
-                            .map_err(|_| PromptFailure::Request)?,
+                            .map_err(|_| PromptFailure::Request(None))?,
                     ),
-                    attachment.mime_type.clone().ok_or(PromptFailure::Request)?,
+                    attachment
+                        .mime_type
+                        .clone()
+                        .ok_or(PromptFailure::Request(None))?,
                 )
                 .meta(attachment_meta(attachment)),
             ),
@@ -824,9 +854,12 @@ fn prompt_content(
                     BASE64.encode(
                         updates
                             .media_bytes(attachment.id)
-                            .map_err(|_| PromptFailure::Request)?,
+                            .map_err(|_| PromptFailure::Request(None))?,
                     ),
-                    attachment.mime_type.clone().ok_or(PromptFailure::Request)?,
+                    attachment
+                        .mime_type
+                        .clone()
+                        .ok_or(PromptFailure::Request(None))?,
                 )
                 .meta(attachment_meta(attachment)),
             ),
@@ -890,21 +923,17 @@ async fn run_configuration_changes(
                     );
                     Ok(())
                 }
-                Err(_) => {
-                    if result_updates.configuration_failed(request_id, &config_id) {
-                        Err(ThreadError::NotReady(
-                            "스레드 설정을 변경할 수 없습니다.".into(),
-                        ))
-                    } else {
-                        Ok(())
-                    }
+                Err(error) if is_transport_closed(&error) => Ok(()),
+                Err(error) => {
+                    result_updates.configuration_failed(request_id, &config_id, error.into());
+                    Ok(())
                 }
             };
             let _ = change.complete.send(completion);
             let _ = finished.send(());
             Ok(())
         }) {
-            return classify(error, ConnectionFailure::ConnectionClosed);
+            return classify_and_remember(error, ConnectionFailure::ConnectionClosed, &updates);
         }
         loop {
             tokio::select! {
@@ -1022,11 +1051,28 @@ struct ActiveTurn {
 }
 
 fn classify(error: agent_client_protocol::Error, fallback: ConnectionFailure) -> ConnectionFailure {
-    if agent_client_protocol::is_incoming_transport_closed(&error) {
+    if is_transport_closed(&error) {
         ConnectionFailure::ConnectionClosed
     } else if error.code == ErrorCode::AuthRequired {
         ConnectionFailure::AuthenticationRequired
     } else {
         fallback
     }
+}
+
+fn classify_and_remember(
+    error: agent_client_protocol::Error,
+    fallback: ConnectionFailure,
+    updates: &RuntimeUpdates,
+) -> ConnectionFailure {
+    if !is_transport_closed(&error) {
+        updates.remember_acp_failure(error.clone().into());
+    }
+    classify(error, fallback)
+}
+
+fn is_transport_closed(error: &agent_client_protocol::Error) -> bool {
+    agent_client_protocol::is_incoming_transport_closed(error)
+        // SDK 2.1.0 constructs this local error without retaining its reason data.
+        || (error.code == ErrorCode::InternalError && error.message == "Incoming transport closed")
 }

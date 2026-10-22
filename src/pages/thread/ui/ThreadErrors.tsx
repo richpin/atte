@@ -44,6 +44,16 @@ export function ThreadErrors(props: {
         <CircleAlert aria-hidden="true" class="mt-0.5 size-4 shrink-0" />
         <div class="min-w-0 flex-1 space-y-1 break-words">
           <For each={messages()}>{(message) => <p>{message}</p>}</For>
+          <Show
+            when={
+              props.thread?.failure &&
+              props.thread.failureDetail?.message.trim()
+            }
+          >
+            <p class="max-h-48 overflow-y-auto whitespace-pre-wrap break-words">
+              {props.thread?.failureDetail?.message}
+            </p>
+          </Show>
         </div>
         <Show
           when={needsManagement()}

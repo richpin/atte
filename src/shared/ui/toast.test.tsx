@@ -27,6 +27,18 @@ it("announces a notification and provides a localized dismiss control", () => {
   expect(screen.queryByRole("alert")).toBeNull();
 });
 
+it("renders ACP detail literally and omits empty descriptions", () => {
+  mount("ko");
+  const raw = "first line\n<img src=x onerror=alert(1)>";
+  showErrorToast("메시지 오류", raw);
+  const alert = screen.getByRole("alert");
+  expect(alert.textContent).toContain(raw);
+  expect(alert.querySelector("img")).toBeNull();
+  expect(alert.querySelector("[class*='whitespace-pre-wrap']")).toBeTruthy();
+  showErrorToast("설정 오류", "  ");
+  expect(screen.getAllByRole("alert")[1].textContent).toBe("설정 오류");
+});
+
 it("automatically closes after five seconds and pauses while interacting", async () => {
   vi.useFakeTimers();
   mount("en");

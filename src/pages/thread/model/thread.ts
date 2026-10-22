@@ -65,7 +65,7 @@ function sortThreads(entries: ThreadMetadata[]) {
 /** Owns synchronization for one thread view; call inside a Solid owner. */
 export function createThreadModel(
   queryClient?: QueryClient,
-  notifyError: (message: string) => void = () => {},
+  notifyError: (message: string, description?: string) => void = () => {},
 ) {
   const { message: localizedMessage, t, content } = useI18n();
   const client = useQueryClient(queryClient);
@@ -76,6 +76,10 @@ export function createThreadModel(
   >({});
   const [selectedThreadId, setSelectedThreadId] = createSignal<string>();
   const [error, setErrorState] = createSignal<string>();
+  function notifyWithDescription(message: string, description?: string) {
+    if (description?.trim()) notifyError(message, description);
+    else notifyError(message);
+  }
   function setError(message: string | undefined, notify = true) {
     setErrorState(message);
     if (message && notify) notifyError(message);
@@ -431,11 +435,24 @@ export function createThreadModel(
         observedErrors.add(error.id);
         if (error.failure) {
           const persistent = error.failure === update.thread.failure;
-          if (!persistent) notifyError(t(failureKeys[error.failure]));
+          if (!persistent)
+            notifyWithDescription(
+              t(failureKeys[error.failure]),
+              error.acpError?.message,
+            );
           if (connecting()) connectionFailureReceived = true;
         } else if (error.message) {
           if (error.message !== update.thread.storageError)
-            notifyError(content(error.message) ?? error.message);
+            notifyWithDescription(
+              error.operation === "configuration"
+                ? t("thread.error.configure")
+                : error.operation === "configurationInheritance"
+                  ? t("thread.error.configurationInheritance")
+                  : error.operation === "prompt"
+                    ? t("thread.error.requestExecution")
+                    : (content(error.message) ?? error.message),
+              error.acpError?.message,
+            );
         }
       }
       updateThreadInList(update.thread);

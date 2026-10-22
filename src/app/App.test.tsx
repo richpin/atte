@@ -2209,6 +2209,11 @@ it("automatically blocks the thread with sign-in while preserving the composer",
     status: "failed",
     authentication: "required",
     failure: "authenticationRequired",
+    failureDetail: {
+      code: -32000,
+      message: "Sign in with your agent account",
+      data: null,
+    },
     sessionId: null,
     createdAt: 1,
     updatedAt: 1,
@@ -2238,6 +2243,7 @@ it("automatically blocks the thread with sign-in while preserving the composer",
   expect(
     await screen.findByRole("dialog", { name: "Codex 로그인" }),
   ).toBeTruthy();
+  expect(screen.getByText("Sign in with your agent account")).toBeTruthy();
   expect(screen.queryByRole("button", { name: "Sign in" })).toBeNull();
   expect(screen.getByRole("textbox", { hidden: true })).toBeTruthy();
   expect(
@@ -4701,11 +4707,17 @@ it.each([
   {
     status: "failed",
     failure: "processExited",
+    failureDetail: {
+      code: -32603,
+      message: "Agent exited after setup",
+      data: null,
+    },
     message: "에이전트 프로세스가 종료되었습니다.",
   },
   {
     status: "sessionReady",
     storageError: "Thread storage unavailable",
+    failureDetail: null,
     message: "Thread storage unavailable",
   },
 ])(
@@ -4744,6 +4756,8 @@ it.each([
     expect(
       (await screen.findByRole("status", { name: "스레드 오류" })).textContent,
     ).toContain(error.message);
+    if (error.failureDetail)
+      expect(screen.getByText(error.failureDetail.message)).toBeTruthy();
 
     await userEvent.click(getSidebarThreadButton(second.title));
     await waitFor(() =>
@@ -4753,6 +4767,8 @@ it.each([
     expect(
       (await screen.findByRole("status", { name: "스레드 오류" })).textContent,
     ).toContain(error.message);
+    if (error.failureDetail)
+      expect(screen.getByText(error.failureDetail.message)).toBeTruthy();
     expect(screen.queryByRole("alert")).toBeNull();
 
     if (first.failure) {
@@ -4768,6 +4784,7 @@ it.each([
         ...first,
         status: "sessionReady",
         failure: null,
+        failureDetail: null,
         storageError: null,
       },
       turnUpdates: [],

@@ -52,6 +52,8 @@ pub struct Thread {
     /// Connection success is not proof of authentication.
     pub authentication: AuthenticationStatus,
     pub failure: Option<ConnectionFailure>,
+    /// ACP detail for the current connection failure; never persisted.
+    pub failure_detail: Option<AcpError>,
     /// Last normally completed response in this app run; never persisted.
     pub completed_turn_id: Option<Uuid>,
     pub turns: Vec<Turn>,
@@ -71,6 +73,7 @@ pub struct ThreadPatch {
     #[serde(flatten)]
     pub metadata: ThreadMetadata,
     pub storage_error: Option<String>,
+    pub failure_detail: Option<AcpError>,
     pub authentication: AuthenticationStatus,
     pub notice: Option<String>,
     pub pending_interactions: Vec<PendingInteraction>,
@@ -86,6 +89,7 @@ impl From<&Thread> for ThreadPatch {
         Self {
             metadata: thread.metadata(),
             storage_error: thread.storage_error.clone(),
+            failure_detail: thread.failure_detail.clone(),
             authentication: thread.authentication.clone(),
             notice: thread.notice.clone(),
             pending_interactions: thread.pending_interactions.clone(),
@@ -132,6 +136,7 @@ impl ThreadPatch {
         thread.completed_turn_id = completed_turn_id;
         thread.interrupted = interrupted;
         thread.storage_error = self.storage_error;
+        thread.failure_detail = self.failure_detail;
         thread.authentication = self.authentication;
         thread.notice = self.notice;
         thread.pending_interactions = self.pending_interactions;
@@ -774,6 +779,7 @@ impl Threads {
                 },
                 authentication: AuthenticationStatus::Unknown,
                 failure: saved.failure,
+                failure_detail: None,
                 completed_turn_id: None,
                 turns: Vec::new(),
                 notice: None,
@@ -791,6 +797,7 @@ impl Threads {
                         list: list.clone(),
                         use_prompt_title: last_prompt_at.is_none(),
                         published_failure: thread.failure.clone(),
+                        pending_failure_detail: None,
                         pending_errors: Vec::new(),
                         thread,
                         confirmed_configuration: Vec::new(),
@@ -1194,6 +1201,8 @@ impl Threads {
                 current.thread.status = ThreadStatus::Failed;
                 current.clear_configuration();
                 current.thread.failure = Some(ConnectionFailure::AgentRemoved);
+                current.thread.failure_detail = None;
+                current.pending_failure_detail = None;
                 current.thread.authentication = AuthenticationStatus::Unknown;
                 current.clear_interactions();
                 if let Some(turn) = current
@@ -1342,6 +1351,7 @@ impl Threads {
             session_id: None,
             authentication: AuthenticationStatus::Unknown,
             failure: None,
+            failure_detail: None,
             completed_turn_id: None,
             turns: Vec::new(),
             notice: None,
@@ -1375,6 +1385,7 @@ impl Threads {
                     use_prompt_title: true,
                     thread: draft.clone(),
                     published_failure: None,
+                    pending_failure_detail: None,
                     pending_errors: Vec::new(),
                     confirmed_configuration: Vec::new(),
                     desired_configuration: HashMap::new(),
@@ -1749,6 +1760,8 @@ impl Threads {
             {
                 current.thread.status = ThreadStatus::Failed;
                 current.thread.failure = Some(ConnectionFailure::AgentRemoved);
+                current.thread.failure_detail = None;
+                current.pending_failure_detail = None;
                 current.publish();
             }
             return Err(ThreadError::NotReady(
@@ -1765,6 +1778,8 @@ impl Threads {
         thread.status = ThreadStatus::Connecting;
         thread.authentication = AuthenticationStatus::Unknown;
         thread.failure = None;
+        thread.failure_detail = None;
+        current.pending_failure_detail = None;
         thread.configuration.clear();
         if recreate {
             if let Some(store) = &current.store {
@@ -1830,6 +1845,7 @@ impl Threads {
             session.updates.modify(|thread| {
                 thread.status = ThreadStatus::Failed;
                 thread.failure = Some(ConnectionFailure::ConnectionClosed);
+                thread.failure_detail = None;
             });
             return Err(unavailable());
         }
@@ -1961,6 +1977,7 @@ impl Threads {
         }
         current.thread.status = ThreadStatus::Running;
         current.thread.failure = None;
+        current.thread.failure_detail = None;
         current.thread.interrupted = false;
         current.apply_first_prompt_title(&input);
         current.thread.turns.push(Turn {
@@ -2537,6 +2554,7 @@ struct ThreadState {
     dispatch_queue_on_ready: bool,
     dispatching_queued: Option<QueuedMessage>,
     published_failure: Option<ConnectionFailure>,
+    pending_failure_detail: Option<AcpError>,
     pending_errors: Vec<ThreadErrorNotification>,
     published_turn_count: usize,
     published_last_turn: Option<(Uuid, Option<String>)>,
@@ -2600,6 +2618,8 @@ impl ThreadState {
             id: Uuid::new_v4(),
             failure: None,
             message: Some(message),
+            acp_error: None,
+            operation: None,
         });
     }
 
@@ -2899,6 +2919,8 @@ impl ThreadState {
                     id: Uuid::new_v4(),
                     failure: Some(failure.clone()),
                     message: None,
+                    acp_error: self.thread.failure_detail.clone(),
+                    operation: None,
                 });
             }
             self.published_failure = self.thread.failure.clone();
@@ -2909,6 +2931,8 @@ impl ThreadState {
                     id: Uuid::new_v4(),
                     failure: None,
                     message: Some(message.clone()),
+                    acp_error: None,
+                    operation: None,
                 });
             }
         }
@@ -3020,6 +3044,35 @@ pub struct ThreadErrorNotification {
     pub id: Uuid,
     pub failure: Option<ConnectionFailure>,
     pub message: Option<String>,
+    pub acp_error: Option<AcpError>,
+    pub operation: Option<AcpErrorOperation>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum AcpErrorOperation {
+    Prompt,
+    Configuration,
+    ConfigurationInheritance,
+}
+
+/// Agent-provided JSON-RPC error, kept separate from Atte's localized guidance.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AcpError {
+    pub code: i32,
+    pub message: String,
+    pub data: Option<serde_json::Value>,
+}
+
+impl From<agent_client_protocol::Error> for AcpError {
+    fn from(error: agent_client_protocol::Error) -> Self {
+        Self {
+            code: error.code.into(),
+            message: error.message,
+            data: error.data,
+        }
+    }
 }
 
 /// A transcript mutation carried with a lightweight thread patch.
@@ -3120,7 +3173,13 @@ impl RuntimeUpdates {
     }
 
     /// Reports a rejected request without failing the agent connection.
-    pub fn request_failed(&self, turn: Uuid, input: UserInput, queued_message: Option<Uuid>) {
+    pub fn request_failed(
+        &self,
+        turn: Uuid,
+        input: UserInput,
+        queued_message: Option<Uuid>,
+        acp_error: Option<AcpError>,
+    ) {
         if let Some(queued_message) = queued_message {
             self.queued_prompt_failed(turn, queued_message);
         } else {
@@ -3139,6 +3198,8 @@ impl RuntimeUpdates {
             id: Uuid::new_v4(),
             failure: None,
             message: Some("메시지 실행에 실패했습니다. 다시 시도해주세요.".into()),
+            acp_error,
+            operation: Some(AcpErrorOperation::Prompt),
         });
         state.publish();
     }
@@ -3156,6 +3217,7 @@ impl RuntimeUpdates {
         state.thread.session_id = Some(session_id);
         state.thread.status = ThreadStatus::SessionReady;
         state.thread.failure = None;
+        state.thread.failure_detail = None;
         state.confirmed_configuration = configuration;
         state.thread.prompt_capabilities = prompt_capabilities;
         state.desired_configuration.clear();
@@ -3238,23 +3300,29 @@ impl RuntimeUpdates {
         should_send
     }
 
-    pub fn configuration_failed(&self, request_id: Uuid, config_id: &str) -> bool {
+    pub fn configuration_failed(&self, request_id: Uuid, config_id: &str, acp_error: AcpError) {
         let Ok(mut state) = self.state.lock() else {
-            return false;
+            return;
         };
         if state.generation != self.generation {
-            return false;
+            return;
         }
-        if state
+        let is_current = state
             .desired_configuration
             .get(config_id)
-            .is_some_and(|desired| desired.request_id == request_id)
-        {
+            .is_some_and(|desired| desired.request_id == request_id);
+        if is_current {
             state.desired_configuration.remove(config_id);
+            state.pending_errors.push(ThreadErrorNotification {
+                id: Uuid::new_v4(),
+                failure: None,
+                message: Some("스레드 설정을 변경할 수 없습니다.".into()),
+                acp_error: Some(acp_error),
+                operation: Some(AcpErrorOperation::Configuration),
+            });
         }
         state.reconcile_configuration();
         state.publish();
-        true
     }
 
     pub fn configuration_succeeded(
@@ -3280,11 +3348,18 @@ impl RuntimeUpdates {
         });
     }
 
-    pub fn configuration_inheritance_failed(&self) {
+    pub fn configuration_inheritance_failed(&self, error: AcpError) {
         self.modify_state(|state| {
-            state.report_notice(
-                "일부 최근 설정을 적용하지 못했습니다. 스레드 설정을 확인해주세요.".into(),
-            );
+            let message =
+                "일부 최근 설정을 적용하지 못했습니다. 스레드 설정을 확인해주세요.".to_string();
+            state.thread.notice = Some(message.clone());
+            state.pending_errors.push(ThreadErrorNotification {
+                id: Uuid::new_v4(),
+                failure: None,
+                message: Some(message),
+                acp_error: Some(error),
+                operation: Some(AcpErrorOperation::ConfigurationInheritance),
+            });
         });
     }
 
@@ -3325,7 +3400,16 @@ impl RuntimeUpdates {
                 state.thread.authentication = AuthenticationStatus::Required;
             }
             state.thread.failure = Some(failure);
+            state.thread.failure_detail = state.pending_failure_detail.take();
         });
+    }
+
+    pub fn remember_acp_failure(&self, error: AcpError) {
+        if let Ok(mut state) = self.state.lock() {
+            if state.generation == self.generation {
+                state.pending_failure_detail = Some(error);
+            }
+        }
     }
 
     pub fn connection_closed(&self) {

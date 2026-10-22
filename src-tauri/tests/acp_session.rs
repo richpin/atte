@@ -2867,6 +2867,18 @@ async fn failed_restoration_keeps_the_reference_and_never_exposes_partial_replay
         assert_eq!(failed.completed_turn_id, None);
 
         assert_eq!(failed.failure, Some(failure), "{mode}");
+        assert_eq!(
+            failed
+                .failure_detail
+                .as_ref()
+                .map(|error| error.message.as_str()),
+            match mode {
+                "load-error" => Some("session missing"),
+                "load-auth" => Some("Authentication required"),
+                _ => None,
+            },
+            "{mode}"
+        );
         assert_eq!(failed.session_id.as_deref(), Some("remote-1"));
         assert!(failed.turns.is_empty());
         assert!(failed.pending_interactions.is_empty());
@@ -2876,6 +2888,7 @@ async fn failed_restoration_keeps_the_reference_and_never_exposes_partial_replay
         restored.connect(draft.id).unwrap();
         let ready = settle(&restored, draft.id).await;
         assert_eq!(ready.status, ThreadStatus::SessionReady);
+        assert_eq!(ready.failure_detail, None);
         assert_eq!(ready.turns.len(), 1);
         restored.shutdown().await;
     }
@@ -3374,6 +3387,7 @@ async fn recent_configuration_does_not_override_resumed_threads() {
 
 #[tokio::test]
 async fn recent_configuration_excludes_rejected_selections() {
+    use atte_lib::thread::ThreadUpdate;
     let first_folder = tempfile::tempdir().unwrap();
     let next_folder = tempfile::tempdir().unwrap();
     let mut agent = mock_agent();
@@ -3398,6 +3412,8 @@ async fn recent_configuration_excludes_rejected_selections() {
         )
         .await
         .unwrap();
+    let mut updates = threads.subscribe(first.id).unwrap();
+    updates.recv().await.unwrap();
     assert!(threads
         .set_configuration(
             first.id,
@@ -3405,7 +3421,30 @@ async fn recent_configuration_excludes_rejected_selections() {
             ThreadConfigurationValue::Boolean { value: false }
         )
         .await
-        .is_err());
+        .is_ok());
+    let errors = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            if let Some(ThreadUpdate::Patch { errors, .. }) = updates.recv().await {
+                if !errors.is_empty() {
+                    break errors;
+                }
+            }
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(errors.len(), 1);
+    assert_eq!(
+        errors[0]
+            .acp_error
+            .as_ref()
+            .map(|error| error.message.as_str()),
+        Some("configuration rejected")
+    );
+    assert_eq!(
+        errors[0].acp_error.as_ref().unwrap().data,
+        Some(serde_json::json!({"source":"fixture"}))
+    );
     let next = threads.create(next_folder.path()).unwrap();
     threads.connect(next.id).unwrap();
     let ready = settle(&threads, next.id).await;
@@ -3734,7 +3773,7 @@ async fn configuration_failure_rolls_back_without_interrupting_turn_or_queue() {
     threads.send_message(draft.id, "queued".into()).unwrap();
     release_configuration_gate(&gate, 1, "request");
 
-    assert!(changing.await.unwrap().is_err());
+    assert!(changing.await.unwrap().is_ok());
     tokio::time::timeout(Duration::from_secs(5), async {
         loop {
             let thread = threads.get(draft.id).unwrap();
@@ -4100,6 +4139,31 @@ async fn distinguishes_connection_failures_and_keeps_the_draft_for_explicit_retr
             let failed = settle(&threads, draft.id).await;
             assert_eq!(failed.status, ThreadStatus::Failed, "{mode}");
             assert_eq!(failed.failure, Some(expected.clone()), "{mode}");
+            let expected_detail = match mode {
+                "init-error" => Some("initialize rejected"),
+                "session-error" => Some("session rejected"),
+                "auth" => Some("Authentication required"),
+                _ => None,
+            };
+            assert_eq!(
+                failed
+                    .failure_detail
+                    .as_ref()
+                    .map(|error| error.message.as_str()),
+                expected_detail,
+                "{mode}"
+            );
+            if mode == "init-error" || mode == "session-error" {
+                assert_eq!(failed.failure_detail.as_ref().unwrap().code, -32603);
+                assert_eq!(
+                    failed.failure_detail.as_ref().unwrap().data,
+                    Some(serde_json::json!({"source":"fixture"}))
+                );
+            }
+            assert!(serde_json::to_value(&threads.list().unwrap()[0])
+                .unwrap()
+                .get("failureDetail")
+                .is_none());
             assert_eq!(failed.session_id, None);
             assert_eq!(
                 failed.authentication,
@@ -4512,6 +4576,18 @@ async fn request_errors_are_transient_and_keep_the_session_usable() {
         assert_eq!(errors.len(), 1);
         assert_eq!(errors[0].failure, None);
         assert!(errors[0].message.is_some());
+        assert_eq!(
+            errors[0]
+                .acp_error
+                .as_ref()
+                .map(|error| error.message.as_str()),
+            Some("Prompt failed")
+        );
+        assert_eq!(errors[0].acp_error.as_ref().unwrap().code, -32603);
+        assert_eq!(
+            errors[0].acp_error.as_ref().unwrap().data,
+            Some(serde_json::json!({"source":"fixture"}))
+        );
         assert!(serde_json::to_value(&current)
             .unwrap()
             .get("requestFailure")
