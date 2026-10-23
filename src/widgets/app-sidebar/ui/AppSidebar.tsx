@@ -7,6 +7,7 @@ import {
   Pencil,
   Plus,
   Settings,
+  Sparkles,
   Split,
   SquarePen,
   Trash2,
@@ -49,7 +50,7 @@ import {
 import { createMemo, createSignal, For, Show } from "solid-js";
 import { RenameThreadDialog } from "./RenameThreadDialog";
 
-type AppView = "new-thread" | "thread" | "general" | "agents";
+type AppView = "new-thread" | "thread" | "general" | "agents" | "skills";
 
 type SidebarThread = {
   id: string;
@@ -66,6 +67,7 @@ type SidebarThread = {
 
 export function AppSidebar(props: {
   view: AppView;
+  projects: { folder: string; name: string }[];
   threads: SidebarThread[];
   selected?: string;
   loading: boolean;
@@ -79,6 +81,7 @@ export function AppSidebar(props: {
   onRenameThread: (id: string, title: string) => Promise<void>;
   onShowGeneral: () => void;
   onManageAgents: () => void;
+  onManageSkills: () => void;
 }) {
   const { t, message, content } = useI18n();
   const { state, isMobile } = useSidebar();
@@ -112,10 +115,9 @@ export function AppSidebar(props: {
       entries.push(thread);
       folders.set(folder, entries);
     }
-    return [...folders.keys()].sort().map((folder) => ({
-      folder,
-      name: folder.split("/").filter(Boolean).at(-1) ?? folder,
-      entries: folders.get(folder) ?? [],
+    return props.projects.map((project) => ({
+      ...project,
+      entries: folders.get(project.folder) ?? [],
     }));
   });
 
@@ -540,6 +542,14 @@ export function AppSidebar(props: {
                 >
                   <Bot aria-hidden="true" class="size-4" />
                   {t("settings.agents")}
+                </DropdownMenuItem>
+                <DropdownMenuItem
+                  aria-current={props.view === "skills" ? "page" : undefined}
+                  class="aria-[current=page]:bg-menu-hover aria-[current=page]:font-medium"
+                  onSelect={props.onManageSkills}
+                >
+                  <Sparkles aria-hidden="true" class="size-4" />
+                  {t("settings.skills")}
                 </DropdownMenuItem>
               </DropdownMenuContent>
             </DropdownMenu>

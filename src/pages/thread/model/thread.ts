@@ -3,6 +3,7 @@ import {
   type QueryClient,
   useQueryClient,
 } from "@tanstack/solid-query";
+import { selectWorkingFolder } from "shared/api";
 import { type TranslationKey, useI18n } from "shared/i18n";
 import {
   createEffect,
@@ -28,7 +29,6 @@ import {
   retryQueuedMessage,
   selectFiles as selectFilesCommand,
   selectMedia as selectMediaCommand,
-  selectWorkingFolder,
   sendMessage,
   setThreadConfiguration,
   snapshotClipboardImage,

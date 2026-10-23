@@ -332,13 +332,7 @@ async fn compatible(runtime: &PreparedNode) -> bool {
     let Ok(Ok(output)) = tokio::time::timeout(PROBE_TIMEOUT, version).await else {
         return false;
     };
-    let major = String::from_utf8_lossy(&output.stdout)
-        .trim()
-        .trim_start_matches('v')
-        .split('.')
-        .next()
-        .and_then(|major| major.parse::<u32>().ok());
-    if !output.status.success() || major.is_none_or(|major| major < 22) {
+    if !output.status.success() || !supported_node_version(&output.stdout) {
         return false;
     }
     let mut command = runtime.npm_command();
@@ -349,6 +343,20 @@ async fn compatible(runtime: &PreparedNode) -> bool {
         .stderr(Stdio::null())
         .kill_on_drop(true);
     run_command(command, PROBE_TIMEOUT).await.is_ok()
+}
+
+fn supported_node_version(output: &[u8]) -> bool {
+    let version = String::from_utf8_lossy(output)
+        .trim()
+        .trim_start_matches('v')
+        .split('.')
+        .take(3)
+        .map(str::parse::<u32>)
+        .collect::<Result<Vec<_>, _>>()
+        .ok();
+    version.as_deref().is_some_and(|parts| {
+        parts.len() == 3 && (parts[0] > 22 || (parts[0] == 22 && parts[1] >= 20))
+    })
 }
 
 impl PreparedNode {
@@ -453,7 +461,7 @@ pub(crate) fn node_path(node: &Path) -> OsString {
 
 #[cfg(test)]
 mod tests {
-    use super::is_isolated_npm_setting;
+    use super::{is_isolated_npm_setting, supported_node_version};
     use std::ffi::OsStr;
 
     #[test]
@@ -474,5 +482,13 @@ mod tests {
         ] {
             assert!(!is_isolated_npm_setting(OsStr::new(key)), "{key}");
         }
+    }
+
+    #[test]
+    fn minimum_supported_node_is_22_20() {
+        assert!(!supported_node_version(b"v22.19.9\n"));
+        assert!(supported_node_version(b"v22.20.0\n"));
+        assert!(supported_node_version(b"v24.0.0\n"));
+        assert!(!supported_node_version(b"not a version"));
     }
 }

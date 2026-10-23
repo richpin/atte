@@ -11,6 +11,7 @@ mod installation_files;
 mod lifecycle;
 mod notifications;
 mod open_working_folder;
+mod skills;
 pub mod storage;
 pub mod thread;
 mod workspace_files;
@@ -475,10 +476,12 @@ pub fn run() {
                 .build(),
         )
         .setup(|app| {
-            let management = agent_management::AgentManagement::open(&app.path().app_data_dir()?)?;
+            let app_data = app.path().app_data_dir()?;
+            let management = agent_management::AgentManagement::open(&app_data)?;
             let threads = management.restore_threads()?;
             app.manage(threads);
             app.manage(management);
+            app.manage(skills::Skills::new(app_data));
             let updates = app.handle().clone();
             tauri::async_runtime::spawn(async move {
                 loop {
@@ -555,6 +558,10 @@ pub fn run() {
                 browser::web_tab_action,
                 browser::web_tab_state,
                 agent_catalog,
+                skills::list_skills,
+                skills::read_skill_document,
+                skills::install_skill,
+                skills::remove_skill,
                 refresh_agent_catalog,
                 install_agent,
                 uninstall_agent,

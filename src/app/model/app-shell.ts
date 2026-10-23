@@ -8,15 +8,37 @@ import {
 } from "pages/thread";
 import { useI18n } from "shared/i18n";
 import { showErrorToast } from "shared/ui";
-import { createEffect, createResource, createSignal, on } from "solid-js";
+import {
+  createEffect,
+  createMemo,
+  createResource,
+  createSignal,
+  on,
+} from "solid-js";
 import { createThreadPanelModel } from "widgets/thread-panel";
 
-export type AppView = "new-thread" | "thread" | "general" | "agents";
+export type AppView = "new-thread" | "thread" | "general" | "agents" | "skills";
 
 export function createAppShellModel() {
   const { t, locale } = useI18n();
   const notifications = createDesktopNotifications();
   const threads = createThreadModel(undefined, showErrorToast);
+  const projects = createMemo(() =>
+    [
+      ...new Set(
+        threads
+          .history()
+          .map(
+            (thread) => thread.worktree?.sourceFolder ?? thread.workingFolder,
+          ),
+      ),
+    ]
+      .sort()
+      .map((folder) => ({
+        folder,
+        name: folder.split("/").filter(Boolean).at(-1) ?? folder,
+      })),
+  );
   const threadPanels = createThreadPanelModel(createFilesManager(t));
   const [view, setView] = createSignal<AppView>("new-thread");
   const [agentsRevision, setAgentsRevision] = createSignal(0);
@@ -86,6 +108,10 @@ export function createAppShellModel() {
 
   function showAgents() {
     setView("agents");
+  }
+
+  function showSkills() {
+    setView("skills");
   }
 
   function showGeneral() {
@@ -177,8 +203,10 @@ export function createAppShellModel() {
     showNewThread,
     showNewThreadInWorktree,
     openThread,
+    projects,
     showGeneral,
     showAgents,
+    showSkills,
     selectFolder,
     startThread,
     removeThread,
