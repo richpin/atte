@@ -16,6 +16,7 @@ export type TreeItem = { path: string; directory: boolean };
 const fromTreePath = (path: string) => path.replace(/\/$/, "");
 export function FileTree(props: {
   entries: readonly TreeItem[];
+  loading?: boolean;
   dirtyPaths: readonly string[];
   selectedPath?: string;
   dirtyLabel: string;
@@ -320,6 +321,9 @@ export function FileTree(props: {
     });
   });
   createEffect(() => {
+    // The mount-time empty list is not the initial filesystem snapshot. Keep
+    // the worker alive so that snapshot does not become a large batch of adds.
+    if (props.loading && !pathSync?.initialized) return;
     const paths = props.entries.map(
       (entry) => entry.path + (entry.directory ? "/" : ""),
     );

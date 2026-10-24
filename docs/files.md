@@ -34,7 +34,7 @@ Rust는 읽은 bytes의 해시를 기준 버전으로 반환하고 저장 직전
 
 ## 구현 경계
 
-`features/workspace-files`가 파일별 편집과 파일 명령·확인 UI를 소유한다. `shared/ui`의 Pierre 래퍼가 트리와 파일 렌더러 수명을 관리한다. 트리는 `@pierre/trees`의 vanilla API, 텍스트 편집은 기존 `@pierre/diffs/edit`를 사용한다. 초기 경로 목록의 Pierre 입력 준비는 Worker에서 실행하고, 최신 초기 목록을 적용한 뒤 Worker를 종료한다.
+`features/workspace-files`가 파일별 편집과 파일 명령·확인 UI를 소유한다. `shared/ui`의 Pierre 래퍼가 트리와 파일 렌더러 수명을 관리한다. 트리는 `@pierre/trees`의 vanilla API, 텍스트 편집은 기존 `@pierre/diffs/edit`를 사용한다. 초기 경로 목록의 Pierre 입력 준비는 Worker에서 실행하고, 최신 초기 목록을 적용한 뒤 Worker를 종료한다. 첫 디스크 목록을 받기 전의 빈 목록으로는 초기화를 완료하지 않는다. 새로고침 중에는 기존 트리 인스턴스와 상태를 유지한다.
 
 `resetPaths()`는 초기 목록 적용에만 사용한다. 이후 목록은 현재 트리 경로와 비교해 추가·삭제만 공개 `batch()` API에 전달한다. 삭제된 폴더의 하위 항목은 중복 삭제하지 않는다. 공개 변경 이벤트로 Pierre가 먼저 반영한 이름 변경·이동을 추적해 디스크 확인 이벤트를 중복 적용하지 않는다. 이동 실패는 역방향 `move()`와 최신 목록 대조로 복구한다. 미저장 표시는 경로 모델을 갱신하지 않고 기존 인스턴스의 `render()`로 화면만 갱신한다.
 

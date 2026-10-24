@@ -43,8 +43,8 @@ export function NotificationSettings(props: {
               }}
             >
               <SwitchLabel>{t(`desktopNotifications.${kind}`)}</SwitchLabel>
-              <SwitchControl>
-                <SwitchThumb />
+              <SwitchControl class="h-4.5 w-8.5 border">
+                <SwitchThumb class="size-4 data-[checked]:translate-x-4" />
               </SwitchControl>
             </Switch>
           )}

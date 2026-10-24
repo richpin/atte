@@ -34,6 +34,62 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
+it.each([0, 10000])(
+  "prepares the first disk snapshot of %i entries in the worker even when it arrives after mount",
+  async (count) => {
+    const [entries, setEntries] = createSignal<
+      { path: string; directory: boolean }[]
+    >([]);
+    const [loading, setLoading] = createSignal(true);
+    const fixture = render(() => (
+      <FileTree
+        entries={entries()}
+        loading={loading()}
+        dirtyPaths={[]}
+        dirtyLabel="Unsaved"
+        disabled={false}
+        labels={{
+          newFile: "New file",
+          newFolder: "New folder",
+          rename: "Rename",
+          trash: "Trash",
+        }}
+        onSelect={() => {}}
+        onAction={() => {}}
+        onMove={async () => true}
+        onError={(error) => {
+          throw error;
+        }}
+      />
+    ));
+    await waitFor(() => expect(PierreTree.prototype.render).toHaveBeenCalled());
+    // Let the empty-list worker response arrive before the filesystem snapshot.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const batch = vi.spyOn(tree, "batch");
+    const reset = vi.spyOn(tree, "resetPaths");
+    setEntries(
+      Array.from({ length: count }, (_, index) => ({
+        path: `build/file-${index}.o`,
+        directory: false,
+      })),
+    );
+    setLoading(false);
+    await waitFor(() => expect(reset).toHaveBeenCalledTimes(1));
+    if (count) expect(tree.getItem(`build/file-${count - 1}.o`)).toBeTruthy();
+    expect(batch).not.toHaveBeenCalled();
+    // Refreshing an initialized tree keeps its controller and applies only the delta.
+    setLoading(true);
+    setEntries((previous) => [
+      ...previous,
+      { path: "new.txt", directory: false },
+    ]);
+    setLoading(false);
+    expect(tree.getItem("new.txt")).toBeTruthy();
+    expect(reset).toHaveBeenCalledTimes(1);
+    fixture.unmount();
+  },
+);
+
 it("converts real Pierre directory selections and menu actions to Atte paths", async () => {
   const onSelect = vi.fn();
   const onAction = vi.fn();

@@ -257,6 +257,7 @@ export function WorkspaceFiles(props: {
           <div class="min-h-0 flex-1">
             <FileTree
               entries={model.entries()}
+              loading={model.loading()}
               selectedPath={selection()?.path}
               dirtyLabel={t("files.unsavedTitle")}
               dirtyPaths={dirtyKey() ? dirtyKey().split("\0") : []}
