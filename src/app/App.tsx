@@ -13,11 +13,13 @@ import {
   RotateCcw,
   Search,
   Settings,
+  Sparkles,
   SquarePen,
 } from "lucide-solid";
 import { AgentManagementPage } from "pages/agent-management";
 import { GeneralPage } from "pages/general";
 import { NewThreadPage } from "pages/new-thread";
+import { SkillsPage } from "pages/skills";
 import { ThreadPage } from "pages/thread";
 import { I18nProvider, useI18n } from "shared/i18n";
 import { ThemeProvider } from "shared/theme";
@@ -43,6 +45,7 @@ import {
 } from "shared/ui";
 import {
   type ComponentProps,
+  createEffect,
   createSignal,
   createUniqueId,
   onCleanup,
@@ -208,6 +211,7 @@ function ShellSidebar(props: { shell: AppShellModel }) {
   return (
     <AppSidebar
       view={shell.view()}
+      projects={shell.projects()}
       threads={threads.history().map((entry) => ({
         ...entry,
         subscriptionFailed: threads.subscriptionFailedFor(entry.id),
@@ -229,6 +233,7 @@ function ShellSidebar(props: { shell: AppShellModel }) {
       onRenameThread={threads.renameThread}
       onShowGeneral={shell.showGeneral}
       onManageAgents={shell.showAgents}
+      onManageSkills={shell.showSkills}
     />
   );
 }
@@ -240,6 +245,10 @@ function ShellContent(props: { shell: AppShellModel }) {
   const { state, isMobile, openMobile } = useSidebar();
   const [showInfoCard, setShowInfoCard] = createSignal(true);
   const [findRequest, setFindRequest] = createSignal(0);
+  const [skillsVisited, setSkillsVisited] = createSignal(false);
+  createEffect(() => {
+    if (props.shell.view() === "skills") setSkillsVisited(true);
+  });
   let findSelected = false;
   const threadPanelId = createUniqueId();
   onMount(() => {
@@ -269,6 +278,7 @@ function ShellContent(props: { shell: AppShellModel }) {
   const title = () => {
     if (shell.view() === "general") return t("settings.general");
     if (shell.view() === "agents") return t("settings.agents");
+    if (shell.view() === "skills") return t("settings.skills");
     if (shell.view() !== "thread") return "";
     const selected = threads.selectedThreadId();
     const current = threads.thread();
@@ -317,6 +327,9 @@ function ShellContent(props: { shell: AppShellModel }) {
             </Show>
             <Show when={shell.view() === "agents"}>
               <Bot aria-hidden="true" class="size-4" />
+            </Show>
+            <Show when={shell.view() === "skills"}>
+              <Sparkles aria-hidden="true" class="size-4" />
             </Show>
             <span class="truncate">{title()}</span>
           </h1>
@@ -470,6 +483,14 @@ function ShellContent(props: { shell: AppShellModel }) {
           active={shell.view() === "agents"}
           onAgentsChanged={shell.agentsChanged}
         />
+      </div>
+      <div hidden={shell.view() !== "skills"} class="min-h-0 flex-1">
+        <Show when={skillsVisited()}>
+          <SkillsPage
+            active={shell.view() === "skills"}
+            projects={shell.projects()}
+          />
+        </Show>
       </div>
     </div>
   );

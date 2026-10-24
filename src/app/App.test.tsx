@@ -3759,7 +3759,10 @@ it("keeps streaming and the fixed thread while management is open", async () => 
     turnId: "turn-1",
     text: " there",
   });
-  await userEvent.click(getSidebarThreadButton("새 스레드"));
+  const sidebarThread = await waitFor(() =>
+    getSidebarThreadButton("새 스레드"),
+  );
+  await userEvent.click(sidebarThread);
   expect(await screen.findByText("Hi there")).toBeTruthy();
   expect(invoke).not.toHaveBeenCalledWith(
     "unsubscribe_thread",

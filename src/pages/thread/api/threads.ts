@@ -25,12 +25,6 @@ export function listThreads() {
   return invoke<ThreadMetadata[]>("list_threads");
 }
 
-export function selectWorkingFolder(dialogTitle: string) {
-  return invoke<string | null>("select_working_folder", {
-    dialogTitle,
-  });
-}
-
 export function preparedAgents() {
   return invoke<PreparedAgent[]>("prepared_agents");
 }
