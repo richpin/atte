@@ -5,6 +5,7 @@ import {
   screen,
   waitFor,
 } from "@solidjs/testing-library";
+import { QueryClient, QueryClientProvider } from "@tanstack/solid-query";
 import { createSignal } from "solid-js";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import {
@@ -14,9 +15,15 @@ import {
   readCommit,
   readPage,
 } from "../../api/git-history";
+import { readWorkingChanges } from "../../api/git-working";
 import { createThreadPanelModel } from "../create-thread-panel-model";
 import { ThreadPanel } from "../ThreadPanel";
 import { GitHistory } from "./GitHistory";
+
+vi.mock("../../api/git-working", async (original) => ({
+  ...(await original<object>()),
+  readWorkingChanges: vi.fn(),
+}));
 
 vi.mock("../../api/git-history", async (original) => ({
   ...(await original<object>()),
@@ -70,6 +77,14 @@ beforeEach(() => {
     boundary: false,
     files: [],
   });
+  vi.mocked(readWorkingChanges).mockResolvedValue({
+    root: "/repo",
+    branch: "main",
+    head: "commit-0",
+    indexTree: "tree",
+    operation: null,
+    files: [],
+  });
 });
 
 it("opens Git from the tab chooser and reuses a commit diff tab", async () => {
@@ -79,9 +94,14 @@ it("opens Git from the tab chooser and reuses a commit diff tab", async () => {
     model.setOpen("thread", true);
     const panel = model.panel("thread");
     if (!panel) throw new Error("Missing test panel");
-    return <ThreadPanel model={model} panel={panel} visible />;
+    return (
+      <QueryClientProvider client={new QueryClient()}>
+        <ThreadPanel model={model} panel={panel} visible />
+      </QueryClientProvider>
+    );
   });
   fireEvent.click(screen.getByRole("button", { name: "Git" }));
+  fireEvent.click(await screen.findByRole("tab", { name: "커밋 이력" }));
   await screen.findByRole("button", { name: "Subject 0 · commit-" });
   fireEvent.click(screen.getByRole("button", { name: "Subject 0 · commit-" }));
   await screen.findByText("파일 변경사항이 없는 커밋입니다.");
@@ -130,7 +150,6 @@ it("renders a bounded number of rows and loads the next page when scrolled near 
   await waitFor(() =>
     expect(readPage).toHaveBeenCalledWith("thread", "cursor"),
   );
-  await waitFor(() => expect(screen.getByText("201개 불러옴")).toBeTruthy());
   expect(container.querySelectorAll("[data-commit-index]").length).toBeLessThan(
     40,
   );
@@ -142,10 +161,19 @@ it("waits for first visibility and preserves the loaded snapshot across tab swit
   ));
   expect(openHistory).not.toHaveBeenCalled();
   setVisible(true);
-  await waitFor(() => expect(screen.getByText("200개 불러옴")).toBeTruthy());
+  await screen.findByRole("button", { name: "Subject 0 · commit-" });
   setVisible(false);
   setVisible(true);
   expect(openHistory).toHaveBeenCalledTimes(1);
   cleanup();
   expect(closeHistory).toHaveBeenCalledWith("thread", "cursor");
+});
+
+it("refreshes history from the button beside the branch scope", async () => {
+  render(() => (
+    <GitHistory threadId="thread" visible onOpenCommit={() => {}} />
+  ));
+  await screen.findByRole("button", { name: "Subject 0 · commit-" });
+  fireEvent.click(screen.getByRole("button", { name: "Git 상태 새로고침" }));
+  await waitFor(() => expect(openHistory).toHaveBeenCalledTimes(2));
 });

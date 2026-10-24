@@ -1,5 +1,5 @@
 import { createVirtualizer } from "@tanstack/solid-virtual";
-import { FolderGit2, GitBranch, RefreshCw } from "lucide-solid";
+import { GitBranch, RefreshCw } from "lucide-solid";
 import { useI18n } from "shared/i18n";
 import {
   Button,
@@ -120,12 +120,15 @@ function CommitRow(props: {
 export function GitHistory(props: {
   threadId: string;
   visible: boolean;
+  refreshToken?: number;
+  onRefresh?: () => void;
   onOpenCommit: (repository: string, commit: GitCommit) => void;
 }) {
   const { t } = useI18n();
   const model = createHistoryModel(props.threadId);
   let scrollRoot!: HTMLDivElement;
   let initialized = false;
+  let appliedRefreshToken = props.refreshToken ?? 0;
   const buttons = new Map<number, HTMLButtonElement>();
   const options = createMemo<BranchChoice[]>(() => [
     { value: ALL_BRANCHES, label: t("git.allBranches") },
@@ -155,6 +158,14 @@ export function GitHistory(props: {
   createEffect(() => {
     if (props.visible && !initialized) {
       initialized = true;
+      appliedRefreshToken = props.refreshToken ?? 0;
+      void model.refresh();
+    }
+  });
+  createEffect(() => {
+    const token = props.refreshToken ?? 0;
+    if (props.visible && initialized && token !== appliedRefreshToken) {
+      appliedRefreshToken = token;
       void model.refresh();
     }
   });
@@ -197,16 +208,7 @@ export function GitHistory(props: {
       class="@container flex h-full min-h-0 min-w-0 flex-col"
       aria-label={t("git.title")}
     >
-      <header class="shrink-0 border-b border-line px-3 pb-3 pt-4">
-        <div class="mb-3 flex min-w-0 items-center gap-2 text-xs font-medium">
-          <FolderGit2 aria-hidden="true" class="size-4 shrink-0 text-muted" />
-          <span class="truncate" title={model.repository()?.root}>
-            {model.repository()?.root.split("/").at(-1) ?? t("git.title")}
-          </span>
-          <span class="ml-auto text-[11px] font-normal text-muted">
-            {t("git.readOnly")}
-          </span>
-        </div>
+      <header class="shrink-0 border-b border-line px-3 py-3">
         <div class="flex items-center gap-2">
           <GitBranch aria-hidden="true" class="size-3.5 shrink-0 text-muted" />
           <Select<BranchChoice>
@@ -254,13 +256,12 @@ export function GitHistory(props: {
             class="size-8 shrink-0"
             aria-label={t("git.refresh")}
             title={t("git.refresh")}
-            onClick={() => void model.refresh()}
-            disabled={model.loading()}
+            onClick={() => {
+              props.onRefresh?.();
+              void model.refresh();
+            }}
           >
-            <RefreshCw
-              class="size-3.5"
-              classList={{ "animate-spin": model.loading() }}
-            />
+            <RefreshCw class="size-3.5" />
           </Button>
         </div>
       </header>
@@ -269,10 +270,6 @@ export function GitHistory(props: {
           {t("git.shallow")}
         </p>
       </Show>
-      <div class="flex shrink-0 justify-between border-b border-line px-3 py-2 text-[11px] text-muted">
-        <span>{t("git.history")}</span>
-        <span>{t("git.loaded", { count: model.rows().length })}</span>
-      </div>
       <div ref={scrollRoot} class="min-h-0 flex-1 overflow-auto">
         <ol
           aria-label={t("git.history")}

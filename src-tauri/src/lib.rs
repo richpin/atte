@@ -6,6 +6,7 @@ mod browser;
 mod file_selection;
 mod git;
 mod git_history;
+mod git_working;
 mod installation;
 mod installation_files;
 mod lifecycle;
@@ -547,6 +548,11 @@ pub fn run() {
                 git_history::close_git_history,
                 git_history::read_git_commit,
                 git_history::read_git_commit_file,
+                git_working::read_git_working_changes,
+                git_working::read_git_working_file,
+                git_working::stage_git_files,
+                git_working::unstage_git_files,
+                git_working::commit_git_changes,
                 workspace_files::subscribe_workspace_files,
                 workspace_files::unsubscribe_workspace_files,
                 workspace_files::read_workspace_file,
