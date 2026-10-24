@@ -7,11 +7,6 @@ it("parses a Git patch with partial context and preserves authoritative names", 
     {
       path: "한글\tfile.ts",
       oldPath: null,
-      change: "M",
-      oldMode: "100644",
-      newMode: "100644",
-      oldOid: "1234567",
-      newOid: "abcdef0",
     },
     "commit:file",
   );
@@ -29,11 +24,6 @@ it("handles pure rename and mode-only patches without inventing text changes", a
       {
         path: "new",
         oldPath: "old",
-        change: "R100",
-        oldMode: "100644",
-        newMode: "100755",
-        oldOid: "1234567",
-        newOid: "abcdef0",
       },
       "metadata",
     );

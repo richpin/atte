@@ -46,11 +46,6 @@ export function WorkingReview(props: { threadId: string; visible: boolean }) {
         {
           path: file.path,
           oldPath: file.oldPath,
-          change: file.status,
-          oldMode: "",
-          newMode: "",
-          oldOid: "",
-          newOid: "",
         },
         `${file.id}:${entry.side}`,
       );

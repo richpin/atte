@@ -106,7 +106,11 @@ async fn merge_diff_uses_first_parent_and_root_commit_compares_to_empty_tree() {
     let root = temp.path();
     fs::write(root.join("initial.txt"), "initial\n").unwrap();
     let initial = commit(root, "root").await;
-    let first = details(root, &initial).await.unwrap();
+    let first = details_with_stats(root, &initial).await.unwrap();
+    assert_eq!(
+        (first.files[0].additions, first.files[0].deletions),
+        (Some(1), Some(0))
+    );
     assert!(first.base.is_none());
     assert_eq!(first.files[0].change, "A");
     assert!(
@@ -122,11 +126,15 @@ async fn merge_diff_uses_first_parent_and_root_commit_compares_to_empty_tree() {
     let oid = text(&git(root, &["rev-parse", "HEAD"]).await)
         .trim()
         .to_owned();
-    let result = details(root, &oid).await.unwrap();
+    let result = details_with_stats(root, &oid).await.unwrap();
     assert_eq!(result.base.as_deref(), Some(main.as_str()));
     assert_eq!(result.commit.parents.len(), 2);
     assert_eq!(result.files.len(), 1);
     assert_eq!(result.files[0].path, "feature.txt");
+    assert_eq!(
+        (result.files[0].additions, result.files[0].deletions),
+        (Some(1), Some(0))
+    );
 }
 
 #[tokio::test]
@@ -142,7 +150,7 @@ async fn preserves_renames_unusual_paths_binary_and_mode_only_changes() {
     fs::write(root.join("image.bin"), b"\0\x01\xff").unwrap();
     fs::set_permissions(root.join("script"), fs::Permissions::from_mode(0o755)).unwrap();
     let oid = commit(root, "rename and binary").await;
-    let result = details(root, &oid).await.unwrap();
+    let result = details_with_stats(root, &oid).await.unwrap();
     let (index, renamed) = result
         .files
         .iter()
@@ -150,6 +158,7 @@ async fn preserves_renames_unusual_paths_binary_and_mode_only_changes() {
         .find(|(_, file)| file.old_path.is_some())
         .unwrap();
     assert_eq!(renamed.path, name);
+    assert_eq!((renamed.additions, renamed.deletions), (Some(0), Some(0)));
     assert_eq!(renamed.old_path.as_deref(), Some("before.txt"));
     assert!(
         matches!(patch(root, &oid, index).await.unwrap(), FilePatch::Text(patch) if patch.contains("similarity index 100%"))
@@ -159,6 +168,10 @@ async fn preserves_renames_unusual_paths_binary_and_mode_only_changes() {
         .iter()
         .position(|file| file.path == "image.bin")
         .unwrap();
+    assert_eq!(
+        (result.files[index].additions, result.files[index].deletions),
+        (None, None)
+    );
     assert!(matches!(
         patch(root, &oid, index).await.unwrap(),
         FilePatch::Binary
@@ -168,6 +181,10 @@ async fn preserves_renames_unusual_paths_binary_and_mode_only_changes() {
         .iter()
         .position(|file| file.path == "script")
         .unwrap();
+    assert_eq!(
+        (result.files[index].additions, result.files[index].deletions),
+        (Some(0), Some(0))
+    );
     assert!(
         matches!(patch(root, &oid, index).await.unwrap(), FilePatch::Text(patch) if patch.contains("new mode 100755"))
     );
@@ -213,6 +230,11 @@ async fn validates_object_ids_and_bounds_large_file_diffs() {
     ));
     fs::write(temp.path().join("large"), vec![b'x'; MAX_PATCH_BYTES + 1]).unwrap();
     let oid = commit(temp.path(), "large").await;
+    let result = details_with_stats(temp.path(), &oid).await.unwrap();
+    assert_eq!(
+        (result.files[0].additions, result.files[0].deletions),
+        (Some(1), Some(0))
+    );
     assert!(matches!(
         patch(temp.path(), &oid, 0).await.unwrap(),
         FilePatch::TooLarge
@@ -237,7 +259,7 @@ async fn shallow_boundary_is_not_reported_as_an_initial_commit() {
     )
     .await;
     assert!(repository(&target).await.unwrap().shallow);
-    let result = details(&target, &tip).await.unwrap();
+    let result = details_with_stats(&target, &tip).await.unwrap();
     assert!(result.boundary);
     assert!(result.base.is_some());
     assert!(result.files.is_empty());
@@ -275,11 +297,54 @@ async fn submodule_changes_expose_both_object_ids_without_reading_them_as_blobs(
     let oid = text(&git(root, &["rev-parse", "HEAD"]).await)
         .trim()
         .to_owned();
-    let result = details(root, &oid).await.unwrap();
+    let result = details_with_stats(root, &oid).await.unwrap();
     assert_eq!(result.files[0].old_oid, first);
     assert_eq!(result.files[0].new_oid, second);
     assert!(matches!(
         patch(root, &oid, 0).await.unwrap(),
         FilePatch::Submodule
     ));
+}
+
+#[tokio::test]
+async fn line_statistics_match_raw_paths_for_additions_deletions_and_edits() {
+    let temp = init().await;
+    let root = temp.path();
+    let unusual = "tab\tand\nnewline.txt";
+    fs::write(root.join(unusual), "one\ntwo\nthree\n").unwrap();
+    fs::write(root.join("deleted"), "removed\n").unwrap();
+    commit(root, "initial").await;
+    fs::write(root.join(unusual), "one\nchanged\nthree\nextra\n").unwrap();
+    fs::remove_file(root.join("deleted")).unwrap();
+    fs::write(root.join("added"), "new\nfile\n").unwrap();
+    let oid = commit(root, "changes").await;
+    let result = details_with_stats(root, &oid).await.unwrap();
+    let counts: HashMap<_, _> = result
+        .files
+        .iter()
+        .map(|file| (file.path.as_str(), (file.additions, file.deletions)))
+        .collect();
+    assert_eq!(
+        counts,
+        HashMap::from([
+            (unusual, (Some(2), Some(1))),
+            ("deleted", (Some(0), Some(1))),
+            ("added", (Some(2), Some(0))),
+        ])
+    );
+}
+
+#[test]
+fn rejects_incomplete_or_mismatched_line_statistics() {
+    let raw = b":100644 100644 old new M\0a\0";
+    for invalid in [
+        b"1\t0\tb\0".as_slice(),
+        b"1\t0\0",
+        b"-\t1\ta\0",
+        b"1\t0\t\0a\0",
+        b"1\t0\ta\0\0",
+    ] {
+        let mut files = parse_files(raw).unwrap();
+        assert!(apply_numstat(&mut files, invalid).is_err());
+    }
 }

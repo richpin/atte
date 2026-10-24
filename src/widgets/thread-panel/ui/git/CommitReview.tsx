@@ -1,31 +1,42 @@
-import { FileCode, GitCommitHorizontal } from "lucide-solid";
+import { GitCommitHorizontal } from "lucide-solid";
 import { useI18n } from "shared/i18n";
 import { Button, FileDiff } from "shared/ui";
-import {
-  createResource,
-  createSignal,
-  For,
-  Match,
-  Show,
-  Switch,
-} from "solid-js";
+import { createMemo, createResource, Match, Show, Switch } from "solid-js";
 import {
   type ChangedFile,
   readCommit,
   readCommitFile,
 } from "../../api/git-history";
 import { prepareCommitPatch } from "../../lib/git-patch";
+import { type FileChangeContent, FileChanges } from "./FileChanges";
+
+function changeColor(change: string) {
+  switch (change[0]) {
+    case "A":
+      return "text-response-success";
+    case "M":
+    case "T":
+      return "text-response-warning";
+    case "D":
+    case "U":
+    case "B":
+      return "text-danger";
+    case "R":
+    case "C":
+      return "text-response-info";
+    default:
+      return "text-muted";
+  }
+}
 
 function CommitFile(props: {
   threadId: string;
   oid: string;
   file: ChangedFile;
   index: number;
-  visible: boolean;
+  context: FileChangeContent;
 }) {
   const { t } = useI18n();
-  let scrollRoot!: HTMLDivElement;
-  let scrollContent!: HTMLDivElement;
   const [result, { refetch }] = createResource(async () => {
     const response = await readCommitFile(
       props.threadId,
@@ -41,84 +52,57 @@ function CommitFile(props: {
     return { kind: "text" as const, patch: response.patch, diff };
   });
   return (
-    <div ref={scrollRoot} class="min-h-0 min-w-0 flex-1 overflow-auto">
-      <div ref={scrollContent}>
-        <header class="border-b border-line px-3 py-3 text-xs text-muted">
-          <p class="break-all">
-            {props.file.oldPath
-              ? `${props.file.oldPath} → ${props.file.path}`
-              : props.file.path}
+    <div class="min-w-0">
+      <Switch>
+        <Match when={result.loading}>
+          <p role="status" class="p-4 text-xs text-muted">
+            {t("git.loadingDiff")}
           </p>
-          <Show when={props.file.oldMode !== props.file.newMode}>
-            <p class="mt-1 font-mono text-[11px]">
-              {props.file.oldMode} → {props.file.newMode}
-            </p>
-          </Show>
-          <Show
-            when={
-              props.file.oldMode === "160000" || props.file.newMode === "160000"
-            }
-          >
-            <p class="mt-1 break-all font-mono text-[11px]">
-              {props.file.oldOid} → {props.file.newOid}
-            </p>
-          </Show>
-        </header>
-        <Switch>
-          <Match when={result.loading}>
-            <p role="status" class="p-4 text-xs text-muted">
-              {t("git.loadingDiff")}
-            </p>
-          </Match>
-          <Match when={result.error}>
-            <div role="alert" class="space-y-3 p-4 text-xs text-muted">
-              <p>{t("git.failed")}</p>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => void refetch()}
+        </Match>
+        <Match when={result.error}>
+          <div role="alert" class="space-y-3 p-4 text-xs text-muted">
+            <p>{t("git.failed")}</p>
+            <Button variant="outline" size="sm" onClick={() => void refetch()}>
+              {t("common.retry")}
+            </Button>
+          </div>
+        </Match>
+        <Match when={!result.error && result()}>
+          {(loaded) => {
+            const data = loaded();
+            return data.kind === "text" ? (
+              <Show
+                when={data.diff?.hunks.length ? data.diff : undefined}
+                fallback={
+                  <p class="p-4 text-xs text-muted">{t("git.metadataOnly")}</p>
+                }
               >
-                {t("common.retry")}
-              </Button>
-            </div>
-          </Match>
-          <Match when={!result.error && result()}>
-            {(loaded) => {
-              const data = loaded();
-              return data.kind === "text" ? (
-                <Show
-                  when={data.diff?.hunks.length ? data.diff : undefined}
-                  fallback={
-                    <p class="p-4 text-xs text-muted">
-                      {t("git.metadataOnly")}
-                    </p>
-                  }
-                >
-                  {(diff) => (
+                {(diff) => (
+                  <Show when={props.context.open()}>
                     <FileDiff
                       comparison={{ diff: diff() }}
                       fallback={data.patch}
-                      scrollRoot={() => scrollRoot}
-                      scrollContent={() => scrollContent}
-                      visible={props.visible}
+                      scrollRoot={props.context.scrollRoot}
+                      scrollContent={props.context.scrollContent}
+                      visible={props.context.visible()}
                     />
-                  )}
-                </Show>
-              ) : (
-                <p class="p-4 text-xs text-muted">
-                  {t(
-                    `git.${data.kind}` as
-                      | "git.binary"
-                      | "git.tooLarge"
-                      | "git.unsupported"
-                      | "git.submodule",
-                  )}
-                </p>
-              );
-            }}
-          </Match>
-        </Switch>
-      </div>
+                  </Show>
+                )}
+              </Show>
+            ) : (
+              <p class="p-4 text-xs text-muted">
+                {t(
+                  `git.${data.kind}` as
+                    | "git.binary"
+                    | "git.tooLarge"
+                    | "git.unsupported"
+                    | "git.submodule",
+                )}
+              </p>
+            );
+          }}
+        </Match>
+      </Switch>
     </div>
   );
 }
@@ -133,7 +117,13 @@ export function CommitReview(props: {
     () => props.oid,
     (oid) => readCommit(props.threadId, oid),
   );
-  const [selected, setSelected] = createSignal(0);
+  const items = createMemo(() =>
+    (details.error ? [] : (details()?.files ?? [])).map((file, index) => ({
+      ...file,
+      id: `${details()?.commit.oid}:${index}`,
+      index,
+    })),
+  );
   return (
     <section
       class="@container flex h-full min-h-0 flex-col"
@@ -195,61 +185,40 @@ export function CommitReview(props: {
                 </span>
               </p>
             </header>
-            <div class="flex min-h-0 flex-1 flex-col @min-[600px]:flex-row">
-              <div class="max-h-44 shrink-0 overflow-auto border-b border-line @min-[600px]:max-h-none @min-[600px]:w-56 @min-[600px]:border-b-0 @min-[600px]:border-r">
-                <p class="border-b border-line px-3 py-2 text-[11px] text-muted">
-                  {t("git.files", { count: details().files.length })}
-                </p>
-                <For each={details().files}>
-                  {(file, index) => (
-                    <button
-                      type="button"
-                      class="flex w-full items-center gap-2 border-b border-line px-3 py-3 text-left text-xs hover:bg-panel focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent"
-                      classList={{ "bg-panel": selected() === index() }}
-                      aria-pressed={selected() === index()}
-                      aria-label={`${file.oldPath ? `${file.oldPath} → ${file.path}` : file.path} · ${file.change}`}
-                      title={
-                        file.oldPath
-                          ? `${file.oldPath} → ${file.path}`
-                          : file.path
-                      }
-                      onClick={() => setSelected(index())}
+            <Show when={details().commit.oid} keyed>
+              {(oid) => (
+                <FileChanges
+                  items={items()}
+                  visible={props.visible}
+                  headerControls={(file) => (
+                    <span
+                      class={`shrink-0 font-mono text-[11px] ${changeColor(file().change)}`}
                     >
-                      <FileCode
-                        aria-hidden="true"
-                        class="size-3.5 shrink-0 text-muted"
-                      />
-                      <span class="min-w-0 flex-1 truncate">
-                        {file.path.split("/").at(-1)}
-                      </span>
-                      <span class="font-mono text-[11px] text-muted">
-                        {file.change}
-                      </span>
-                    </button>
+                      {file().change}
+                    </span>
                   )}
-                </For>
-              </div>
-              <Show when={details().files[selected()]} keyed>
-                {(file) => (
-                  <CommitFile
-                    threadId={props.threadId}
-                    oid={props.oid}
-                    file={file}
-                    index={selected()}
-                    visible={props.visible}
-                  />
-                )}
-              </Show>
-              <Show when={details().files.length === 0}>
-                <p class="p-4 text-xs text-muted">
-                  {t(
-                    details().boundary
-                      ? "git.shallowBoundary"
-                      : "git.emptyCommit",
+                  empty={
+                    <p class="p-4 text-xs text-muted">
+                      {t(
+                        details().boundary
+                          ? "git.shallowBoundary"
+                          : "git.emptyCommit",
+                      )}
+                    </p>
+                  }
+                >
+                  {(file, context) => (
+                    <CommitFile
+                      threadId={props.threadId}
+                      oid={oid}
+                      file={file()}
+                      index={file().index}
+                      context={context}
+                    />
                   )}
-                </p>
-              </Show>
-            </div>
+                </FileChanges>
+              )}
+            </Show>
             <footer class="shrink-0 border-t border-line px-3 py-2 text-[11px] text-muted">
               {t("git.readOnly")}
             </footer>

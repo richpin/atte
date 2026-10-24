@@ -1,5 +1,11 @@
 export const en = {
   git: {
+    collapseAll: "Collapse all",
+    expandAll: "Expand all",
+    collapseFile: "Collapse {{path}}",
+    expandFile: "Expand {{path}}",
+    lineTotals:
+      "Text line changes: {{additions}} additions, {{deletions}} deletions",
     title: "Git",
     changes: "Changes",
     stagedChanges: "Staged Changes",
@@ -44,7 +50,7 @@ export const en = {
     emptyTree: "Empty tree",
     files: "{{count}} changed files",
     emptyCommit: "This commit has no file changes.",
-    metadataOnly: "No text lines changed. See the file status and metadata.",
+    metadataOnly: "No text lines changed.",
     binary: "Binary file changed. A text diff is not available.",
     tooLarge: "This file or its diff exceeds the 2 MiB preview limit.",
     unsupported: "This file is not UTF-8 text and cannot be previewed.",

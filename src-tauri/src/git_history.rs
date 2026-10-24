@@ -397,6 +397,8 @@ pub(crate) fn close_git_history(
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct ChangedFile {
+    additions: Option<u64>,
+    deletions: Option<u64>,
     path: String,
     old_path: Option<String>,
     change: String,
@@ -451,6 +453,8 @@ fn parse_files(bytes: &[u8]) -> Result<Vec<ChangedFile>, HistoryError> {
             paths.push(second);
         }
         files.push(ChangedFile {
+            additions: None,
+            deletions: None,
             path,
             old_path,
             change: parts[4].to_owned(),
@@ -462,6 +466,77 @@ fn parse_files(bytes: &[u8]) -> Result<Vec<ChangedFile>, HistoryError> {
         });
     }
     Ok(files)
+}
+
+fn apply_numstat(files: &mut [ChangedFile], bytes: &[u8]) -> Result<(), HistoryError> {
+    let invalid = || HistoryError::Git("Invalid file line statistics".into());
+    let mut fields = bytes.split(|byte| *byte == 0);
+    let mut stats = HashMap::new();
+    while let Some(record) = fields.next() {
+        if record.is_empty() && fields.clone().next().is_none() {
+            break;
+        }
+        let mut columns = record.splitn(3, |byte| *byte == b'\t');
+        let added = columns.next().ok_or_else(invalid)?;
+        let deleted = columns.next().ok_or_else(invalid)?;
+        let path = columns.next().ok_or_else(invalid)?;
+        let counts = if added == b"-" && deleted == b"-" {
+            (None, None)
+        } else {
+            let count = |value: &[u8]| {
+                std::str::from_utf8(value)
+                    .ok()
+                    .and_then(|value| value.parse::<u64>().ok())
+                    .ok_or_else(invalid)
+            };
+            (Some(count(added)?), Some(count(deleted)?))
+        };
+        // With -z a rename has an empty path followed by two raw paths.
+        let paths = if path.is_empty() {
+            vec![
+                fields.next().ok_or_else(invalid)?.to_vec(),
+                fields.next().ok_or_else(invalid)?.to_vec(),
+            ]
+        } else {
+            vec![path.to_vec()]
+        };
+        if stats.insert(paths, counts).is_some() {
+            return Err(invalid());
+        }
+    }
+    for file in files {
+        let (additions, deletions) = stats.remove(&file.paths).ok_or_else(invalid)?;
+        file.additions = additions;
+        file.deletions = deletions;
+    }
+    if !stats.is_empty() {
+        return Err(invalid());
+    }
+    Ok(())
+}
+
+async fn details_with_stats(root: &Path, oid: &str) -> Result<CommitDetails, HistoryError> {
+    let mut details = details(root, oid).await?;
+    if details.files.is_empty() {
+        return Ok(details);
+    }
+    let mut args = vec![
+        "diff-tree",
+        "--root",
+        "--no-commit-id",
+        "--numstat",
+        "-r",
+        "-z",
+        "-M",
+        "--no-ext-diff",
+        "--no-textconv",
+    ];
+    if let Some(base) = details.base.as_deref() {
+        args.push(base);
+    }
+    args.extend([oid, "--"]);
+    apply_numstat(&mut details.files, &run(root, &args).await?)?;
+    Ok(details)
 }
 async fn details(root: &Path, oid: &str) -> Result<CommitDetails, HistoryError> {
     if !valid_oid(oid) {
@@ -539,7 +614,7 @@ pub(crate) async fn read_git_commit(
     oid: String,
 ) -> Result<CommitDetails, HistoryError> {
     let root = repository_root(&folder(&threads, thread_id)?).await?;
-    details(&root, &oid).await
+    details_with_stats(&root, &oid).await
 }
 #[tauri::command]
 pub(crate) async fn read_git_commit_file(

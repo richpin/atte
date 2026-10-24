@@ -25,6 +25,8 @@ export type GitHistorySnapshot = {
   page: HistoryPage;
 };
 export type ChangedFile = {
+  additions: number | null;
+  deletions: number | null;
   path: string;
   oldPath: string | null;
   change: string;

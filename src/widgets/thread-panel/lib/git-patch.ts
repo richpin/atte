@@ -1,9 +1,8 @@
 import type { FileDiffMetadata } from "@pierre/diffs";
-import type { ChangedFile } from "../api/git-history";
 
 export async function prepareCommitPatch(
   patch: string,
-  file: ChangedFile,
+  file: { path: string; oldPath: string | null },
   key: string,
 ): Promise<FileDiffMetadata | undefined> {
   const { parsePatchFiles } = await import("@pierre/diffs");
