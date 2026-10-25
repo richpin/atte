@@ -11,6 +11,15 @@ export type WorkingFile = {
   unstaged: boolean;
   conflict: boolean;
   submodule: boolean;
+  exists: boolean;
+  stagedChange: WorkingSideChange | null;
+  unstagedChange: WorkingSideChange | null;
+};
+export type WorkingSideChange = {
+  oldPath: string | null;
+  additions: number | null;
+  deletions: number | null;
+  revision: string;
 };
 export type WorkingSnapshot = {
   root: string;
@@ -19,6 +28,8 @@ export type WorkingSnapshot = {
   indexTree: string | null;
   operation: string | null;
   files: WorkingFile[];
+  revision: string;
+  latestStash: string | null;
 };
 export type WorkingSide = "staged" | "unstaged";
 export const readWorkingChanges = (threadId: string) =>
@@ -35,6 +46,40 @@ export const unstageFiles = (
   fileIds: string[],
   all = false,
 ) => invoke<WorkingSnapshot>("unstage_git_files", { threadId, fileIds, all });
+export const restoreFiles = (
+  threadId: string,
+  fileIds: string[],
+  all: boolean,
+  expectedRevision: string,
+) =>
+  invoke<WorkingSnapshot>("restore_git_files", {
+    threadId,
+    fileIds,
+    all,
+    expectedRevision,
+  });
+export const trashFiles = (
+  threadId: string,
+  fileIds: string[],
+  expectedRevision: string,
+) =>
+  invoke<WorkingSnapshot>("trash_git_files", {
+    threadId,
+    fileIds,
+    expectedRevision,
+  });
+export const stashAll = (threadId: string, expectedRevision: string) =>
+  invoke<WorkingSnapshot>("stash_git_all", { threadId, expectedRevision });
+export const stashPop = (
+  threadId: string,
+  expectedRevision: string,
+  expectedStash: string | null,
+) =>
+  invoke<WorkingSnapshot>("stash_git_pop", {
+    threadId,
+    expectedRevision,
+    expectedStash,
+  });
 export const commitChanges = (
   threadId: string,
   message: string,

@@ -15,7 +15,6 @@ import type { GitCommit } from "../api/git-history";
 import { createThreadPanelModel as createModel } from "../model/thread-panel";
 import { CommitReview } from "./git/CommitReview";
 import { GitPanel } from "./git/GitPanel";
-import { WorkingReview } from "./git/WorkingReview";
 
 export function createThreadPanelModel(manager?: FilesManager) {
   const { t } = useI18n();
@@ -49,16 +48,6 @@ export function createThreadPanelModel(manager?: FilesManager) {
           visible={props.visible}
           onOpenCommit={(repository, commit) =>
             openCommit(threadId, repository, commit)
-          }
-          onOpenFile={() =>
-            model.openTab(threadId, {
-              id: `working-review:${threadId}`,
-              title: () => t("git.workingReview"),
-              icon: FileDiff,
-              content: (review) => (
-                <WorkingReview threadId={threadId} visible={review.visible} />
-              ),
-            })
           }
         />
       ),

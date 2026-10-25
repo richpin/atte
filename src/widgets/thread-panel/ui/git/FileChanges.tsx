@@ -37,6 +37,7 @@ export function FileChanges<T extends FileChangeItem>(props: {
   visible: boolean;
   children: (item: Accessor<T>, context: FileChangeContent) => JSX.Element;
   headerControls?: (item: Accessor<T>) => JSX.Element;
+  headerWrapper?: (item: Accessor<T>, header: () => JSX.Element) => JSX.Element;
   toolbarActions?: JSX.Element;
   empty?: JSX.Element;
 }) {
@@ -107,13 +108,8 @@ export function FileChanges<T extends FileChangeItem>(props: {
                 item().oldPath
                   ? `${item().oldPath} → ${item().path}`
                   : item().path;
-              return (
-                <Collapsible
-                  open={open()}
-                  onOpenChange={(value) => setOpen(id, value)}
-                  forceMount
-                  class="min-w-0 rounded-md border border-line bg-canvas"
-                >
+              function Header() {
+                return (
                   <div class="flex min-w-0 items-center gap-2 rounded-t-md px-2 py-1">
                     <CollapsibleTrigger
                       class="flex size-6 shrink-0 items-center justify-center rounded hover:bg-panel focus-visible:outline-2 focus-visible:outline-accent"
@@ -145,6 +141,20 @@ export function FileChanges<T extends FileChangeItem>(props: {
                       deletions={item().deletions}
                     />
                   </div>
+                );
+              }
+              return (
+                <Collapsible
+                  open={open()}
+                  onOpenChange={(value) => setOpen(id, value)}
+                  forceMount
+                  class="min-w-0 rounded-md border border-line bg-canvas"
+                >
+                  {props.headerWrapper ? (
+                    props.headerWrapper(item, () => <Header />)
+                  ) : (
+                    <Header />
+                  )}
                   <CollapsibleContent
                     hidden={!open()}
                     class="min-w-0 border-t border-line"

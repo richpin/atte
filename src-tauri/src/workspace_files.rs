@@ -344,7 +344,7 @@ fn operate(root: &Path, operation: FileOperation) -> Result<(), FileError> {
     Ok(())
 }
 
-fn trash_item(path: &Path) -> Result<(), trash::Error> {
+pub(crate) fn trash_item(path: &Path) -> Result<(), trash::Error> {
     #[cfg(target_os = "macos")]
     {
         use trash::macos::{DeleteMethod, TrashContextExtMacos};

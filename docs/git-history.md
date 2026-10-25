@@ -4,9 +4,11 @@
 
 ## 작업 변경 사항
 
-`Changes` 안에는 History와 같은 위치에 브랜치 선택 영역을 둔다. 작업 변경은 현재 작업 폴더에만 존재하므로 선택 가능한 범위는 해당 폴더에 체크아웃된 브랜치 하나다. detached HEAD도 명시한다. 이 범위에서 staged, unstaged, conflict 파일을 나눠 보여준다. 부분 staging된 파일은 양쪽 목록에 나타난다. 미추적 파일은 Changes에 포함하며 ignored 파일은 제외한다. 파일을 선택하면 같은 패널의 별도 리뷰 탭에서 해당 측면의 diff를 보여준다. 파일 또는 전체 단위 Stage/Unstage와 staged 변경만 대상으로 하는 일반 커밋을 지원한다. 커밋 제목과 선택적 본문 초안은 앱 실행 중 작업 폴더별로 유지하고 성공 시 지운다.
+`Changes` 안에는 History와 같은 위치에 브랜치 선택 영역을 둔다. 작업 변경은 현재 작업 폴더에만 존재하므로 선택 가능한 범위는 해당 폴더에 체크아웃된 브랜치 하나다. detached HEAD도 명시한다. 파일별 박스를 기본으로 펼쳐 diff를 한 스크롤 영역에서 보여준다. 각 박스는 파일명·상위 경로·상태·변경 줄 수를 표시하며, 부분 staging된 파일은 staged와 unstaged 박스에 각각 나타난다. 미추적 파일은 Changes에 포함하며 ignored 파일은 제외한다. 바이너리 파일의 줄 수는 `—`로 표시한다. 파일별 patch는 접고 펼쳐도 재요청하지 않고 실제 파일 상태가 바뀌면 갱신한다. 충돌 파일은 별도로 안내한다.
 
-Git 패널 또는 작업 변경 리뷰가 보이고 앱에 포커스가 있을 때 2초마다 상태를 갱신한다. 포커스 복귀와 수동 새로고침 시에도 조회한다. 같은 작업 폴더의 앱 내부 Git 조작은 직렬화한다. 커밋 직전 HEAD와 index tree가 확인한 상태와 달라지면 커밋을 거부한다. 충돌 또는 merge/rebase/cherry-pick 등의 진행 중인 작업은 조회만 가능하다. Discard, amend, 브랜치 전환, push/pull, 줄·hunk 단위 staging은 제공하지 않는다.
+체크박스는 작업 대상을 선택하며 Shift+클릭으로 범위를 선택한다. 우클릭에서 선택 항목을 Stage, Unstage, Restore 또는 Trash할 수 있다. 상단 메뉴에서 Stage All, Unstage All, Restore All Changes, Stash All, Stash Pop을 실행한다. Restore는 선택한 tracked 파일의 staged·unstaged 변경을 모두 HEAD로 되돌리고 새 staged 파일은 휴지통으로 보낸다. 원래 untracked였던 파일은 Restore All에서도 보존한다. Trash는 실제 파일을 시스템 휴지통으로 보내고 index를 보존한다. Stash All은 untracked 파일도 포함하며 Stash Pop은 최신 stash를 일반 Git 동작으로 적용한다. Restore와 Trash는 실행 전 확인한다. Commit 버튼은 Dialog에서 커밋 제목과 선택적 본문을 받고 staged 변경만 커밋한다. 초안은 앱 실행 중 작업 폴더별로 유지하고 성공 시 지운다.
+
+Git 패널이 보이고 앱에 포커스가 있을 때 2초마다 상태를 갱신한다. 포커스 복귀와 수동 새로고침 시에도 조회한다. 같은 작업 폴더의 앱 내부 Git 조작은 직렬화한다. 커밋 직전 HEAD와 index tree가 확인한 상태와 달라지면 커밋을 거부하고, Restore·Trash·Stash는 확인한 상태가 달라지면 거부한다. 충돌 또는 merge/rebase/cherry-pick 등의 진행 중인 작업은 조회만 가능하다. Amend, 브랜치 전환, push/pull, 줄·hunk 단위 staging은 제공하지 않는다.
 
 ## 이력 탐색
 

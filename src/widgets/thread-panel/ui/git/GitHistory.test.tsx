@@ -82,6 +82,8 @@ beforeEach(() => {
     branch: "main",
     head: "commit-0",
     indexTree: "tree",
+    revision: "revision",
+    latestStash: null,
     operation: null,
     files: [],
   });

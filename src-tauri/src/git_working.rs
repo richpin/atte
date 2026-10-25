@@ -1,11 +1,16 @@
 //! Working-tree status and narrow Git mutations for a thread's repository.
-use crate::{git, thread::Threads};
+use crate::{git, thread::Threads, workspace_files::trash_item};
 use serde::Serialize;
+use sha2::{Digest, Sha256};
 use std::{
-    collections::HashSet,
+    collections::{HashMap, HashSet},
     ffi::{OsStr, OsString},
-    os::unix::ffi::{OsStrExt, OsStringExt},
-    path::{Path, PathBuf},
+    io::Read,
+    os::unix::{
+        ffi::{OsStrExt, OsStringExt},
+        fs::MetadataExt,
+    },
+    path::{Component, Path, PathBuf},
     sync::OnceLock,
 };
 use tauri::State;
@@ -53,6 +58,17 @@ pub(crate) struct File {
     unstaged: bool,
     conflict: bool,
     submodule: bool,
+    exists: bool,
+    staged_change: Option<SideChange>,
+    unstaged_change: Option<SideChange>,
+}
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct SideChange {
+    old_path: Option<String>,
+    additions: Option<u64>,
+    deletions: Option<u64>,
+    revision: String,
 }
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -63,6 +79,8 @@ pub(crate) struct Snapshot {
     index_tree: Option<String>,
     operation: Option<String>,
     files: Vec<File>,
+    revision: String,
+    latest_stash: Option<String>,
 }
 #[derive(Serialize)]
 #[serde(tag = "kind", content = "patch", rename_all = "camelCase")]
@@ -206,11 +224,112 @@ fn parse_status(bytes: &[u8]) -> Result<Vec<File>, Error> {
             unstaged: y != b' ' && !conflict,
             conflict,
             submodule: false,
+            exists: false,
+            staged_change: None,
+            unstaged_change: None,
         });
     }
     Ok(files)
 }
-async fn snapshot(root: &Path) -> Result<Snapshot, Error> {
+
+type LineStats = (Option<Vec<u8>>, Option<u64>, Option<u64>);
+
+fn parse_numstat(bytes: &[u8]) -> Result<HashMap<Vec<u8>, LineStats>, Error> {
+    let mut fields = bytes.split(|byte| *byte == 0);
+    let mut stats = HashMap::new();
+    while let Some(record) = fields.next() {
+        if record.is_empty() && fields.clone().next().is_none() {
+            break;
+        }
+        let mut columns = record.splitn(3, |byte| *byte == b'\t');
+        let (Some(added), Some(deleted), Some(path)) =
+            (columns.next(), columns.next(), columns.next())
+        else {
+            return Err(Error::Git("Invalid Git line statistics".into()));
+        };
+        let counts = if added == b"-" && deleted == b"-" {
+            (None, None)
+        } else {
+            let parse = |bytes: &[u8]| {
+                std::str::from_utf8(bytes)
+                    .ok()
+                    .and_then(|text| text.parse().ok())
+                    .ok_or_else(|| Error::Git("Invalid Git line statistics".into()))
+            };
+            (Some(parse(added)?), Some(parse(deleted)?))
+        };
+        let (old, current) = if path.is_empty() {
+            (
+                Some(fields.next().ok_or(Error::Stale)?.to_vec()),
+                fields.next().ok_or(Error::Stale)?.to_vec(),
+            )
+        } else {
+            (None, path.to_vec())
+        };
+        if stats.insert(current, (old, counts.0, counts.1)).is_some() {
+            return Err(Error::Git("Duplicate Git line statistics".into()));
+        }
+    }
+    Ok(stats)
+}
+
+fn untracked_stats(path: &Path) -> Result<(Option<u64>, Option<u64>), Error> {
+    let metadata = match std::fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok((None, None)),
+        Err(error) => return Err(Error::Git(error.to_string())),
+    };
+    if !metadata.is_file() {
+        return Ok((None, None));
+    }
+    let mut file = std::fs::File::open(path).map_err(|error| Error::Git(error.to_string()))?;
+    let mut lines = 0;
+    let mut last = None;
+    let mut buffer = [0; 65536];
+    loop {
+        let read = file
+            .read(&mut buffer)
+            .map_err(|error| Error::Git(error.to_string()))?;
+        if read == 0 {
+            break;
+        }
+        if buffer[..read].contains(&0) {
+            return Ok((None, None));
+        }
+        lines += buffer[..read].iter().filter(|byte| **byte == b'\n').count() as u64;
+        last = Some(buffer[read - 1]);
+    }
+    if last.is_some_and(|byte| byte != b'\n') {
+        lines += 1;
+    }
+    Ok((Some(lines), Some(0)))
+}
+
+fn digest(parts: &[&[u8]]) -> String {
+    let mut hash = Sha256::new();
+    for part in parts {
+        hash.update((part.len() as u64).to_le_bytes());
+        hash.update(part);
+    }
+    format!("{:x}", hash.finalize())
+}
+
+fn file_metadata_revision(path: &Path) -> String {
+    match std::fs::symlink_metadata(path) {
+        Ok(meta) => format!(
+            "{}:{}:{}:{}:{}:{}",
+            meta.ino(),
+            meta.len(),
+            meta.mtime(),
+            meta.mtime_nsec(),
+            meta.ctime(),
+            meta.ctime_nsec()
+        ),
+        Err(_) => "missing".into(),
+    }
+}
+
+async fn status_files(root: &Path) -> Result<(Vec<File>, Vec<u8>, Vec<u8>), Error> {
     let status = run(
         root,
         &[
@@ -242,8 +361,137 @@ async fn snapshot(root: &Path) -> Result<Snapshot, Error> {
         })
         .collect();
     for file in &mut files {
-        file.submodule = submodules.contains(&decode(&file.id)?);
+        let raw = decode(&file.id)?;
+        file.submodule = submodules.contains(&raw);
+        file.exists = std::fs::symlink_metadata(root.join(OsStr::from_bytes(&raw))).is_ok();
     }
+    Ok((files, status, index))
+}
+
+async fn snapshot(root: &Path) -> Result<Snapshot, Error> {
+    let (mut files, status, index) = status_files(root).await?;
+    let conflicted = files.iter().any(|file| file.conflict);
+    let staged_stats = if conflicted {
+        HashMap::new()
+    } else {
+        parse_numstat(
+            &run(
+                root,
+                &[
+                    OsStr::new("diff"),
+                    OsStr::new("--cached"),
+                    OsStr::new("--numstat"),
+                    OsStr::new("-z"),
+                    OsStr::new("-M"),
+                    OsStr::new("--no-ext-diff"),
+                    OsStr::new("--no-textconv"),
+                ],
+            )
+            .await?,
+        )?
+    };
+    let unstaged_stats = if conflicted {
+        HashMap::new()
+    } else {
+        parse_numstat(
+            &run(
+                root,
+                &[
+                    OsStr::new("diff"),
+                    OsStr::new("--numstat"),
+                    OsStr::new("-z"),
+                    OsStr::new("-M"),
+                    OsStr::new("--no-ext-diff"),
+                    OsStr::new("--no-textconv"),
+                ],
+            )
+            .await?,
+        )?
+    };
+    let head = optional(
+        root,
+        &[
+            OsStr::new("rev-parse"),
+            OsStr::new("--verify"),
+            OsStr::new("HEAD"),
+        ],
+    )
+    .await;
+    let index_tree = optional(root, &[OsStr::new("write-tree")]).await;
+    let latest_stash = optional(
+        root,
+        &[
+            OsStr::new("rev-parse"),
+            OsStr::new("--verify"),
+            OsStr::new("refs/stash"),
+        ],
+    )
+    .await;
+    for file in &mut files {
+        let raw = decode(&file.id)?;
+        let index_entry = index
+            .split(|byte| *byte == 0)
+            .find(|entry| entry.splitn(2, |byte| *byte == b'\t').nth(1) == Some(raw.as_slice()))
+            .unwrap_or_default();
+        if file.staged {
+            let stats = staged_stats.get(&raw);
+            file.staged_change = Some(SideChange {
+                old_path: stats
+                    .and_then(|stats| stats.0.as_deref())
+                    .map(display)
+                    .or_else(|| file.old_path.clone()),
+                additions: stats.and_then(|stats| stats.1),
+                deletions: stats.and_then(|stats| stats.2),
+                revision: digest(&[
+                    head.as_deref().unwrap_or("").as_bytes(),
+                    index_entry,
+                    &file.status.as_bytes()[..1],
+                ]),
+            });
+        }
+        if file.unstaged {
+            let stats = unstaged_stats.get(&raw);
+            let (additions, deletions) = if file.status == "??" {
+                untracked_stats(&root.join(OsStr::from_bytes(&raw)))?
+            } else {
+                (
+                    stats.and_then(|stats| stats.1),
+                    stats.and_then(|stats| stats.2),
+                )
+            };
+            let metadata = file_metadata_revision(&root.join(OsStr::from_bytes(&raw)));
+            file.unstaged_change = Some(SideChange {
+                old_path: stats.and_then(|stats| stats.0.as_deref()).map(display),
+                additions,
+                deletions,
+                revision: digest(&[
+                    index_entry,
+                    metadata.as_bytes(),
+                    &file.status.as_bytes()[1..],
+                ]),
+            });
+        }
+    }
+    let mut revision_parts = vec![
+        status.as_slice(),
+        index.as_slice(),
+        head.as_deref().unwrap_or("").as_bytes(),
+    ];
+    let metadata_revisions: Vec<String> = files
+        .iter()
+        .map(|file| {
+            file.unstaged_change
+                .as_ref()
+                .map_or("", |change| change.revision.as_str())
+                .to_owned()
+        })
+        .collect();
+    revision_parts.extend(
+        metadata_revisions
+            .iter()
+            .map(|revision| revision.as_bytes()),
+    );
+    let revision = digest(&revision_parts);
     Ok(Snapshot {
         root: root.to_path_buf(),
         branch: optional(
@@ -256,18 +504,12 @@ async fn snapshot(root: &Path) -> Result<Snapshot, Error> {
             ],
         )
         .await,
-        head: optional(
-            root,
-            &[
-                OsStr::new("rev-parse"),
-                OsStr::new("--verify"),
-                OsStr::new("HEAD"),
-            ],
-        )
-        .await,
-        index_tree: optional(root, &[OsStr::new("write-tree")]).await,
+        head,
+        index_tree,
         operation: operation(root).await?,
         files,
+        revision,
+        latest_stash,
     })
 }
 #[tauri::command]
@@ -288,9 +530,8 @@ pub(crate) async fn read_git_working_file(
         return Err(Error::Invalid);
     }
     let root = root(&threads, thread_id).await?;
-    let status = snapshot(&root).await?;
-    let file = status
-        .files
+    let (files, _, _) = status_files(&root).await?;
+    let file = files
         .iter()
         .find(|file| file.id == file_id)
         .ok_or(Error::Stale)?;
@@ -434,6 +675,275 @@ async fn change_files_at(
         }
     }
     snapshot(root).await
+}
+
+fn safe_item(root: &Path, raw: &[u8]) -> Result<PathBuf, Error> {
+    let relative = Path::new(OsStr::from_bytes(raw));
+    if raw.is_empty()
+        || relative
+            .components()
+            .any(|part| !matches!(part, Component::Normal(name) if name != ".git"))
+    {
+        return Err(Error::Invalid);
+    }
+    let canonical_root = root.canonicalize().map_err(|_| Error::Stale)?;
+    let parent = root
+        .join(relative.parent().ok_or(Error::Invalid)?)
+        .canonicalize()
+        .map_err(|_| Error::Stale)?;
+    if !parent.starts_with(&canonical_root)
+        || parent
+            .strip_prefix(&canonical_root)
+            .is_ok_and(|path| path.components().any(|part| part.as_os_str() == ".git"))
+    {
+        return Err(Error::Invalid);
+    }
+    Ok(parent.join(relative.file_name().ok_or(Error::Invalid)?))
+}
+
+async fn trash_existing(root: &Path, id: &str) -> Result<bool, Error> {
+    let path = safe_item(root, &decode(id)?)?;
+    let metadata = match std::fs::symlink_metadata(&path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(error) => return Err(Error::Git(error.to_string())),
+    };
+    if metadata.is_dir() {
+        return Err(Error::Invalid);
+    }
+    tauri::async_runtime::spawn_blocking(move || trash_item(&path))
+        .await
+        .map_err(|error| Error::Git(error.to_string()))?
+        .map_err(|error| Error::Git(error.to_string()))?;
+    Ok(true)
+}
+
+async fn selected_files<'a>(
+    current: &'a Snapshot,
+    ids: &[String],
+    all: bool,
+    restore: bool,
+) -> Result<Vec<&'a File>, Error> {
+    if all {
+        return Ok(current
+            .files
+            .iter()
+            .filter(|file| !file.conflict && !file.submodule && (!restore || file.status != "??"))
+            .collect());
+    }
+    if ids.is_empty() {
+        return Err(Error::Invalid);
+    }
+    let mut seen = HashSet::new();
+    ids.iter()
+        .map(|id| {
+            if !seen.insert(id) {
+                return Err(Error::Invalid);
+            }
+            current
+                .files
+                .iter()
+                .find(|file| file.id == *id && !file.conflict && (!restore || file.status != "??"))
+                .ok_or(Error::Stale)
+        })
+        .collect()
+}
+
+async fn restore_or_trash_at(
+    root: &Path,
+    ids: Vec<String>,
+    all: bool,
+    expected_revision: String,
+    restore: bool,
+) -> Result<Snapshot, Error> {
+    let _guard = mutation().lock().await;
+    let current = snapshot(root).await?;
+    if current.operation.is_some() || current.files.iter().any(|file| file.conflict) {
+        return Err(Error::InProgress);
+    }
+    if current.revision != expected_revision {
+        return Err(Error::Stale);
+    }
+    let selected = selected_files(&current, &ids, all, restore).await?;
+    if selected.is_empty() {
+        return Err(Error::Stale);
+    }
+    let mut acted = false;
+    for file in selected {
+        if file.submodule {
+            return Err(Error::Invalid);
+        }
+        if !restore {
+            acted |= trash_existing(root, &file.id).await?;
+            continue;
+        }
+        if file.status.starts_with(['A', 'C']) || current.head.is_none() {
+            trash_existing(root, &file.id).await?;
+            let literal = literal_path(&file.id)?;
+            run(
+                root,
+                &[
+                    OsStr::new("rm"),
+                    OsStr::new("--cached"),
+                    OsStr::new("-f"),
+                    OsStr::new("--ignore-unmatch"),
+                    OsStr::new("--"),
+                    OsStr::from_bytes(&literal),
+                ],
+            )
+            .await?;
+        } else if file.status.starts_with('R') {
+            trash_existing(root, &file.id).await?;
+            let current_path = literal_path(&file.id)?;
+            let previous = file.old_id.as_deref().ok_or(Error::Stale)?;
+            let previous_path = literal_path(previous)?;
+            run(
+                root,
+                &[
+                    OsStr::new("rm"),
+                    OsStr::new("--cached"),
+                    OsStr::new("-f"),
+                    OsStr::new("--ignore-unmatch"),
+                    OsStr::new("--"),
+                    OsStr::from_bytes(&current_path),
+                ],
+            )
+            .await?;
+            run(
+                root,
+                &[
+                    OsStr::new("restore"),
+                    OsStr::new("--source=HEAD"),
+                    OsStr::new("--staged"),
+                    OsStr::new("--worktree"),
+                    OsStr::new("--"),
+                    OsStr::from_bytes(&previous_path),
+                ],
+            )
+            .await?;
+        } else {
+            let literal = literal_path(&file.id)?;
+            run(
+                root,
+                &[
+                    OsStr::new("restore"),
+                    OsStr::new("--source=HEAD"),
+                    OsStr::new("--staged"),
+                    OsStr::new("--worktree"),
+                    OsStr::new("--"),
+                    OsStr::from_bytes(&literal),
+                ],
+            )
+            .await?;
+        }
+        acted = true;
+    }
+    if !acted {
+        return Err(Error::Stale);
+    }
+    snapshot(root).await
+}
+
+#[tauri::command]
+pub(crate) async fn restore_git_files(
+    threads: State<'_, Threads>,
+    thread_id: Uuid,
+    file_ids: Vec<String>,
+    all: bool,
+    expected_revision: String,
+) -> Result<Snapshot, Error> {
+    restore_or_trash_at(
+        &root(&threads, thread_id).await?,
+        file_ids,
+        all,
+        expected_revision,
+        true,
+    )
+    .await
+}
+
+#[tauri::command]
+pub(crate) async fn trash_git_files(
+    threads: State<'_, Threads>,
+    thread_id: Uuid,
+    file_ids: Vec<String>,
+    expected_revision: String,
+) -> Result<Snapshot, Error> {
+    restore_or_trash_at(
+        &root(&threads, thread_id).await?,
+        file_ids,
+        false,
+        expected_revision,
+        false,
+    )
+    .await
+}
+
+async fn stash_at(
+    root: &Path,
+    expected_revision: String,
+    pop: bool,
+    expected_stash: Option<String>,
+) -> Result<Snapshot, Error> {
+    let _guard = mutation().lock().await;
+    let current = snapshot(root).await?;
+    if current.operation.is_some() || current.files.iter().any(|file| file.conflict) {
+        return Err(Error::InProgress);
+    }
+    if current.revision != expected_revision || (pop && current.latest_stash != expected_stash) {
+        return Err(Error::Stale);
+    }
+    if pop {
+        if current.latest_stash.is_none() {
+            return Err(Error::Stale);
+        }
+        run(root, &[OsStr::new("stash"), OsStr::new("pop")]).await?;
+    } else {
+        if current.files.is_empty() {
+            return Err(Error::Stale);
+        }
+        run(
+            root,
+            &[
+                OsStr::new("stash"),
+                OsStr::new("push"),
+                OsStr::new("--include-untracked"),
+            ],
+        )
+        .await?;
+    }
+    snapshot(root).await
+}
+
+#[tauri::command]
+pub(crate) async fn stash_git_all(
+    threads: State<'_, Threads>,
+    thread_id: Uuid,
+    expected_revision: String,
+) -> Result<Snapshot, Error> {
+    stash_at(
+        &root(&threads, thread_id).await?,
+        expected_revision,
+        false,
+        None,
+    )
+    .await
+}
+
+#[tauri::command]
+pub(crate) async fn stash_git_pop(
+    threads: State<'_, Threads>,
+    thread_id: Uuid,
+    expected_revision: String,
+    expected_stash: Option<String>,
+) -> Result<Snapshot, Error> {
+    stash_at(
+        &root(&threads, thread_id).await?,
+        expected_revision,
+        true,
+        expected_stash,
+    )
+    .await
 }
 #[tauri::command]
 pub(crate) async fn stage_git_files(
@@ -691,5 +1201,181 @@ mod tests {
         let staged = change_files_at(&linked, vec![], true, true).await.unwrap();
         assert!(staged.files[0].staged);
         assert!(snapshot(root).await.unwrap().files.is_empty());
+    }
+
+    #[tokio::test]
+    async fn side_statistics_follow_partial_staging_and_unusual_paths() {
+        let dir = repo().await;
+        let root = dir.path();
+        let unusual = OsStr::from_bytes(b"odd\nname");
+        std::fs::write(root.join(unusual), "first\n").unwrap();
+        git(root, &["add", "-A"]).await;
+        git(root, &["commit", "-qm", "feat: base"]).await;
+        std::fs::write(root.join(unusual), "first\nsecond\n").unwrap();
+        git(root, &["add", "-A"]).await;
+        std::fs::write(root.join(unusual), "third\n").unwrap();
+        let state = snapshot(root).await.unwrap();
+        let file = &state.files[0];
+        assert_eq!(file.staged_change.as_ref().unwrap().additions, Some(1));
+        assert_eq!(file.unstaged_change.as_ref().unwrap().deletions, Some(2));
+        assert_ne!(
+            file.staged_change.as_ref().unwrap().revision,
+            file.unstaged_change.as_ref().unwrap().revision
+        );
+        std::fs::write(root.join("binary"), b"a\0b").unwrap();
+        let state = snapshot(root).await.unwrap();
+        let binary = state
+            .files
+            .iter()
+            .find(|file| file.path == "binary")
+            .unwrap();
+        assert_eq!(binary.unstaged_change.as_ref().unwrap().additions, None);
+    }
+
+    #[tokio::test]
+    async fn restore_resets_both_sides_and_keeps_original_untracked_files() {
+        let dir = repo().await;
+        let root = dir.path();
+        std::fs::write(root.join("tracked"), "base\n").unwrap();
+        git(root, &["add", "tracked"]).await;
+        git(root, &["commit", "-qm", "feat: base"]).await;
+        std::fs::write(root.join("tracked"), "staged\n").unwrap();
+        git(root, &["add", "tracked"]).await;
+        std::fs::write(root.join("tracked"), "unstaged\n").unwrap();
+        std::fs::write(root.join("new"), "preserve\n").unwrap();
+        let before = snapshot(root).await.unwrap();
+        let after = restore_or_trash_at(root, vec![], true, before.revision, true)
+            .await
+            .unwrap();
+        assert_eq!(std::fs::read(root.join("tracked")).unwrap(), b"base\n");
+        assert_eq!(std::fs::read(root.join("new")).unwrap(), b"preserve\n");
+        assert_eq!(after.files.len(), 1);
+        assert_eq!(after.files[0].status, "??");
+    }
+
+    #[tokio::test]
+    async fn stash_all_includes_untracked_and_pop_does_not_restore_index() {
+        let dir = repo().await;
+        let root = dir.path();
+        std::fs::write(root.join("tracked"), "base\n").unwrap();
+        git(root, &["add", "tracked"]).await;
+        git(root, &["commit", "-qm", "feat: base"]).await;
+        std::fs::write(root.join("tracked"), "changed\n").unwrap();
+        git(root, &["add", "tracked"]).await;
+        std::fs::write(root.join("untracked"), "new\n").unwrap();
+        let before = snapshot(root).await.unwrap();
+        let saved = stash_at(root, before.revision, false, None).await.unwrap();
+        assert!(saved.files.is_empty());
+        assert!(saved.latest_stash.is_some());
+        let restored = stash_at(root, saved.revision, true, saved.latest_stash.clone())
+            .await
+            .unwrap();
+        assert!(restored.latest_stash.is_none());
+        assert_eq!(std::fs::read(root.join("untracked")).unwrap(), b"new\n");
+        assert!(restored
+            .files
+            .iter()
+            .any(|file| file.path == "tracked" && file.unstaged && !file.staged));
+    }
+
+    #[tokio::test]
+    async fn stale_confirmation_rejects_trash() {
+        let dir = repo().await;
+        let root = dir.path();
+        std::fs::write(root.join("tracked"), "base\n").unwrap();
+        git(root, &["add", "tracked"]).await;
+        git(root, &["commit", "-qm", "feat: base"]).await;
+        std::fs::write(root.join("tracked"), "changed\n").unwrap();
+        let before = snapshot(root).await.unwrap();
+        std::fs::write(root.join("tracked"), "newer content\n").unwrap();
+        assert!(matches!(
+            restore_or_trash_at(
+                root,
+                vec![before.files[0].id.clone()],
+                false,
+                before.revision,
+                false
+            )
+            .await,
+            Err(Error::Stale)
+        ));
+    }
+
+    #[tokio::test]
+    async fn restore_handles_a_staged_rename_whose_new_file_is_already_missing() {
+        let dir = repo().await;
+        let root = dir.path();
+        std::fs::write(root.join("before"), "content\n").unwrap();
+        git(root, &["add", "before"]).await;
+        git(root, &["commit", "-qm", "feat: base"]).await;
+        std::fs::rename(root.join("before"), root.join("after")).unwrap();
+        git(root, &["add", "-A"]).await;
+        std::fs::remove_file(root.join("after")).unwrap();
+        let current = snapshot(root).await.unwrap();
+        let after = restore_or_trash_at(root, vec![], true, current.revision, true)
+            .await
+            .unwrap();
+        assert!(after.files.is_empty());
+        assert_eq!(std::fs::read(root.join("before")).unwrap(), b"content\n");
+    }
+
+    #[tokio::test]
+    async fn restore_on_unborn_branch_removes_a_missing_staged_addition() {
+        let dir = repo().await;
+        let root = dir.path();
+        std::fs::write(root.join("new"), "content\n").unwrap();
+        git(root, &["add", "new"]).await;
+        std::fs::remove_file(root.join("new")).unwrap();
+        let current = snapshot(root).await.unwrap();
+        assert!(current.head.is_none());
+        let restored = restore_or_trash_at(root, vec![], true, current.revision, true)
+            .await
+            .unwrap();
+        assert!(restored.files.is_empty());
+    }
+
+    #[tokio::test]
+    async fn stash_pop_conflict_keeps_the_stash() {
+        let dir = repo().await;
+        let root = dir.path();
+        std::fs::write(root.join("file"), "base\n").unwrap();
+        git(root, &["add", "file"]).await;
+        git(root, &["commit", "-qm", "feat: base"]).await;
+        std::fs::write(root.join("file"), "stashed\n").unwrap();
+        let pending = snapshot(root).await.unwrap();
+        let saved = stash_at(root, pending.revision, false, None).await.unwrap();
+        std::fs::write(root.join("file"), "committed\n").unwrap();
+        git(root, &["commit", "-qam", "feat: change"]).await;
+        let current = snapshot(root).await.unwrap();
+        assert!(
+            stash_at(root, current.revision, true, saved.latest_stash.clone())
+                .await
+                .is_err()
+        );
+        let after = snapshot(root).await.unwrap();
+        assert_eq!(after.latest_stash, saved.latest_stash);
+    }
+
+    #[tokio::test]
+    #[ignore = "requires permission to use the system Trash on macOS"]
+    async fn trash_tracked_file_preserves_index() {
+        let dir = repo().await;
+        let root = dir.path();
+        std::fs::write(root.join("tracked"), "base\n").unwrap();
+        git(root, &["add", "tracked"]).await;
+        git(root, &["commit", "-qm", "feat: base"]).await;
+        std::fs::write(root.join("tracked"), "changed\n").unwrap();
+        let current = snapshot(root).await.unwrap();
+        let after = restore_or_trash_at(
+            root,
+            vec![current.files[0].id.clone()],
+            false,
+            current.revision,
+            false,
+        )
+        .await
+        .unwrap();
+        assert!(!root.join("tracked").exists());
+        assert_eq!(after.files[0].status, " D");
     }
 }

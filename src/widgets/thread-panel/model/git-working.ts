@@ -1,7 +1,5 @@
 import { createStore } from "solid-js/store";
-import type { WorkingSide } from "../api/git-working";
 
-export type WorkingSelection = { id: string; side: WorkingSide };
 const [drafts, setDrafts] = createStore<
   Record<string, { title: string; body: string }>
 >({});
@@ -11,15 +9,6 @@ export const setDraft = (root: string, key: "title" | "body", value: string) =>
   setDrafts(root, { ...draftFor(root), [key]: value });
 export const clearDraft = (root: string) =>
   setDrafts(root, { title: "", body: "" });
-
-const [selections, setSelections] = createStore<
-  Record<string, WorkingSelection>
->({});
-export const selectionFor = (threadId: string) => selections[threadId];
-export const selectWorkingFile = (
-  threadId: string,
-  selection: WorkingSelection,
-) => setSelections(threadId, selection);
 
 const [roots, setRoots] = createStore<Record<string, string>>({});
 export const rootForThread = (threadId: string) => roots[threadId];
