@@ -76,9 +76,14 @@ it("shows two-column cards with descriptions and filters by description", async 
 it("uses sidebar source folders for project scope and installation", async () => {
   renderPage();
   await screen.findByText("review-work");
+  const projectGroup = screen.getByRole("group", { name: "Projects" });
+  expect(
+    projectGroup.contains(screen.getByRole("button", { name: "Global" })),
+  ).toBe(false);
   const projectButton = screen.getByRole("button", {
     name: "project · /tmp/project",
   });
+  expect(projectGroup.contains(projectButton)).toBe(true);
   expect(projectButton).toHaveProperty("title", "/tmp/project");
   fireEvent.click(projectButton);
   await waitFor(() =>
@@ -124,8 +129,8 @@ it("shows Markdown details and confirms uninstall before reloading", async () =>
   expect(screen.getByText("Review").closest("strong")).toBeTruthy();
   expect(screen.getByText(`Path: ${skill.path}`)).toBeTruthy();
   fireEvent.click(screen.getByRole("button", { name: "Uninstall" }));
-  await screen.findByRole("alertdialog");
-  expect(screen.getByText("review-work · Global")).toBeTruthy();
+  const dialog = await screen.findByRole("alertdialog");
+  expect(dialog.textContent).not.toContain("review-work · Global");
   const confirm = screen.getAllByRole("button", { name: "Uninstall" }).at(-1);
   if (confirm) fireEvent.click(confirm);
   await waitFor(() =>

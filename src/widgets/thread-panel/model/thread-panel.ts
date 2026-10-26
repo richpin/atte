@@ -1,9 +1,8 @@
 import type { Accessor, Component } from "solid-js";
 import { createStore, produce } from "solid-js/store";
 
-export const THREAD_PANEL_DEFAULT_WIDTH = 360;
-export const THREAD_PANEL_MIN_WIDTH = 320;
-export const THREAD_CONTENT_MIN_WIDTH = 320;
+export const THREAD_PANEL_MIN_WIDTH = 256;
+export const THREAD_CONTENT_MIN_WIDTH = 256;
 
 export type ThreadPanelContentProps = {
   active: boolean;
@@ -21,7 +20,7 @@ export type ThreadPanelTab = {
 export type ThreadPanelState = {
   threadId: string;
   open: boolean;
-  width: number;
+  width: number | null;
   fullWidth: boolean;
   tabs: ThreadPanelTab[];
   selectedTabId: string;
@@ -39,7 +38,7 @@ export function createThreadPanelModel(
       setPanels(threadId, {
         threadId,
         open: false,
-        width: THREAD_PANEL_DEFAULT_WIDTH,
+        width: null,
         fullWidth: false,
         tabs: [tab],
         selectedTabId: tab.id,

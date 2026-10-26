@@ -38,6 +38,7 @@ export function createFilesModel(threadId: string) {
   const [drafts, setDrafts] = createStore<Record<string, Draft>>({});
   const [selected, setSelected] = createSignal<string>();
   const [error, setError] = createSignal<unknown>();
+  const [openError, setOpenError] = createSignal<unknown>();
   const [warnings, setWarnings] = createSignal<string[]>([]);
   const [loading, setLoading] = createSignal(true);
   const [busy, setBusy] = createSignal(false);
@@ -98,6 +99,7 @@ export function createFilesModel(threadId: string) {
   async function open(path: string) {
     setSelected(path);
     setError(undefined);
+    setOpenError(undefined);
     if (imageMime(path)) {
       setImageRevision((revision) => revision + 1);
       return;
@@ -122,7 +124,7 @@ export function createFilesModel(threadId: string) {
         revision: 0,
       });
     } catch (cause) {
-      if (!disposed && selected() === path) setError(cause);
+      if (!disposed && selected() === path) setOpenError(cause);
     }
   }
   async function save(id: string) {
@@ -282,6 +284,7 @@ export function createFilesModel(threadId: string) {
     current,
     error,
     setError,
+    openError,
     warnings,
     loading,
     busy,
@@ -319,6 +322,7 @@ export function createFilesModel(threadId: string) {
     },
     retry: () => {
       setError(undefined);
+      setOpenError(undefined);
       setLoading(true);
       setGeneration((value) => value + 1);
     },

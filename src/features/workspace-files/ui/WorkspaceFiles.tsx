@@ -77,8 +77,7 @@ export function WorkspaceFiles(props: {
       void subscription.then((stop) => stop?.());
     });
   });
-  const description = () => {
-    const cause = model.error();
+  const description = (cause: unknown) => {
     if (typeof cause === "string") {
       const labels: Record<string, string> = {
         accessDenied: t("files.accessDenied"),
@@ -193,7 +192,7 @@ export function WorkspaceFiles(props: {
           role="alert"
           class="shrink-0 break-words border-b border-line px-2 py-1 text-xs text-muted"
         >
-          {description()}
+          {description(model.error())}
         </p>
       </Show>
       <Show when={model.warnings().length}>
@@ -401,6 +400,16 @@ export function WorkspaceFiles(props: {
             )}
           </Show>
           <div class="min-h-0 flex-1">
+            <Show
+              when={model.selected() && !model.current() && model.openError()}
+            >
+              <p
+                role="alert"
+                class="flex h-full items-center justify-center break-words p-4 text-center text-sm text-muted"
+              >
+                {description(model.openError())}
+              </p>
+            </Show>
             <Show
               when={
                 props.visible &&

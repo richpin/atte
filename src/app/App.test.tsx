@@ -5164,7 +5164,7 @@ it("opens each conversation link in a new web tab and routes user and agent link
   expect(openUrl).not.toHaveBeenCalled();
 });
 
-it("shows the thread body and keeps the sidebar open in a narrow thread layout", async () => {
+it("opens a half-width project panel at the default window size and hides it when narrow", async () => {
   const saved = {
     id: "narrow-web",
     title: "Narrow web thread",
@@ -5194,6 +5194,16 @@ it("shows the thread body and keeps the sidebar open in a narrow thread layout",
   await userEvent.click(
     screen.getByRole("button", { name: "프로젝트 패널 열기" }),
   );
+  expect(
+    screen.getByRole("complementary", { name: "프로젝트 패널" }),
+  ).toBeTruthy();
+  expect(
+    Number.parseFloat(
+      (handle.nextElementSibling as HTMLElement).style.flexBasis,
+    ),
+  ).toBeCloseTo(50);
+  layoutWidth = 480;
+  resizeElement(handle.parentElement as HTMLElement, 480);
   expect(screen.getByRole("button", { name: "사이드바 접기" })).toBeTruthy();
   expect(
     screen.queryByRole("complementary", { name: "프로젝트 패널" }),

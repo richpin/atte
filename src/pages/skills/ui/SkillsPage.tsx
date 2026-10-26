@@ -152,9 +152,6 @@ export function SkillsPage(props: {
     }
   }
 
-  const scopeLabel = () => project()?.name ?? t("skills.global");
-  const scopeLocation = () => project()?.folder ?? "";
-
   return (
     <div class="h-full overflow-y-auto px-6 pb-12">
       <div class="@container mx-auto max-w-4xl space-y-6 pt-6">
@@ -186,41 +183,53 @@ export function SkillsPage(props: {
           </div>
         </div>
         <div class="flex flex-wrap items-center gap-2">
-          <fieldset class="flex flex-wrap gap-1 rounded-xl border border-line p-1">
+          <fieldset class="flex flex-wrap items-center gap-x-4 gap-y-2">
             <legend class="sr-only">{t("skills.scope")}</legend>
-            <Button
-              size="sm"
-              variant={!project() ? "secondary" : "ghost"}
-              aria-pressed={!project()}
-              disabled={busy()}
-              onClick={() => setFolder(undefined)}
-            >
-              {t("skills.global")}
-            </Button>
-            <For each={props.projects}>
-              {(entry) => {
-                const duplicate = () =>
-                  props.projects.filter((item) => item.name === entry.name)
-                    .length > 1;
-                return (
-                  <Button
-                    size="sm"
-                    variant={folder() === entry.folder ? "secondary" : "ghost"}
-                    aria-pressed={folder() === entry.folder}
-                    aria-label={
-                      duplicate()
-                        ? `${entry.name} · ${entry.folder}`
-                        : entry.name
-                    }
-                    title={entry.folder}
-                    disabled={busy()}
-                    onClick={() => setFolder(entry.folder)}
-                  >
-                    {entry.name}
-                  </Button>
-                );
-              }}
-            </For>
+            <div class="rounded-xl border border-line p-1">
+              <Button
+                size="sm"
+                variant={!project() ? "secondary" : "ghost"}
+                aria-pressed={!project()}
+                disabled={busy()}
+                onClick={() => setFolder(undefined)}
+              >
+                {t("skills.global")}
+              </Button>
+            </div>
+            <Show when={props.projects.length > 0}>
+              <fieldset class="flex flex-wrap items-center gap-2">
+                <legend class="sr-only">{t("skills.projects")}</legend>
+                <div class="flex flex-wrap gap-1 rounded-xl border border-line p-1">
+                  <For each={props.projects}>
+                    {(entry) => {
+                      const duplicate = () =>
+                        props.projects.filter(
+                          (item) => item.name === entry.name,
+                        ).length > 1;
+                      return (
+                        <Button
+                          size="sm"
+                          variant={
+                            folder() === entry.folder ? "secondary" : "ghost"
+                          }
+                          aria-pressed={folder() === entry.folder}
+                          aria-label={
+                            duplicate()
+                              ? `${entry.name} · ${entry.folder}`
+                              : entry.name
+                          }
+                          title={entry.folder}
+                          disabled={busy()}
+                          onClick={() => setFolder(entry.folder)}
+                        >
+                          {entry.name}
+                        </Button>
+                      );
+                    }}
+                  </For>
+                </div>
+              </fieldset>
+            </Show>
           </fieldset>
         </div>
         <label class="relative block">
@@ -465,17 +474,13 @@ export function SkillsPage(props: {
           if (!open && !busy()) setRemoving(undefined);
         }}
       >
-        <DialogContent role="alertdialog">
-          <DialogHeader>
+        <DialogContent role="alertdialog" class="gap-6">
+          <DialogHeader class="space-y-3">
             <DialogTitle>{t("skills.removeTitle")}</DialogTitle>
             <DialogDescription>
               {t("skills.removeDescription")}
             </DialogDescription>
           </DialogHeader>
-          <p class="break-all text-sm">
-            {removing()?.name} · {scopeLabel()}
-            {scopeLocation() ? ` · ${scopeLocation()}` : ""}
-          </p>
           <Show when={operationError()}>
             {(error) => (
               <p role="alert" class="text-sm text-danger">

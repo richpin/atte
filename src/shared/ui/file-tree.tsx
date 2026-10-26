@@ -201,6 +201,7 @@ export function FileTree(props: {
           initialExpansion: "closed",
           search: true,
           searchBlurBehavior: "retain",
+          unsafeCSS: "[data-file-tree-search-input] { min-width: 0; }",
           icons: { set: "complete", colored: true },
           density: "compact",
           onSelectionChange: (paths) => {
@@ -357,6 +358,9 @@ export function FileTree(props: {
         "--trees-input-bg-override": "var(--color-input-surface)",
         "--trees-search-bg-override": "var(--color-input-surface)",
         "--trees-search-fg-override": "var(--color-ink)",
+        "--trees-scrollbar-gutter-override": "4px",
+        "--trees-scrollbar-thumb-override":
+          "color-mix(in srgb, var(--color-ink) 22%, transparent)",
         "--trees-accent-override": "var(--color-accent)",
         "--trees-focus-ring-color-override": "var(--color-accent)",
         "--trees-selected-fg-override": "var(--color-ink)",

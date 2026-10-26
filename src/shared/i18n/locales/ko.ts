@@ -151,6 +151,7 @@ export const ko = {
     description: "코딩 에이전트에 설치된 스킬을 조회하고 관리합니다.",
     scope: "범위",
     global: "전역",
+    projects: "프로젝트",
     refresh: "새로고침",
     add: "스킬 추가",
     addToProject: "{{ name }}에 스킬 추가",

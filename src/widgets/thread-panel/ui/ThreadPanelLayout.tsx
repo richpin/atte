@@ -30,7 +30,7 @@ export function ThreadPanelLayout(props: {
     if (!panelVisible()) return 0;
     return fullWidth()
       ? rootWidth()
-      : Math.min(panel()?.width ?? 0, availableWidth());
+      : Math.min(panel()?.width ?? rootWidth() / 2, availableWidth());
   };
   const sizes = createMemo(() => {
     const right = rootWidth() > 0 ? panelWidth() / rootWidth() : 0;

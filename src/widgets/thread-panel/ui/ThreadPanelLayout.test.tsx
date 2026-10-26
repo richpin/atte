@@ -265,38 +265,55 @@ it("preserves content across tab selection, folding, screen and thread changes a
 it("resizes through the separator, remembers each thread's width and clamps without losing it", async () => {
   const { model, handle, panel, resize, setThreadId } = setup();
   model.setOpen("one", true);
-  await waitFor(() => expect(panel.style.flexBasis).toBe("40%"));
+  await waitFor(() =>
+    expect(Number.parseFloat(panel.style.flexBasis)).toBeCloseTo(50),
+  );
+  expect(model.panel("one")?.width).toBeNull();
+  resize(1000);
+  expect(Number.parseFloat(panel.style.flexBasis)).toBeCloseTo(50);
+  resize(900);
+  expect(Number.parseFloat(panel.style.flexBasis)).toBeCloseTo(50);
   fireEvent.keyDown(handle, { key: "ArrowLeft" });
-  await waitFor(() => expect(model.panel("one")?.width).toBeCloseTo(450));
+  await waitFor(() => expect(model.panel("one")?.width).toBeCloseTo(540));
   model.setOpen("one", false);
   expect(panel.style.flexBasis).toBe("0%");
   model.setOpen("one", true);
-  expect(panel.style.flexBasis).toBe("50%");
-  resize(640);
+  expect(Number.parseFloat(panel.style.flexBasis)).toBeCloseTo(
+    (540 / 900) * 100,
+  );
+  resize(512);
   await waitFor(() =>
     expect(Number.parseFloat(panel.style.flexBasis)).toBeCloseTo(
-      (320 / 640) * 100,
+      (256 / 512) * 100,
     ),
   );
-  expect(model.panel("one")?.width).toBeCloseTo(450);
-  resize(639);
+  expect(model.panel("one")?.width).toBeCloseTo(540);
+  resize(511);
   expect(panel.style.flexBasis).toBe("0%");
   expect(screen.getByRole("main")).toBeTruthy();
   expect(screen.queryByRole("complementary")).toBeNull();
   expect(model.panel("one")?.open).toBe(true);
   expect(handle).toHaveProperty("disabled", true);
   resize(900);
-  expect(panel.style.flexBasis).toBe("50%");
+  expect(Number.parseFloat(panel.style.flexBasis)).toBeCloseTo(
+    (540 / 900) * 100,
+  );
   setThreadId("two");
   expect(panel.style.flexBasis).toBe("0%");
   model.setOpen("two", true);
-  expect(panel.style.flexBasis).toBe("40%");
+  expect(Number.parseFloat(panel.style.flexBasis)).toBeCloseTo(50);
   setThreadId("one");
-  expect(panel.style.flexBasis).toBe("50%");
+  expect(Number.parseFloat(panel.style.flexBasis)).toBeCloseTo(
+    (540 / 900) * 100,
+  );
   fireEvent.keyDown(handle, { key: "End" });
   await waitFor(() => expect(model.panel("one")?.open).toBe(false));
   fireEvent.keyDown(handle, { key: "Enter" });
-  await waitFor(() => expect(panel.style.flexBasis).toBe("50%"));
+  await waitFor(() =>
+    expect(Number.parseFloat(panel.style.flexBasis)).toBeCloseTo(
+      (540 / 900) * 100,
+    ),
+  );
 });
 
 it("fills the thread body when the conversation collapses and restores a split when resized back", async () => {
@@ -330,7 +347,7 @@ it("preserves tab content through full-width mode, folding and window resizing",
   );
   fireEvent.keyDown(handle, { key: "Home" });
   await waitFor(() => expect(panel.style.flexBasis).toBe("100%"));
-  resize(639);
+  resize(511);
   expect(panel.style.flexBasis).toBe("0%");
   expect(screen.getByRole("main")).toBeTruthy();
   expect(screen.queryByRole("complementary")).toBeNull();

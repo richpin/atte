@@ -146,6 +146,7 @@ export const en = {
     description: "View and manage skills installed for coding agents.",
     scope: "Scope",
     global: "Global",
+    projects: "Projects",
     refresh: "Refresh",
     add: "Add skill",
     addToProject: "Add skill to {{ name }}",

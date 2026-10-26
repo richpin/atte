@@ -104,6 +104,42 @@ afterEach(() => {
   vi.resetAllMocks();
   vi.unstubAllGlobals();
 });
+
+it("shows an unreadable file warning in that file's content area", async () => {
+  const warning = "Only UTF-8 text files up to 2 MiB can be opened";
+  vi.mocked(readFile)
+    .mockRejectedValueOnce(warning)
+    .mockResolvedValue({ text: "readable", version: "v1", readOnly: false });
+  vi.mocked(subscribeFiles).mockImplementation(async (_thread, receive) => {
+    receive({
+      type: "snapshot",
+      entries: [
+        { path: "binary.dat", directory: false, symlink: false },
+        { path: "notes.txt", directory: false, symlink: false },
+      ],
+      warnings: [],
+    });
+    return async () => undefined;
+  });
+  const view = render(() => (
+    <I18nProvider>
+      <Fixture />
+    </I18nProvider>
+  ));
+  await userEvent.click(
+    await screen.findByRole("button", { name: "binary.dat" }),
+  );
+  const alert = await screen.findByRole("alert");
+  expect(alert.textContent).toBe(warning);
+  const panels = view.container.querySelectorAll(
+    "[data-corvu-resizable-panel]",
+  );
+  expect(panels[1]?.contains(alert)).toBe(true);
+  await userEvent.click(screen.getByRole("button", { name: "notes.txt" }));
+  await screen.findByRole("textbox", { name: "notes.txt" });
+  expect(screen.queryByRole("alert")).toBeNull();
+});
+
 it("creates inside the moved selection and returns to the root after that folder is trashed", async () => {
   render(() => (
     <I18nProvider>

@@ -281,62 +281,63 @@ export function GitPanel(props: {
                 </Select>
               </Show>
               <div class="flex items-center gap-1">
-                <Button
-                  size="sm"
-                  class="h-8 rounded-r-none px-2 text-xs"
-                  disabled={disabled() || unstaged().length === 0}
-                  onClick={() => void operate("stage", [], true)}
-                >
-                  {t("git.stageAll")}
-                </Button>
-                <DropdownMenu>
-                  <DropdownMenuTrigger
-                    as={Button}
+                <div class="inline-flex shrink-0">
+                  <Button
                     size="sm"
-                    variant="outline"
-                    class="h-8 rounded-l-none px-1"
-                    aria-label={t("git.moreActions")}
+                    class="h-8 rounded-r-none px-2 text-xs"
+                    disabled={disabled() || unstaged().length === 0}
+                    onClick={() => void operate("stage", [], true)}
                   >
-                    <ChevronDown class="size-3.5" />
-                  </DropdownMenuTrigger>
-                  <DropdownMenuContent>
-                    <DropdownMenuItem
-                      disabled={disabled() || unstaged().length === 0}
-                      onSelect={() => void operate("stage", [], true)}
+                    {t("git.stageAll")}
+                  </Button>
+                  <DropdownMenu>
+                    <DropdownMenuTrigger
+                      as={Button}
+                      size="sm"
+                      class="h-8 rounded-l-none border-l border-primary-foreground/25 px-1"
+                      aria-label={t("git.moreActions")}
                     >
-                      {t("git.stageAll")}
-                    </DropdownMenuItem>
-                    <DropdownMenuItem
-                      disabled={disabled() || staged().length === 0}
-                      onSelect={() => void operate("unstage", [], true)}
-                    >
-                      {t("git.unstageAll")}
-                    </DropdownMenuItem>
-                    <DropdownMenuItem
-                      disabled={
-                        disabled() ||
-                        files().every(
-                          (file) => file.status === "??" || file.submodule,
-                        )
-                      }
-                      onSelect={() => request("restore", [], true)}
-                    >
-                      {t("git.restoreAll")}
-                    </DropdownMenuItem>
-                    <DropdownMenuItem
-                      disabled={disabled() || files().length === 0}
-                      onSelect={() => void operate("stashAll")}
-                    >
-                      {t("git.stashAll")}
-                    </DropdownMenuItem>
-                    <DropdownMenuItem
-                      disabled={disabled() || !query.data?.latestStash}
-                      onSelect={() => void operate("stashPop")}
-                    >
-                      {t("git.stashPop")}
-                    </DropdownMenuItem>
-                  </DropdownMenuContent>
-                </DropdownMenu>
+                      <ChevronDown class="size-3.5" />
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent>
+                      <DropdownMenuItem
+                        disabled={disabled() || unstaged().length === 0}
+                        onSelect={() => void operate("stage", [], true)}
+                      >
+                        {t("git.stageAll")}
+                      </DropdownMenuItem>
+                      <DropdownMenuItem
+                        disabled={disabled() || staged().length === 0}
+                        onSelect={() => void operate("unstage", [], true)}
+                      >
+                        {t("git.unstageAll")}
+                      </DropdownMenuItem>
+                      <DropdownMenuItem
+                        disabled={
+                          disabled() ||
+                          files().every(
+                            (file) => file.status === "??" || file.submodule,
+                          )
+                        }
+                        onSelect={() => request("restore", [], true)}
+                      >
+                        {t("git.restoreAll")}
+                      </DropdownMenuItem>
+                      <DropdownMenuItem
+                        disabled={disabled() || files().length === 0}
+                        onSelect={() => void operate("stashAll")}
+                      >
+                        {t("git.stashAll")}
+                      </DropdownMenuItem>
+                      <DropdownMenuItem
+                        disabled={disabled() || !query.data?.latestStash}
+                        onSelect={() => void operate("stashPop")}
+                      >
+                        {t("git.stashPop")}
+                      </DropdownMenuItem>
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                </div>
                 <Button
                   variant="outline"
                   size="sm"
