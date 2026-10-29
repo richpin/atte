@@ -123,7 +123,9 @@ export function createThreadPanelModel(manager?: FilesManager) {
     ...model,
     openFile: (threadId: string, path: string) => {
       openFiles(threadId);
-      void files.get(threadId).open(path);
+      const fileModel = files.get(threadId);
+      void fileModel.reveal(path);
+      void fileModel.open(path);
     },
     Guard: () => <FilesDialogs manager={files} />,
     confirmForget: (threadId: string) => files.guard(threadId),

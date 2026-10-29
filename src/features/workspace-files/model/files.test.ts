@@ -1,10 +1,21 @@
 import { createRoot } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { type DiskFile, operateFile, readFile, saveFile } from "../api/files";
+import {
+  closeSearch,
+  type DiskFile,
+  listDirectory,
+  operateFile,
+  readFile,
+  saveFile,
+  searchPaths,
+} from "../api/files";
 import { createFilesModel, dirty, treeWidth } from "./files";
 
 vi.mock("../api/files", () => ({
   readFile: vi.fn(),
+  listDirectory: vi.fn(),
+  searchPaths: vi.fn(),
+  closeSearch: vi.fn(),
   saveFile: vi.fn(),
   operateFile: vi.fn(),
 }));
@@ -24,6 +35,8 @@ beforeEach(() => {
   vi.resetAllMocks();
   vi.mocked(readFile).mockResolvedValue(disk());
   vi.mocked(operateFile).mockResolvedValue();
+  vi.mocked(listDirectory).mockResolvedValue({ entries: [], warnings: [] });
+  vi.mocked(closeSearch).mockResolvedValue();
 });
 afterEach(() => {
   for (const dispose of disposers.splice(0)) dispose();
@@ -47,26 +60,17 @@ describe("file drafts", () => {
     const revision = files.imageRevision();
     await files.update({
       type: "changed",
-      entries: [],
-      removed: [],
-      changed: ["other.png"],
-      warnings: [],
+      paths: ["other.png"],
     });
     expect(files.imageRevision()).toBe(revision);
     await files.update({
       type: "changed",
-      entries: [],
-      removed: [],
-      changed: ["folder/image.PNG"],
-      warnings: [],
+      paths: ["folder/image.PNG"],
     });
     expect(files.imageRevision()).toBe(revision + 1);
     await files.update({
       type: "changed",
-      entries: [],
-      removed: ["folder"],
-      changed: [],
-      warnings: [],
+      paths: ["folder"],
     });
     expect(files.imageRevision()).toBe(revision + 2);
     await files.update({ type: "snapshot", entries: [], warnings: [] });
@@ -148,10 +152,7 @@ describe("file drafts", () => {
     vi.mocked(readFile).mockResolvedValue(disk("theirs", "v2"));
     await files.update({
       type: "changed",
-      changed: ["file"],
-      entries: [],
-      removed: [],
-      warnings: [],
+      paths: ["file"],
     });
     expect(draft.text).toBe("mine");
     expect(draft.external?.text).toBe("theirs");
@@ -176,10 +177,7 @@ describe("file drafts", () => {
     vi.mocked(readFile).mockRejectedValue("missing");
     await files.update({
       type: "changed",
-      changed: [],
-      entries: [],
-      removed: ["file"],
-      warnings: [],
+      paths: ["file"],
     });
     expect(draft.text).toBe("mine");
     expect(draft.problem).toBe("missing");
@@ -216,6 +214,100 @@ describe("file drafts", () => {
     expect(await files.saveAll()).toBe(false);
     expect(draft.text).toBe("mine");
     expect(dirty(draft)).toBe(true);
+  });
+});
+describe("incremental directory tree", () => {
+  it("prefetches only the root and loads each expanded directory once", async () => {
+    vi.mocked(listDirectory).mockImplementation(async (_thread, path) => ({
+      entries:
+        path === ""
+          ? [{ path: ".git", directory: true, symlink: false }]
+          : [{ path: ".git/config", directory: false, symlink: false }],
+      warnings: [],
+    }));
+    const files = model();
+    await files.prefetch();
+    await files.prefetch();
+    expect(listDirectory).toHaveBeenCalledTimes(1);
+    expect(files.entries().map((entry) => entry.path)).toEqual([".git"]);
+    await files.loadDirectory(".git");
+    await files.loadDirectory(".git");
+    expect(listDirectory).toHaveBeenCalledTimes(2);
+    expect(files.entries().map((entry) => entry.path)).toEqual([
+      ".git",
+      ".git/config",
+    ]);
+    expect(readFile).not.toHaveBeenCalled();
+  });
+  it("refreshes loaded parents only and removes deleted descendants", async () => {
+    let rootHasFolder = true;
+    vi.mocked(listDirectory).mockImplementation(async (_thread, path) => ({
+      entries:
+        path === ""
+          ? rootHasFolder
+            ? [{ path: "folder", directory: true, symlink: false }]
+            : []
+          : [{ path: "folder/file", directory: false, symlink: false }],
+      warnings: [],
+    }));
+    const files = model();
+    await files.prefetch();
+    await files.loadDirectory("folder");
+    await files.update({ type: "changed", paths: ["unloaded/deep/file"] });
+    expect(listDirectory).toHaveBeenCalledTimes(2);
+    rootHasFolder = false;
+    await files.update({ type: "changed", paths: ["folder"] });
+    expect(files.entries()).toEqual([]);
+    expect(files.loaded("folder")).toBe(false);
+  });
+  it("does not let a late prefetch replace the watcher snapshot", async () => {
+    let finish!: (listing: {
+      entries: { path: string; directory: boolean; symlink: boolean }[];
+      warnings: string[];
+    }) => void;
+    vi.mocked(listDirectory).mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finish = resolve;
+        }),
+    );
+    const files = model();
+    const prefetch = files.prefetch();
+    await files.update({
+      type: "snapshot",
+      entries: [{ path: "new", directory: false, symlink: false }],
+      warnings: [],
+    });
+    finish({
+      entries: [{ path: "old", directory: false, symlink: false }],
+      warnings: [],
+    });
+    await prefetch;
+    expect(files.entries().map((entry) => entry.path)).toEqual(["new"]);
+  });
+  it("retries a failed folder and keeps search results separate from loaded paths", async () => {
+    vi.mocked(listDirectory)
+      .mockResolvedValueOnce({
+        entries: [{ path: "folder", directory: true, symlink: false }],
+        warnings: [],
+      })
+      .mockRejectedValueOnce("denied")
+      .mockResolvedValue({ entries: [], warnings: [] });
+    vi.mocked(searchPaths).mockResolvedValue([
+      { path: "folder/deep/match.ts", directory: false, symlink: false },
+    ]);
+    const files = model();
+    await files.prefetch();
+    await files.loadDirectory("folder");
+    expect(files.directoryErrors().folder).toBe("denied");
+    await files.loadDirectory("folder");
+    expect(files.directoryErrors().folder).toBeUndefined();
+    await files.search("match");
+    await vi.waitFor(() => expect(files.searchResults()).toHaveLength(1));
+    expect(files.entries().map((entry) => entry.path)).toEqual(["folder"]);
+    await files.search("");
+    expect(files.searchResults()).toEqual([]);
+    expect(closeSearch).toHaveBeenCalledOnce();
   });
 });
 it("allocates eighty percent of panel resizing to the file and clamps minima", () => {

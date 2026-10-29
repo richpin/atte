@@ -1,15 +1,13 @@
 import { Channel, invoke } from "@tauri-apps/api/core";
 
 export type FileEntry = { path: string; directory: boolean; symlink: boolean };
+export type DirectoryListing = { entries: FileEntry[]; warnings: string[] };
 export type DiskFile = { text: string; version: string; readOnly: boolean };
 export type FileUpdate =
   | { type: "snapshot"; entries: FileEntry[]; warnings: string[] }
   | {
       type: "changed";
-      entries: FileEntry[];
-      removed: string[];
-      changed: string[];
-      warnings: string[];
+      paths: string[];
     }
   | { type: "error"; message: string };
 export type FileOperation =
@@ -18,6 +16,16 @@ export type FileOperation =
   | { type: "trash"; path: string };
 export const readFile = (threadId: string, path: string) =>
   invoke<DiskFile>("read_workspace_file", { threadId, path });
+export const listDirectory = (threadId: string, path: string) =>
+  invoke<DirectoryListing>("list_workspace_directory", { threadId, path });
+export const searchPaths = (
+  threadId: string,
+  searchId: string,
+  query: string,
+) =>
+  invoke<FileEntry[]>("search_workspace_paths", { threadId, searchId, query });
+export const closeSearch = (searchId: string) =>
+  invoke<void>("close_workspace_search", { searchId });
 export const readImage = (threadId: string, path: string) =>
   invoke<ArrayBuffer>("read_workspace_image", { threadId, path });
 export const saveFile = (

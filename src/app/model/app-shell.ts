@@ -39,7 +39,8 @@ export function createAppShellModel() {
         name: folder.split("/").filter(Boolean).at(-1) ?? folder,
       })),
   );
-  const threadPanels = createThreadPanelModel(createFilesManager(t));
+  const filesManager = createFilesManager(t);
+  const threadPanels = createThreadPanelModel(filesManager);
   const [view, setView] = createSignal<AppView>("new-thread");
   const [agentsRevision, setAgentsRevision] = createSignal(0);
   const [agentsFailed, setAgentsFailed] = createSignal(false);
@@ -164,6 +165,23 @@ export function createAppShellModel() {
       view() === "thread" ? (threads.selectedThreadId() ?? null) : null;
     void notifications.reportContext(id, locale(), view() === "general");
   });
+  createEffect(
+    on(
+      () => (view() === "thread" ? threads.selectedThreadId() : undefined),
+      (id, previous) => {
+        if (
+          previous &&
+          previous !== id &&
+          !threadPanels
+            .panel(previous)
+            ?.tabs.some((tab) => tab.id === `files:${previous}`)
+        ) {
+          filesManager.forget(previous);
+        }
+        if (id) void filesManager.get(id).prefetch();
+      },
+    ),
+  );
 
   createEffect(
     on(

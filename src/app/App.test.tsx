@@ -377,6 +377,8 @@ beforeEach(() => {
     if (command === "list_threads") return Promise.resolve([]);
     if (command === "select_working_folder") return folderSelection();
     if (command === "inspect_working_folder") return folderInspection(args);
+    if (command === "list_workspace_directory")
+      return { entries: [], warnings: [] };
     if (command === "prepared_agents")
       return Promise.resolve([{ id: "codex", name: "Codex" }]);
     if (command === "subscribe_thread") {

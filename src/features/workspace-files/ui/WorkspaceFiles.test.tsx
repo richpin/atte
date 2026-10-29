@@ -11,6 +11,7 @@ import { I18nProvider } from "shared/i18n";
 import { createSignal, For } from "solid-js";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import {
+  listDirectory,
   operateFile,
   readFile,
   readImage,
@@ -24,6 +25,9 @@ import { WorkspaceFiles } from "./WorkspaceFiles";
 
 vi.mock("../api/files", () => ({
   readFile: vi.fn(),
+  listDirectory: vi.fn(),
+  searchPaths: vi.fn(),
+  closeSearch: vi.fn(),
   readImage: vi.fn(),
   saveFile: vi.fn(),
   operateFile: vi.fn(),
@@ -89,6 +93,7 @@ beforeEach(() => {
     },
   );
   vi.mocked(operateFile).mockResolvedValue();
+  vi.mocked(listDirectory).mockResolvedValue({ entries: [], warnings: [] });
   vi.mocked(subscribeFiles).mockImplementation(async (_thread, receive) => {
     await Promise.resolve();
     receive({
@@ -313,10 +318,7 @@ it("connects image refresh, moves, deletion and panel visibility to the preview 
   const first = screen.getByAltText("folder/image.png").getAttribute("src");
   await model.update({
     type: "changed",
-    changed: ["folder/image.png"],
-    removed: [],
-    entries: [],
-    warnings: [],
+    paths: ["folder/image.png"],
   });
   await waitFor(() =>
     expect(
@@ -334,10 +336,7 @@ it("connects image refresh, moves, deletion and panel visibility to the preview 
   vi.mocked(readImage).mockRejectedValueOnce("missing");
   await model.update({
     type: "changed",
-    changed: [],
-    removed: ["renamed/image.png"],
-    entries: [],
-    warnings: [],
+    paths: ["renamed/image.png"],
   });
   await screen.findByText("이미지가 없거나 읽을 수 없습니다.");
   expect(screen.queryByAltText("renamed/image.png")).toBeNull();

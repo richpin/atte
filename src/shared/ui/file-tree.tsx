@@ -17,12 +17,17 @@ const fromTreePath = (path: string) => path.replace(/\/$/, "");
 export function FileTree(props: {
   entries: readonly TreeItem[];
   loading?: boolean;
+  directoryStatus?: Record<string, "loading" | "error">;
+  loadingLabel?: string;
+  errorLabel?: string;
   dirtyPaths: readonly string[];
   selectedPath?: string;
   dirtyLabel: string;
   disabled: boolean;
   labels: Record<TreeAction, string>;
   onSelect: (path: string, directory: boolean) => void;
+  onExpand?: (path: string) => void;
+  onSearchChange?: (query: string) => void;
   onAction: (
     action: Exclude<TreeAction, "rename">,
     path: string,
@@ -38,6 +43,7 @@ export function FileTree(props: {
   let dead = false;
   let prepared: FileTreePreparedInput | undefined;
   let pathSync: ReturnType<typeof createTreePathSync> | undefined;
+  let unsubscribeTree: (() => void) | undefined;
   let latestPaths: readonly string[] = [];
   const dirtyPaths = createMemo(() => new Set(props.dirtyPaths));
   let applying = false;
@@ -52,6 +58,14 @@ export function FileTree(props: {
     const wasApplying = applying;
     applying = true;
     try {
+      if (target && path) {
+        const segments = path.split("/");
+        for (let index = 1; index < segments.length; index++) {
+          const parent = tree.getItem(segments.slice(0, index).join("/"));
+          if (parent && "expand" in parent && !parent.isExpanded())
+            parent.expand();
+        }
+      }
       for (const selected of tree.getSelectedPaths()) {
         if (selected !== target?.getPath()) tree.getItem(selected)?.deselect();
       }
@@ -201,6 +215,7 @@ export function FileTree(props: {
           initialExpansion: "closed",
           search: true,
           searchBlurBehavior: "retain",
+          onSearchChange: (query) => props.onSearchChange?.(query ?? ""),
           unsafeCSS: "[data-file-tree-search-input] { min-width: 0; }",
           icons: { set: "complete", colored: true },
           density: "compact",
@@ -247,10 +262,16 @@ export function FileTree(props: {
             },
             onDropError: props.onError,
           },
-          renderRowDecoration: ({ item }) =>
-            dirtyPaths().has(item.path)
+          renderRowDecoration: ({ item }) => {
+            const status = props.directoryStatus?.[fromTreePath(item.path)];
+            if (status === "loading")
+              return { text: "…", title: props.loadingLabel };
+            if (status === "error")
+              return { text: "!", title: props.errorLabel };
+            return dirtyPaths().has(item.path)
               ? { text: "●", title: props.dirtyLabel }
-              : null,
+              : null;
+          },
           composition: {
             contextMenu: {
               enabled: true,
@@ -311,11 +332,24 @@ export function FileTree(props: {
         });
         pathSync = createTreePathSync(tree);
         tree.render({ containerWrapper: container });
+        let expanded = new Set<string>();
+        unsubscribeTree = tree.subscribe(() => {
+          if (!tree || tree.getSearchValue()) return;
+          const next = new Set<string>();
+          for (const row of tree.getVisibleRows(0, tree.getVisibleCount())) {
+            if (row.kind !== "directory" || !row.isExpanded) continue;
+            const path = fromTreePath(row.path);
+            next.add(path);
+            if (!expanded.has(path)) props.onExpand?.(path);
+          }
+          expanded = next;
+        });
         initialize();
       })
       .catch(props.onError);
     onCleanup(() => {
       dead = true;
+      unsubscribeTree?.();
       worker.terminate();
       pathSync?.dispose();
       tree?.cleanUp();
@@ -325,15 +359,20 @@ export function FileTree(props: {
     // The mount-time empty list is not the initial filesystem snapshot. Keep
     // the worker alive so that snapshot does not become a large batch of adds.
     if (props.loading && !pathSync?.initialized) return;
-    const paths = props.entries.map(
-      (entry) => entry.path + (entry.directory ? "/" : ""),
-    );
-    latestPaths = paths;
+    const paths = new Set<string>();
+    for (const entry of props.entries) {
+      const segments = entry.path.split("/");
+      for (let index = 1; index < segments.length; index++) {
+        paths.add(`${segments.slice(0, index).join("/")}/`);
+      }
+      paths.add(entry.path + (entry.directory ? "/" : ""));
+    }
+    latestPaths = [...paths];
     if (pathSync?.initialized) untrack(reconcile);
     else {
       prepared = undefined;
       // Effects run after onMount has created the worker.
-      worker?.postMessage({ id: ++revision, paths });
+      worker?.postMessage({ id: ++revision, paths: latestPaths });
     }
   });
   createEffect(() => {
@@ -342,6 +381,7 @@ export function FileTree(props: {
   createEffect(() => {
     dirtyPaths();
     props.dirtyLabel;
+    props.directoryStatus;
     // Re-render visible decorations without touching paths or controller state.
     untrack(() => tree?.render({ containerWrapper: container }));
   });

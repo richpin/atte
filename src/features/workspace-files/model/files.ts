@@ -1,12 +1,16 @@
 import { createSignal } from "solid-js";
 import { createStore, produce } from "solid-js/store";
 import {
+  closeSearch,
+  type DirectoryListing,
   type DiskFile,
   type FileEntry,
   type FileUpdate,
+  listDirectory,
   operateFile,
   readFile,
   saveFile,
+  searchPaths,
 } from "../api/files";
 import { imageMime } from "../lib/file-kind";
 
@@ -44,6 +48,23 @@ export function createFilesModel(threadId: string) {
   const [busy, setBusy] = createSignal(false);
   const [generation, setGeneration] = createSignal(0);
   const [imageRevision, setImageRevision] = createSignal(0);
+  const [searchResults, setSearchResults] = createSignal<FileEntry[]>([]);
+  const [searching, setSearching] = createSignal(false);
+  const [directoryErrors, setDirectoryErrors] = createSignal<
+    Record<string, string>
+  >({});
+  const [loadingDirectories, setLoadingDirectories] = createSignal<string[]>(
+    [],
+  );
+  const loaded = new Set<string>();
+  const inFlight = new Map<string, Promise<void>>();
+  const directoryRevisions = new Map<string, number>();
+  const refreshAgain = new Set<string>();
+  const directoryWarnings = new Map<string, string[]>();
+  let searchId: string | undefined;
+  let searchRevision = 0;
+  let currentQuery = "";
+  let searchTimer: ReturnType<typeof setTimeout> | undefined;
   const reads = new Map<string, number>();
   let disposed = false;
   const deferredUpdates: FileUpdate[] = [];
@@ -54,6 +75,138 @@ export function createFilesModel(threadId: string) {
     const path = selected();
     return path && !imageMime(path) ? draftAt(path) : undefined;
   };
+  const parentOf = (path: string) => path.split("/").slice(0, -1).join("/");
+  function applyDirectory(path: string, listing: DirectoryListing) {
+    const previous = entries();
+    const children = new Map(
+      listing.entries.map((entry) => [entry.path, entry]),
+    );
+    const removed = previous
+      .filter(
+        (entry) =>
+          parentOf(entry.path) === path &&
+          (!children.has(entry.path) ||
+            children.get(entry.path)?.directory !== entry.directory),
+      )
+      .map((entry) => entry.path);
+    const removedSet = new Set(removed);
+    const isRemoved = (candidate: string) => {
+      for (let current = candidate; current; current = parentOf(current)) {
+        if (removedSet.has(current)) return true;
+      }
+      return false;
+    };
+    const next = new Map(
+      previous
+        .filter((entry) => !isRemoved(entry.path))
+        .map((entry) => [entry.path, entry]),
+    );
+    for (const entry of listing.entries) next.set(entry.path, entry);
+    for (const item of removed) {
+      for (const directory of loaded) {
+        if (within(directory, item)) loaded.delete(directory);
+      }
+      for (const directory of directoryRevisions.keys()) {
+        if (within(directory, item)) {
+          directoryRevisions.set(
+            directory,
+            (directoryRevisions.get(directory) ?? 0) + 1,
+          );
+        }
+      }
+      for (const directory of directoryWarnings.keys()) {
+        if (within(directory, item)) directoryWarnings.delete(directory);
+      }
+    }
+    loaded.add(path);
+    directoryWarnings.set(path, listing.warnings);
+    setWarnings([...directoryWarnings.values()].flat());
+    setDirectoryErrors((errors) => {
+      const next = { ...errors };
+      delete next[path];
+      for (const directory of Object.keys(next)) {
+        if (isRemoved(directory)) delete next[directory];
+      }
+      return next;
+    });
+    setEntries([...next.values()]);
+    if (path === "") setLoading(false);
+  }
+  async function loadDirectory(path: string, force = false): Promise<void> {
+    if (disposed || (!force && loaded.has(path))) return;
+    const existing = inFlight.get(path);
+    if (existing) {
+      if (force) refreshAgain.add(path);
+      return existing;
+    }
+    setLoadingDirectories((paths) => [...paths, path]);
+    const revision = (directoryRevisions.get(path) ?? 0) + 1;
+    directoryRevisions.set(path, revision);
+    const request = (async () => {
+      try {
+        const listing = await listDirectory(threadId, path);
+        if (
+          disposed ||
+          directoryRevisions.get(path) !== revision ||
+          (path &&
+            !entries().some((entry) => entry.path === path && entry.directory))
+        )
+          return;
+        applyDirectory(path, listing);
+      } catch (cause) {
+        if (disposed) return;
+        const message = String(cause);
+        setDirectoryErrors((errors) => ({ ...errors, [path]: message }));
+        if (path === "") {
+          setError(cause);
+          setLoading(false);
+        }
+      } finally {
+        setLoadingDirectories((paths) => paths.filter((item) => item !== path));
+      }
+    })();
+    inFlight.set(path, request);
+    await request;
+    inFlight.delete(path);
+    if (refreshAgain.delete(path) && !disposed) await loadDirectory(path, true);
+  }
+  async function reveal(path: string) {
+    const segments = parentOf(path).split("/").filter(Boolean);
+    let parent = "";
+    await loadDirectory(parent);
+    for (const segment of segments) {
+      parent = [parent, segment].filter(Boolean).join("/");
+      await loadDirectory(parent);
+    }
+  }
+  async function search(query: string) {
+    currentQuery = query;
+    const revision = ++searchRevision;
+    if (searchTimer) clearTimeout(searchTimer);
+    if (!query.trim()) {
+      setSearchResults([]);
+      setSearching(false);
+      if (searchId) void closeSearch(searchId).catch(() => undefined);
+      searchId = undefined;
+      return;
+    }
+    searchId ??= crypto.randomUUID();
+    const id = searchId;
+    setSearching(true);
+    searchTimer = setTimeout(() => {
+      void searchPaths(threadId, id, query)
+        .then((results) => {
+          if (!disposed && revision === searchRevision)
+            setSearchResults(results);
+        })
+        .catch((cause) => {
+          if (!disposed && revision === searchRevision) setError(cause);
+        })
+        .finally(() => {
+          if (!disposed && revision === searchRevision) setSearching(false);
+        });
+    }, 200);
+  }
 
   async function refreshDraft(draft: Draft) {
     const request = (reads.get(draft.id) ?? 0) + 1;
@@ -178,42 +331,51 @@ export function createFilesModel(threadId: string) {
       setLoading(false);
       return;
     }
-    setWarnings(update.warnings);
-    const path = selected();
-    if (
-      path &&
-      imageMime(path) &&
-      (update.type === "snapshot" ||
-        [...update.changed, ...update.removed].some((changed) =>
-          within(path, changed),
-        ))
-    )
-      setImageRevision((revision) => revision + 1);
     if (update.type === "snapshot") {
-      setEntries(update.entries);
-      setLoading(false);
-      await Promise.all(Object.values(drafts).map(refreshDraft));
-    } else {
-      if (update.removed.length || update.entries.length) {
-        const removed = new Set(update.removed);
-        const map = new Map(
-          entries()
-            .filter((entry) => !removed.has(entry.path))
-            .map((entry) => [entry.path, entry]),
-        );
-        for (const entry of update.entries) map.set(entry.path, entry);
-        setEntries([...map.values()]);
-      }
+      directoryRevisions.set("", (directoryRevisions.get("") ?? 0) + 1);
+      applyDirectory("", update);
+      if (selected() && imageMime(selected() as string))
+        setImageRevision((revision) => revision + 1);
       await Promise.all(
-        Object.values(drafts)
-          .filter((draft) =>
-            [...update.changed, ...update.removed].some((path) =>
-              within(draft.path, path),
-            ),
-          )
-          .map(refreshDraft),
+        [...new Set([...loaded, ...Object.keys(directoryErrors())])]
+          .filter(Boolean)
+          .map((path) => loadDirectory(path, true)),
       );
+      await Promise.all(Object.values(drafts).map(refreshDraft));
+      return;
     }
+    const changed = update.paths;
+    const folders = new Set<string>();
+    for (const path of changed) {
+      if (path === "") {
+        for (const directory of loaded) folders.add(directory);
+      } else {
+        const parent = parentOf(path);
+        if (loaded.has(parent)) folders.add(parent);
+        if (loaded.has(path)) folders.add(path);
+      }
+    }
+    await Promise.all([...folders].map((path) => loadDirectory(path, true)));
+    const selectedPath = selected();
+    if (
+      selectedPath &&
+      imageMime(selectedPath) &&
+      changed.some(
+        (path) => within(selectedPath, path) || within(path, selectedPath),
+      )
+    ) {
+      setImageRevision((revision) => revision + 1);
+    }
+    await Promise.all(
+      Object.values(drafts)
+        .filter((draft) =>
+          changed.some(
+            (path) => within(draft.path, path) || within(path, draft.path),
+          ),
+        )
+        .map(refreshDraft),
+    );
+    if (currentQuery) void search(currentQuery);
   }
   async function operation(action: Parameters<typeof operateFile>[1]) {
     if (busy() || Object.values(drafts).some((draft) => draft.saving))
@@ -225,6 +387,21 @@ export function createFilesModel(threadId: string) {
       reads.clear();
       if (disposed) return false;
       if (action.type === "move") {
+        for (const directory of [...loaded]) {
+          if (within(directory, action.from)) {
+            loaded.delete(directory);
+            loaded.add(action.to + directory.slice(action.from.length));
+          }
+        }
+        for (const [directory, warnings] of [...directoryWarnings]) {
+          if (within(directory, action.from)) {
+            directoryWarnings.delete(directory);
+            directoryWarnings.set(
+              action.to + directory.slice(action.from.length),
+              warnings,
+            );
+          }
+        }
         for (const draft of Object.values(drafts)) {
           if (within(draft.path, action.from))
             setDrafts(
@@ -253,6 +430,9 @@ export function createFilesModel(threadId: string) {
         ]);
         if (!action.directory) await open(action.path);
       } else {
+        for (const directory of [...loaded]) {
+          if (within(directory, action.path)) loaded.delete(directory);
+        }
         for (const draft of Object.values(drafts))
           if (within(draft.path, action.path))
             setDrafts(
@@ -291,6 +471,15 @@ export function createFilesModel(threadId: string) {
     pending,
     generation,
     imageRevision,
+    searchResults,
+    searching,
+    directoryErrors,
+    loadingDirectories,
+    loaded: (path: string) => loaded.has(path),
+    prefetch: () => loadDirectory(""),
+    loadDirectory,
+    reveal,
+    search,
     open,
     save,
     saveAll,
@@ -329,6 +518,8 @@ export function createFilesModel(threadId: string) {
     dispose: () => {
       disposed = true;
       reads.clear();
+      if (searchTimer) clearTimeout(searchTimer);
+      if (searchId) void closeSearch(searchId).catch(() => undefined);
     },
   };
 }

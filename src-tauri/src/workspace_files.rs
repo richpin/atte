@@ -85,14 +85,23 @@ pub(crate) enum FileUpdate {
         warnings: Vec<String>,
     },
     Changed {
-        entries: Vec<Entry>,
-        removed: Vec<String>,
-        changed: Vec<String>,
-        warnings: Vec<String>,
+        paths: Vec<String>,
     },
     Error {
         message: String,
     },
+}
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct DirectoryListing {
+    entries: Vec<Entry>,
+    warnings: Vec<String>,
+}
+struct SearchIndex {
+    thread: Uuid,
+    root: PathBuf,
+    entries: tokio::sync::OnceCell<Arc<Vec<Entry>>>,
+    stop: Arc<AtomicBool>,
 }
 struct Subscription {
     thread: Uuid,
@@ -106,6 +115,7 @@ impl Drop for Subscription {
 #[derive(Default)]
 pub(crate) struct WorkspaceFiles {
     subscriptions: Mutex<HashMap<Uuid, Subscription>>,
+    searches: Arc<Mutex<HashMap<Uuid, Arc<SearchIndex>>>>,
     writes: Mutex<()>,
 }
 impl WorkspaceFiles {
@@ -113,10 +123,26 @@ impl WorkspaceFiles {
         if let Ok(mut subscriptions) = self.subscriptions.lock() {
             subscriptions.retain(|_, subscription| subscription.thread != thread);
         }
+        if let Ok(mut searches) = self.searches.lock() {
+            searches.retain(|_, search| {
+                if search.thread == thread {
+                    search.stop.store(true, Ordering::Release);
+                    false
+                } else {
+                    true
+                }
+            });
+        }
     }
     pub(crate) fn clear(&self) {
         if let Ok(mut subscriptions) = self.subscriptions.lock() {
             subscriptions.clear();
+        }
+        if let Ok(mut searches) = self.searches.lock() {
+            for search in searches.values() {
+                search.stop.store(true, Ordering::Release);
+            }
+            searches.clear();
         }
     }
 }
@@ -137,18 +163,13 @@ fn resolve(root: &Path, relative: &str) -> Result<PathBuf, FileError> {
         || path
             .components()
             .any(|part| !matches!(part, Component::Normal(_)))
-        || path.components().any(|part| part.as_os_str() == ".git")
     {
         return Err(FileError::InvalidPath);
     }
     let parent = root
         .join(path.parent().ok_or(FileError::InvalidPath)?)
         .canonicalize()?;
-    if !parent.starts_with(root)
-        || parent
-            .strip_prefix(root)
-            .is_ok_and(|relative| relative.components().any(|part| part.as_os_str() == ".git"))
-    {
+    if !parent.starts_with(root) {
         return Err(FileError::InvalidPath);
     }
     Ok(parent.join(path.file_name().ok_or(FileError::InvalidPath)?))
@@ -186,11 +207,7 @@ fn read_target(root: &Path, relative: &str) -> Result<(PathBuf, bool), FileError
     let path = resolve(root, relative)?;
     let link = fs::symlink_metadata(&path)?.is_symlink();
     let target = path.canonicalize()?;
-    if !target.starts_with(root)
-        || target
-            .strip_prefix(root)
-            .is_ok_and(|relative| relative.components().any(|part| part.as_os_str() == ".git"))
-    {
+    if !target.starts_with(root) {
         return Err(FileError::InvalidPath);
     }
     Ok((target, link))
@@ -387,9 +404,6 @@ fn scan(
                 continue;
             }
         };
-        if child.file_name() == ".git" {
-            continue;
-        }
         let path = child.path();
         let Some(relative) = path.strip_prefix(root).ok().and_then(Path::to_str) else {
             warnings.push(path.display().to_string());
@@ -413,7 +427,55 @@ fn scan(
         }
     }
 }
-fn watch(root: PathBuf, channel: Channel<FileUpdate>, stop: Arc<AtomicBool>) {
+fn list_directory(root: &Path, relative: &str) -> Result<DirectoryListing, FileError> {
+    let directory = if relative.is_empty() {
+        root.to_path_buf()
+    } else {
+        let path = resolve(root, relative)?;
+        if fs::symlink_metadata(&path)?.is_symlink() {
+            return Err(FileError::InvalidPath);
+        }
+        path
+    };
+    if !directory.is_dir() {
+        return Err(FileError::InvalidPath);
+    }
+    if !directory.canonicalize()?.starts_with(root) {
+        return Err(FileError::InvalidPath);
+    }
+    let mut entries = Vec::new();
+    let mut warnings = Vec::new();
+    for child in fs::read_dir(directory)? {
+        let child = match child {
+            Ok(child) => child,
+            Err(error) => {
+                warnings.push(error.to_string());
+                continue;
+            }
+        };
+        let path = child.path();
+        let Some(relative) = path.strip_prefix(root).ok().and_then(Path::to_str) else {
+            warnings.push(path.display().to_string());
+            continue;
+        };
+        match child.file_type() {
+            Ok(kind) => entries.push(Entry {
+                path: relative.to_owned(),
+                directory: kind.is_dir(),
+                symlink: kind.is_symlink(),
+            }),
+            Err(error) => warnings.push(format!("{}: {error}", path.display())),
+        }
+    }
+    entries.sort_by(|a, b| a.path.cmp(&b.path));
+    Ok(DirectoryListing { entries, warnings })
+}
+fn watch(
+    root: PathBuf,
+    channel: Channel<FileUpdate>,
+    stop: Arc<AtomicBool>,
+    searches: Arc<Mutex<HashMap<Uuid, Arc<SearchIndex>>>>,
+) {
     let (send, receive) = std::sync::mpsc::channel();
     let watcher = notify::RecommendedWatcher::new(
         move |event| {
@@ -430,20 +492,27 @@ fn watch(root: PathBuf, channel: Channel<FileUpdate>, stop: Arc<AtomicBool>) {
             return;
         }
     };
-    // Watch before scanning so changes during the initial snapshot are reconciled.
+    // Watch before listing so events during the initial snapshot are delivered.
     if let Err(error) = watcher.watch(&root, RecursiveMode::Recursive) {
         let _ = channel.send(FileUpdate::Error {
             message: error.to_string(),
         });
+        return;
     }
-    let mut entries = BTreeMap::new();
-    let mut warnings = Vec::new();
-    scan(&root, &root, &mut entries, &mut warnings, &stop);
+    let listing = match list_directory(&root, "") {
+        Ok(listing) => listing,
+        Err(error) => {
+            let _ = channel.send(FileUpdate::Error {
+                message: error.to_string(),
+            });
+            return;
+        }
+    };
     if stop.load(Ordering::Acquire)
         || channel
             .send(FileUpdate::Snapshot {
-                entries: entries.values().cloned().collect(),
-                warnings,
+                entries: listing.entries,
+                warnings: listing.warnings,
             })
             .is_err()
     {
@@ -456,13 +525,9 @@ fn watch(root: PathBuf, channel: Channel<FileUpdate>, stop: Arc<AtomicBool>) {
             Err(_) => break,
         };
         let mut events = vec![event];
-        // One short batching window; sustained writes must not starve delivery.
         std::thread::sleep(Duration::from_millis(100));
         events.extend(receive.try_iter().take(4096));
-        let mut directories = BTreeSet::new();
-        let mut full_rescan = false;
-        let mut changed = BTreeSet::new();
-        let mut warnings = Vec::new();
+        let mut paths = BTreeSet::new();
         for event in events {
             match event {
                 Ok(event) => {
@@ -470,129 +535,38 @@ fn watch(root: PathBuf, channel: Channel<FileUpdate>, stop: Arc<AtomicBool>) {
                         continue;
                     }
                     if event.need_rescan() {
-                        full_rescan = true;
-                        directories.insert(root.clone());
+                        paths.insert(String::new());
                     }
                     for path in event.paths {
-                        if !path.starts_with(&root)
-                            || path.components().any(|part| part.as_os_str() == ".git")
-                        {
-                            continue;
-                        }
                         if let Ok(relative) = path.strip_prefix(&root) {
-                            changed.insert(relative.to_string_lossy().into_owned());
+                            paths.insert(relative.to_string_lossy().into_owned());
                         }
-                        directories.insert(
-                            path.parent()
-                                .filter(|parent| parent.starts_with(&root))
-                                .unwrap_or(&root)
-                                .to_owned(),
-                        );
                     }
                 }
                 Err(error) => {
-                    warnings.push(error.to_string());
-                    full_rescan = true;
-                    directories.insert(root.clone());
+                    eprintln!("workspace file watcher: {error}");
+                    paths.insert(String::new());
                 }
-            }
-        }
-        let mut replacements = BTreeMap::new();
-        let mut removed = Vec::new();
-        for directory in directories {
-            if full_rescan && directory != root {
-                continue;
-            }
-            let prefix = directory.strip_prefix(&root).unwrap_or(Path::new(""));
-            let previous: Vec<String> = entries
-                .keys()
-                .filter(|path| {
-                    if full_rescan {
-                        Path::new(path).starts_with(prefix)
-                    } else {
-                        Path::new(path).parent() == Some(prefix)
-                    }
-                })
-                .cloned()
-                .collect();
-            let mut current = BTreeMap::new();
-            if full_rescan {
-                scan(&root, &directory, &mut current, &mut warnings, &stop);
-            } else if let Ok(children) = fs::read_dir(&directory) {
-                for child in children {
-                    let child = match child {
-                        Ok(child) => child,
-                        Err(error) => {
-                            warnings.push(error.to_string());
-                            continue;
-                        }
-                    };
-                    if child.file_name() == ".git" {
-                        continue;
-                    }
-                    let path = child.path();
-                    let Some(relative) = path.strip_prefix(&root).ok().and_then(Path::to_str)
-                    else {
-                        continue;
-                    };
-                    let kind = match child.file_type() {
-                        Ok(kind) => kind,
-                        Err(error) => {
-                            warnings.push(error.to_string());
-                            continue;
-                        }
-                    };
-                    let entry = Entry {
-                        path: relative.to_owned(),
-                        directory: kind.is_dir(),
-                        symlink: kind.is_symlink(),
-                    };
-                    if kind.is_dir() && entries.get(relative) != Some(&entry) {
-                        scan(&root, &path, &mut current, &mut warnings, &stop);
-                    }
-                    current.insert(relative.to_owned(), entry);
-                }
-            } else if directory.exists() {
-                warnings.push(format!("{}: cannot read directory", directory.display()));
-                continue;
-            }
-            for path in previous {
-                if !current.contains_key(&path) {
-                    let descendants: Vec<String> = entries
-                        .keys()
-                        .filter(|candidate| Path::new(candidate).starts_with(&path))
-                        .cloned()
-                        .collect();
-                    for removed_path in descendants {
-                        entries.remove(&removed_path);
-                        removed.push(removed_path);
-                    }
-                }
-            }
-            for (path, entry) in current {
-                if entries.get(&path) != Some(&entry) {
-                    replacements.insert(path.clone(), entry.clone());
-                }
-                entries.insert(path, entry);
             }
         }
         if stop.load(Ordering::Acquire) {
             return;
         }
-        if (!changed.is_empty()
-            || !removed.is_empty()
-            || !replacements.is_empty()
-            || !warnings.is_empty())
-            && channel
+        if !paths.is_empty() {
+            if let Ok(mut indexes) = searches.lock() {
+                for index in indexes.values() {
+                    index.stop.store(true, Ordering::Release);
+                }
+                indexes.clear();
+            }
+            if channel
                 .send(FileUpdate::Changed {
-                    entries: replacements.into_values().collect(),
-                    removed,
-                    changed: changed.into_iter().collect(),
-                    warnings,
+                    paths: paths.into_iter().collect(),
                 })
                 .is_err()
-        {
-            return;
+            {
+                return;
+            }
         }
     }
 }
@@ -618,7 +592,92 @@ pub(crate) async fn subscribe_workspace_files(
                 stop: stop.clone(),
             },
         );
-    tauri::async_runtime::spawn_blocking(move || watch(root, channel, stop));
+    let searches = files.searches.clone();
+    tauri::async_runtime::spawn_blocking(move || watch(root, channel, stop, searches));
+    Ok(())
+}
+#[tauri::command]
+pub(crate) async fn list_workspace_directory(
+    threads: State<'_, Threads>,
+    thread_id: Uuid,
+    path: String,
+) -> Result<DirectoryListing, FileError> {
+    let root = root(&threads, thread_id)?;
+    tauri::async_runtime::spawn_blocking(move || list_directory(&root, &path))
+        .await
+        .map_err(|_| FileError::Unavailable)?
+}
+#[tauri::command]
+pub(crate) async fn search_workspace_paths(
+    threads: State<'_, Threads>,
+    files: State<'_, WorkspaceFiles>,
+    thread_id: Uuid,
+    search_id: Uuid,
+    query: String,
+) -> Result<Vec<Entry>, FileError> {
+    let root = root(&threads, thread_id)?;
+    let index = {
+        let mut searches = files.searches.lock().map_err(|_| FileError::Unavailable)?;
+        if let Some(index) = searches.get(&search_id) {
+            if index.thread == thread_id && index.root == root {
+                index.clone()
+            } else {
+                index.stop.store(true, Ordering::Release);
+                let index = Arc::new(SearchIndex {
+                    thread: thread_id,
+                    root: root.clone(),
+                    entries: tokio::sync::OnceCell::new(),
+                    stop: Arc::new(AtomicBool::new(false)),
+                });
+                searches.insert(search_id, index.clone());
+                index
+            }
+        } else {
+            let index = Arc::new(SearchIndex {
+                thread: thread_id,
+                root: root.clone(),
+                entries: tokio::sync::OnceCell::new(),
+                stop: Arc::new(AtomicBool::new(false)),
+            });
+            searches.insert(search_id, index.clone());
+            index
+        }
+    };
+    let entries = index
+        .entries
+        .get_or_try_init(|| async {
+            let scan_root = root.clone();
+            let stop = index.stop.clone();
+            tauri::async_runtime::spawn_blocking(move || {
+                let mut entries = BTreeMap::new();
+                let mut warnings = Vec::new();
+                scan(&scan_root, &scan_root, &mut entries, &mut warnings, &stop);
+                Arc::new(entries.into_values().collect::<Vec<_>>())
+            })
+            .await
+            .map_err(|_| FileError::Unavailable)
+        })
+        .await?;
+    let query = query.trim().replace('\\', "/").to_lowercase();
+    Ok(entries
+        .iter()
+        .filter(|entry| entry.path.to_lowercase().contains(&query))
+        .cloned()
+        .collect())
+}
+#[tauri::command]
+pub(crate) fn close_workspace_search(
+    files: State<'_, WorkspaceFiles>,
+    search_id: Uuid,
+) -> Result<(), FileError> {
+    if let Some(index) = files
+        .searches
+        .lock()
+        .map_err(|_| FileError::Unavailable)?
+        .remove(&search_id)
+    {
+        index.stop.store(true, Ordering::Release);
+    }
     Ok(())
 }
 #[tauri::command]
@@ -731,20 +790,91 @@ mod tests {
         );
         assert_eq!(
             entries.keys().map(String::as_str).collect::<Vec<_>>(),
-            vec![".env", "empty", "loop", "node_modules", "node_modules/file"]
+            vec![
+                ".env",
+                ".git",
+                ".git/config",
+                "empty",
+                "loop",
+                "node_modules",
+                "node_modules/file"
+            ]
         );
     }
     #[test]
-    fn rejects_escape_and_protected_paths() {
+    fn lists_only_immediate_children_and_accepts_git_directory() {
         let folder = fixture();
-        for path in [
-            "",
-            "..",
-            "../outside",
-            "/etc/passwd",
-            ".git/config",
-            "a/../b",
-        ] {
+        let root = folder.path();
+        fs::create_dir(root.join(".git")).unwrap();
+        fs::write(root.join(".git/config"), "[core]").unwrap();
+        let top = list_directory(root, "").unwrap();
+        assert_eq!(
+            top.entries
+                .iter()
+                .map(|entry| entry.path.as_str())
+                .collect::<Vec<_>>(),
+            vec![".git"]
+        );
+        let git = list_directory(root, ".git").unwrap();
+        assert_eq!(git.entries[0].path, ".git/config");
+        let version = text_file(root, ".git/config").unwrap().version;
+        save_text(root, ".git/config", &version, "[core]\n").unwrap();
+        operate(
+            root,
+            FileOperation::Create {
+                path: ".git/new".into(),
+                directory: false,
+            },
+        )
+        .unwrap();
+        operate(
+            root,
+            FileOperation::Move {
+                from: ".git/new".into(),
+                to: ".git/renamed".into(),
+            },
+        )
+        .unwrap();
+        assert!(root.join(".git/renamed").exists());
+    }
+    #[test]
+    #[ignore = "manual comparison on a large working folder"]
+    fn compares_shallow_listing_with_full_scan() {
+        let root = std::env::var_os("ATTE_FILES_BENCH_ROOT")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(".."))
+            .canonicalize()
+            .unwrap();
+        let started = std::time::Instant::now();
+        let shallow = list_directory(&root, "").unwrap();
+        let shallow_time = started.elapsed();
+        let mut watcher = notify::recommended_watcher(|_| {}).unwrap();
+        let started = std::time::Instant::now();
+        watcher.watch(&root, RecursiveMode::Recursive).unwrap();
+        let watch_time = started.elapsed();
+        let mut all = BTreeMap::new();
+        let mut warnings = Vec::new();
+        let started = std::time::Instant::now();
+        scan(
+            &root,
+            &root,
+            &mut all,
+            &mut warnings,
+            &AtomicBool::new(false),
+        );
+        println!(
+            "shallow: {} entries in {:?}; watch setup: {:?}; full: {} entries in {:?}",
+            shallow.entries.len(),
+            shallow_time,
+            watch_time,
+            all.len(),
+            started.elapsed()
+        );
+    }
+    #[test]
+    fn rejects_escape_paths() {
+        let folder = fixture();
+        for path in ["", "..", "../outside", "/etc/passwd", "a/../b"] {
             assert!(resolve(folder.path(), path).is_err(), "{path}");
         }
     }
@@ -846,7 +976,7 @@ mod tests {
         ));
     }
     #[test]
-    fn image_reads_reject_escapes_protected_paths_and_non_regular_files() {
+    fn image_reads_reject_escapes_and_non_regular_files() {
         use std::os::unix::fs::symlink;
         let folder = fixture();
         let outside = fixture();
@@ -861,13 +991,13 @@ mod tests {
         symlink(outside.path(), root.join("escape")).unwrap();
         symlink(outside.path().join("outside.png"), root.join("outside.png")).unwrap();
         symlink(root.join(".git/secret.png"), root.join("protected.png")).unwrap();
+        assert_eq!(image_file(root, ".git/secret.png").unwrap(), png);
+        assert_eq!(image_file(root, "protected.png").unwrap(), png);
         for relative in [
             "../outside.png",
             "/etc/passwd",
-            ".git/secret.png",
             "escape/outside.png",
             "outside.png",
-            "protected.png",
         ] {
             assert!(
                 matches!(image_file(root, relative), Err(FileError::InvalidPath)),

@@ -18,6 +18,7 @@ import {
   onCleanup,
   onMount,
   Show,
+  untrack,
 } from "solid-js";
 import { subscribeFiles } from "../api/files";
 import { imageMime, isSvg } from "../lib/file-kind";
@@ -50,6 +51,20 @@ export function WorkspaceFiles(props: {
       .map((draft) => draft.path)
       .join("\0"),
   );
+  const treeEntries = createMemo(() => {
+    const entries = new Map(
+      model.entries().map((entry) => [entry.path, entry]),
+    );
+    for (const entry of model.searchResults()) entries.set(entry.path, entry);
+    return [...entries.values()];
+  });
+  const directoryStatus = createMemo(() => {
+    const status: Record<string, "loading" | "error"> = {};
+    for (const path of Object.keys(model.directoryErrors()))
+      status[path] = "error";
+    for (const path of model.loadingDirectories()) status[path] = "loading";
+    return status;
+  });
   const [fatal, setFatal] = createSignal(false);
   let root!: HTMLDivElement;
   const { observe } = makeResizeObserver((entries) => {
@@ -67,7 +82,7 @@ export function WorkspaceFiles(props: {
     if (!props.visible) return;
     let dead = false;
     const subscription = subscribeFiles(model.threadId, (update) => {
-      if (!dead) void model.update(update);
+      if (!dead) untrack(() => void model.update(update));
     }).catch((cause) => {
       if (!dead) model.setError(cause);
       return undefined;
@@ -136,7 +151,7 @@ export function WorkspaceFiles(props: {
     if (
       !choice.text ||
       choice.text.includes("/") ||
-      [".", "..", ".git"].includes(choice.text)
+      [".", ".."].includes(choice.text)
     ) {
       model.setError("invalidPath");
       return;
@@ -253,11 +268,32 @@ export function WorkspaceFiles(props: {
               {t("files.loading")}
             </p>
           </Show>
+          <Show when={model.searching()}>
+            <p role="status" class="px-2 py-1 text-xs text-muted">
+              {t("files.loading")}
+            </p>
+          </Show>
+          <Show
+            when={
+              Object.entries(model.directoryErrors()).filter(([path]) => path)
+                .length
+            }
+          >
+            <p role="alert" class="px-2 py-1 text-xs text-muted">
+              {Object.entries(model.directoryErrors())
+                .filter(([path]) => path)
+                .map(([path, message]) => `${path}: ${message}`)
+                .join("\n")}
+            </p>
+          </Show>
           <div class="min-h-0 flex-1">
             <FileTree
-              entries={model.entries()}
+              entries={treeEntries()}
               loading={model.loading()}
-              selectedPath={selection()?.path}
+              directoryStatus={directoryStatus()}
+              loadingLabel={t("files.loading")}
+              errorLabel={t("files.failed")}
+              selectedPath={selection()?.path ?? model.selected()}
               dirtyLabel={t("files.unsavedTitle")}
               dirtyPaths={dirtyKey() ? dirtyKey().split("\0") : []}
               disabled={model.busy()}
@@ -265,12 +301,15 @@ export function WorkspaceFiles(props: {
               onSelect={(path, directory) => {
                 setSelection({ path, directory });
                 if (!directory) {
+                  void model.reveal(path);
                   setFatal(false);
                   setComparing(false);
                   setSourcePath(undefined);
                   void model.open(path);
                 }
               }}
+              onExpand={(path) => void model.loadDirectory(path)}
+              onSearchChange={(query) => void model.search(query)}
               onAction={(kind, path, directory) =>
                 void action(kind, path, directory)
               }

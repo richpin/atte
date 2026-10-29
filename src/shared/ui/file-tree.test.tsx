@@ -34,6 +34,83 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
+it("requests children when an empty directory is expanded and again after collapse", async () => {
+  const onExpand = vi.fn();
+  render(() => (
+    <FileTree
+      entries={[{ path: "empty", directory: true }]}
+      dirtyPaths={[]}
+      dirtyLabel="Unsaved"
+      disabled={false}
+      labels={{
+        newFile: "New file",
+        newFolder: "New folder",
+        rename: "Rename",
+        trash: "Trash",
+      }}
+      onSelect={() => undefined}
+      onExpand={onExpand}
+      onAction={() => undefined}
+      onMove={async () => true}
+      onError={(error) => {
+        throw error;
+      }}
+    />
+  ));
+  await waitFor(() => expect(tree.getItem("empty")).toBeTruthy());
+  const directory = tree.getItem("empty");
+  if (!directory || !("expand" in directory))
+    throw new Error("missing directory");
+  directory.expand();
+  expect(onExpand).toHaveBeenCalledOnce();
+  expect(onExpand).toHaveBeenCalledWith("empty");
+  directory.collapse();
+  directory.expand();
+  expect(onExpand).toHaveBeenCalledTimes(2);
+});
+
+it("adds search-only paths and removes them when search closes", async () => {
+  const [entries, setEntries] = createSignal([
+    { path: "folder", directory: true },
+  ]);
+  const onSearchChange = vi.fn();
+  render(() => (
+    <FileTree
+      entries={entries()}
+      dirtyPaths={[]}
+      dirtyLabel="Unsaved"
+      disabled={false}
+      labels={{
+        newFile: "New file",
+        newFolder: "New folder",
+        rename: "Rename",
+        trash: "Trash",
+      }}
+      onSelect={() => undefined}
+      onSearchChange={onSearchChange}
+      onAction={() => undefined}
+      onMove={async () => true}
+      onError={(error) => {
+        throw error;
+      }}
+    />
+  ));
+  await waitFor(() => expect(tree.getItem("folder")).toBeTruthy());
+  tree.setSearch("match");
+  expect(onSearchChange).toHaveBeenCalledWith("match");
+  setEntries((current) => [
+    ...current,
+    { path: "folder/deep/match.ts", directory: false },
+  ]);
+  await waitFor(() =>
+    expect(tree.getSearchMatchingPaths()).toContain("folder/deep/match.ts"),
+  );
+  tree.closeSearch();
+  setEntries([{ path: "folder", directory: true }]);
+  await waitFor(() => expect(tree.getItem("folder/deep/match.ts")).toBeNull());
+  expect(tree.getItem("folder/deep")).toBeNull();
+});
+
 it.each([0, 10000])(
   "prepares the first disk snapshot of %i entries in the worker even when it arrives after mount",
   async (count) => {
