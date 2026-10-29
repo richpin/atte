@@ -38,6 +38,7 @@ export function FileChanges<T extends FileChangeItem>(props: {
   children: (item: Accessor<T>, context: FileChangeContent) => JSX.Element;
   headerControls?: (item: Accessor<T>) => JSX.Element;
   headerWrapper?: (item: Accessor<T>, header: () => JSX.Element) => JSX.Element;
+  onOpenFile?: (item: T) => void;
   toolbarActions?: JSX.Element;
   empty?: JSX.Element;
 }) {
@@ -129,7 +130,22 @@ export function FileChanges<T extends FileChangeItem>(props: {
                       class="flex min-w-0 flex-1 items-baseline gap-2"
                       title={pathLabel()}
                     >
-                      <span class="truncate text-xs font-medium">{name()}</span>
+                      <Show
+                        when={props.onOpenFile}
+                        fallback={
+                          <span class="truncate text-xs font-medium">
+                            {name()}
+                          </span>
+                        }
+                      >
+                        <button
+                          type="button"
+                          class="truncate rounded text-xs font-medium hover:text-accent hover:underline focus-visible:outline-2 focus-visible:outline-accent"
+                          onClick={() => props.onOpenFile?.(item())}
+                        >
+                          {name()}
+                        </button>
+                      </Show>
                       <Show when={directory()}>
                         <span class="min-w-0 truncate text-xs text-muted">
                           {directory()}

@@ -162,6 +162,7 @@ export function WorkingChanges(props: {
   disabled: boolean;
   refreshToken: number;
   onAction: (action: WorkingAction, items: WorkingItem[]) => void;
+  onOpenFile?: (path: string) => void;
 }) {
   const { t } = useI18n();
   const items = createMemo(() => workingItems(props.snapshot.files));
@@ -226,6 +227,12 @@ export function WorkingChanges(props: {
       <FileChanges
         items={items()}
         visible={props.visible}
+        onOpenFile={
+          props.onOpenFile
+            ? (item) =>
+                props.onOpenFile?.(`${props.snapshot.root}/${item.path}`)
+            : undefined
+        }
         empty={<p class="p-4 text-xs text-muted">{t("git.clean")}</p>}
         headerControls={(item) => (
           <>

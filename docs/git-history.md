@@ -4,6 +4,8 @@
 
 ## 작업 변경 사항
 
+파일명을 클릭하면 현재 파일을 Files 탭에서 연다. 현재 파일이 없으면 탭 대신 알림을 표시한다.
+
 `Changes` 안에는 History와 같은 위치에 브랜치 선택 영역을 둔다. 작업 변경은 현재 작업 폴더에만 존재하므로 선택 가능한 범위는 해당 폴더에 체크아웃된 브랜치 하나다. detached HEAD도 명시한다. 파일별 박스를 기본으로 펼쳐 diff를 한 스크롤 영역에서 보여준다. 각 박스는 파일명·상위 경로·상태·변경 줄 수를 표시하며, 부분 staging된 파일은 staged와 unstaged 박스에 각각 나타난다. 미추적 파일은 Changes에 포함하며 ignored 파일은 제외한다. 바이너리 파일의 줄 수는 `—`로 표시한다. 파일별 patch는 접고 펼쳐도 재요청하지 않고 실제 파일 상태가 바뀌면 갱신한다. 충돌 파일은 별도로 안내한다.
 
 체크박스는 작업 대상을 선택하며 Shift+클릭으로 범위를 선택한다. 우클릭에서 선택 항목을 Stage, Unstage, Restore 또는 Trash할 수 있다. 상단 메뉴에서 Stage All, Unstage All, Restore All Changes, Stash All, Stash Pop을 실행한다. Restore는 선택한 tracked 파일의 staged·unstaged 변경을 모두 HEAD로 되돌리고 새 staged 파일은 휴지통으로 보낸다. 원래 untracked였던 파일은 Restore All에서도 보존한다. Trash는 실제 파일을 시스템 휴지통으로 보내고 index를 보존한다. Stash All은 untracked 파일도 포함하며 Stash Pop은 최신 stash를 일반 Git 동작으로 적용한다. Restore와 Trash는 실행 전 확인한다. Commit 버튼은 Dialog에서 커밋 제목과 선택적 본문을 받고 staged 변경만 커밋한다. 초안은 앱 실행 중 작업 폴더별로 유지하고 성공 시 지운다.

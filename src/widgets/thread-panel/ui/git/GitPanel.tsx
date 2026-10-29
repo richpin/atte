@@ -63,6 +63,7 @@ export function GitPanel(props: {
   threadId: string;
   visible: boolean;
   onOpenCommit: (root: string, commit: GitCommit) => void;
+  onOpenFile?: (path: string) => void;
 }) {
   const { t } = useI18n();
   const client = useQueryClient();
@@ -400,6 +401,7 @@ export function GitPanel(props: {
                 disabled={disabled()}
                 refreshToken={refreshToken()}
                 onAction={actionForItems}
+                onOpenFile={props.onOpenFile}
               />
             )}
           </Show>

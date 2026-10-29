@@ -96,6 +96,25 @@ it("keys both sides of a partially staged file separately", () => {
   expect(workingItems(snapshot.files)[2].untracked).toBe(true);
 });
 
+it("opens the working file from either staged or unstaged changes", async () => {
+  vi.mocked(readWorkingFile).mockResolvedValue({ kind: "unsupported" });
+  const onOpenFile = vi.fn();
+  render(() => (
+    <WorkingChanges
+      threadId="thread"
+      visible
+      snapshot={snapshot}
+      disabled={false}
+      refreshToken={0}
+      onAction={vi.fn()}
+      onOpenFile={onOpenFile}
+    />
+  ));
+  const names = screen.getAllByRole("button", { name: "a.ts" });
+  await userEvent.setup().click(names[1]);
+  expect(onOpenFile).toHaveBeenCalledExactlyOnceWith("/repo/a.ts");
+});
+
 it("applies the context action to selected entries of the matching side", async () => {
   vi.mocked(readWorkingFile).mockResolvedValue({ kind: "unsupported" });
   const onAction = vi.fn();

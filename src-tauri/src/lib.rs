@@ -566,6 +566,7 @@ pub fn run() {
                 workspace_files::search_workspace_paths,
                 workspace_files::close_workspace_search,
                 workspace_files::read_workspace_file,
+                workspace_files::resolve_existing_workspace_file,
                 workspace_files::read_workspace_image,
                 workspace_files::save_workspace_file,
                 workspace_files::operate_workspace_file,

@@ -8,6 +8,7 @@ import { FileChanges } from "./FileChanges";
 export function ChangesReview(props: {
   files: PreparedFileChange[];
   visible: boolean;
+  onOpenFile?: (path: string) => void;
 }) {
   const { t } = useI18n();
   const items = createMemo(() =>
@@ -30,7 +31,13 @@ export function ChangesReview(props: {
       class="flex h-full min-h-0 min-w-0 flex-col"
       aria-label={t("diff.title")}
     >
-      <FileChanges items={items()} visible={props.visible}>
+      <FileChanges
+        items={items()}
+        visible={props.visible}
+        onOpenFile={
+          props.onOpenFile ? (file) => props.onOpenFile?.(file.path) : undefined
+        }
+      >
         {(file, context) => (
           <For each={file().comparisons}>
             {(comparison, index) => (

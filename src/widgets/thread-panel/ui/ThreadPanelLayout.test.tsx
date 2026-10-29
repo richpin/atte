@@ -6,13 +6,20 @@ import {
   waitFor,
 } from "@solidjs/testing-library";
 import userEvent from "@testing-library/user-event";
+import { resolveExistingFile } from "features/workspace-files";
 import { prepareFileChanges } from "shared/diff";
 import { I18nProvider } from "shared/i18n";
+import { ToastHost } from "shared/ui";
 import { createSignal, onCleanup } from "solid-js";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { ThreadPanelContentProps } from "../model/thread-panel";
 import { createThreadPanelModel } from "./create-thread-panel-model";
 import { ThreadPanelLayout } from "./ThreadPanelLayout";
+
+vi.mock("features/workspace-files", async (original) => ({
+  ...(await original<object>()),
+  resolveExistingFile: vi.fn(),
+}));
 
 let layoutWidth: number;
 let observers: ResizeObserverFixture[];
@@ -91,13 +98,58 @@ function setup() {
   return { model, setThreadId, setActive, handle, panel, resize };
 }
 
+it("opens an available changed file in the reusable Files tab", async () => {
+  vi.mocked(resolveExistingFile).mockResolvedValueOnce("src/a.ts");
+  let model!: ReturnType<typeof createThreadPanelModel>;
+  function TestModel() {
+    model = createThreadPanelModel();
+    return null;
+  }
+  render(() => (
+    <I18nProvider>
+      <TestModel />
+    </I18nProvider>
+  ));
+  await model.openFile("one", "/workspace/src/a.ts");
+  expect(resolveExistingFile).toHaveBeenCalledWith(
+    "one",
+    "/workspace/src/a.ts",
+  );
+  expect(model.panel("one")?.selectedTabId).toBe("files:one");
+  expect(model.panel("one")?.tabs).toHaveLength(1);
+});
+
+it("keeps the current tab when a changed file is unavailable and shows a toast", async () => {
+  vi.mocked(resolveExistingFile).mockRejectedValueOnce(new Error("missing"));
+  let model!: ReturnType<typeof createThreadPanelModel>;
+  function TestModel() {
+    model = createThreadPanelModel();
+    model.newTab("one");
+    return <ToastHost />;
+  }
+  render(() => (
+    <I18nProvider>
+      <TestModel />
+    </I18nProvider>
+  ));
+  const selected = model.panel("one")?.selectedTabId;
+  await model.openFile("one", "/workspace/deleted.ts");
+  expect(model.panel("one")?.selectedTabId).toBe(selected);
+  expect(model.panel("one")?.tabs.some((tab) => tab.id === "files:one")).toBe(
+    false,
+  );
+  expect((await screen.findByRole("alert")).textContent).toContain(
+    "deleted.ts",
+  );
+});
+
 it("reuses a turn's changes tab and preserves its file list alongside web tabs", async () => {
   const { model } = setup();
   const files = await prepareFileChanges([
     { path: "/project/a.ts", comparisons: [{ before: "old", after: "new" }] },
   ]);
   model.openChangesTab("one", "turn-1", files);
-  const trigger = screen.getByRole("button", { name: /a.ts/ });
+  const trigger = screen.getByRole("button", { name: "/project/a.ts 접기" });
   expect(trigger.getAttribute("aria-expanded")).toBe("true");
   // Keep the renderer closed here; its own tests cover asynchronous resources.
   fireEvent.click(trigger);
@@ -108,10 +160,14 @@ it("reuses a turn's changes tab and preserves its file list alongside web tabs",
   model.newTab("one");
   expect(screen.getByRole("button", { name: "웹" })).toBeTruthy();
   model.selectTab("one", "changes:turn-1");
-  expect(screen.getByRole("button", { name: /a.ts/ })).toBe(trigger);
+  expect(screen.getByRole("button", { name: "/project/a.ts 펼치기" })).toBe(
+    trigger,
+  );
   model.setOpen("one", false);
   model.openChangesTab("one", "turn-1", files);
-  expect(screen.getByRole("button", { name: /a.ts/ })).toBe(trigger);
+  expect(screen.getByRole("button", { name: "/project/a.ts 펼치기" })).toBe(
+    trigger,
+  );
   model.openChangesTab("one", "turn-2", files);
   expect(
     model.panel("one")?.tabs.filter((tab) => tab.id.startsWith("changes:")),

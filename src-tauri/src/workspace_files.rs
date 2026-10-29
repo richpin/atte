@@ -212,6 +212,22 @@ fn read_target(root: &Path, relative: &str) -> Result<(PathBuf, bool), FileError
     }
     Ok((target, link))
 }
+
+fn existing_workspace_file(root: &Path, path: &str) -> Result<String, FileError> {
+    let path = Path::new(path);
+    let relative = if path.is_absolute() {
+        path.strip_prefix(root)
+            .map_err(|_| FileError::InvalidPath)?
+    } else {
+        path
+    };
+    let relative = relative.to_str().ok_or(FileError::InvalidPath)?;
+    let (target, _) = read_target(root, relative)?;
+    if !target.is_file() {
+        return Err(FileError::Missing);
+    }
+    Ok(relative.to_owned())
+}
 fn image_extension(relative: &str) -> Option<String> {
     let extension = Path::new(relative)
         .extension()?
@@ -703,6 +719,18 @@ pub(crate) async fn read_workspace_file(
         .await
         .map_err(|_| FileError::Unavailable)?
 }
+
+#[tauri::command]
+pub(crate) async fn resolve_existing_workspace_file(
+    threads: State<'_, Threads>,
+    thread_id: Uuid,
+    path: String,
+) -> Result<String, FileError> {
+    let root = root(&threads, thread_id)?;
+    tauri::async_runtime::spawn_blocking(move || existing_workspace_file(&root, &path))
+        .await
+        .map_err(|_| FileError::Unavailable)?
+}
 #[tauri::command]
 pub(crate) async fn read_workspace_image(
     threads: State<'_, Threads>,
@@ -877,6 +905,26 @@ mod tests {
         for path in ["", "..", "../outside", "/etc/passwd", "a/../b"] {
             assert!(resolve(folder.path(), path).is_err(), "{path}");
         }
+    }
+    #[test]
+    fn resolves_existing_absolute_and_relative_files_without_opening_missing_files() {
+        let folder = fixture();
+        let root = folder.path();
+        fs::create_dir(root.join("src")).unwrap();
+        fs::write(root.join("src/a.ts"), "content").unwrap();
+        assert_eq!(
+            existing_workspace_file(root, root.join("src/a.ts").to_str().unwrap()).unwrap(),
+            "src/a.ts"
+        );
+        assert_eq!(
+            existing_workspace_file(root, "src/a.ts").unwrap(),
+            "src/a.ts"
+        );
+        assert!(matches!(
+            existing_workspace_file(root, "src/deleted.ts"),
+            Err(FileError::Missing)
+        ));
+        assert!(existing_workspace_file(root, "/etc/passwd").is_err());
     }
     #[test]
     fn rejects_parent_links_outside_root_and_reads_internal_file_links_only() {

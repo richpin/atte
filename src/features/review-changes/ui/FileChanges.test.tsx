@@ -56,11 +56,13 @@ it("keeps identity-based expansion through updates and opens new entries", () =>
 
 it("isolates header controls and filename clicks from the collapse button", async () => {
   const action = vi.fn();
+  const openFile = vi.fn();
   const user = userEvent.setup();
   render(() => (
     <FileChanges
       items={[file("src/a.ts")]}
       visible
+      onOpenFile={openFile}
       headerControls={() => (
         <button type="button" onClick={action}>
           Stage file
@@ -79,6 +81,7 @@ it("isolates header controls and filename clicks from the collapse button", asyn
   await user.click(screen.getByRole("button", { name: "Stage file" }));
   await user.click(screen.getByRole("button", { name: "Stage all" }));
   expect(action).toHaveBeenCalledTimes(2);
+  expect(openFile).toHaveBeenCalledExactlyOnceWith(file("src/a.ts"));
   const toggle = screen.getByRole("button", { name: "src/a.ts 접기" });
   expect(toggle.getAttribute("aria-expanded")).toBe("true");
   toggle.focus();

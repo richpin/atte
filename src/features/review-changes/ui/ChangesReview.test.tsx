@@ -47,6 +47,25 @@ it("totals all files and reported edits in the toolbar and file rows", async () 
   expect(screen.getByText("Edit 2")).toBeTruthy();
 });
 
+it("opens the current file from a reported change without collapsing its diff", async () => {
+  const files = await prepareFileChanges([
+    { path: "src/a.ts", comparisons: [{ before: "old", after: "new" }] },
+  ]);
+  const onOpenFile = vi.fn();
+  render(() => (
+    <I18nProvider>
+      <ChangesReview files={files} visible onOpenFile={onOpenFile} />
+    </I18nProvider>
+  ));
+  await userEvent.setup().click(screen.getByRole("button", { name: "a.ts" }));
+  expect(onOpenFile).toHaveBeenCalledExactlyOnceWith("src/a.ts");
+  expect(
+    screen
+      .getByRole("button", { name: /src\/a.ts 접기|Collapse src\/a.ts/ })
+      .getAttribute("aria-expanded"),
+  ).toBe("true");
+});
+
 it("opens and closes file rows with the keyboard", async () => {
   localStorage.setItem("atte.locale", "en");
   const files = await prepareFileChanges([

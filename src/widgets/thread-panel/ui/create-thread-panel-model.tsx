@@ -4,12 +4,13 @@ import {
   createFilesManager,
   FilesDialogs,
   type FilesManager,
+  resolveExistingFile,
   WorkspaceFiles,
 } from "features/workspace-files";
 import { FileDiff, FolderTree, GitBranch, Globe } from "lucide-solid";
 import type { PreparedFileChange } from "shared/diff";
 import { useI18n } from "shared/i18n";
-import { Button } from "shared/ui";
+import { Button, showErrorToast } from "shared/ui";
 import { createSignal, Show } from "solid-js";
 import type { GitCommit } from "../api/git-history";
 import { createThreadPanelModel as createModel } from "../model/thread-panel";
@@ -49,6 +50,7 @@ export function createThreadPanelModel(manager?: FilesManager) {
           onOpenCommit={(repository, commit) =>
             openCommit(threadId, repository, commit)
           }
+          onOpenFile={(path) => void openFile(threadId, path)}
         />
       ),
     });
@@ -124,14 +126,22 @@ export function createThreadPanelModel(manager?: FilesManager) {
       ),
     };
   });
+  const openFile = async (threadId: string, path: string) => {
+    let relative: string;
+    try {
+      relative = await resolveExistingFile(threadId, path);
+    } catch {
+      showErrorToast(t("files.openUnavailable", { path }));
+      return;
+    }
+    openFiles(threadId);
+    const fileModel = files.get(threadId);
+    void fileModel.reveal(relative);
+    void fileModel.open(relative);
+  };
   return {
     ...model,
-    openFile: (threadId: string, path: string) => {
-      openFiles(threadId);
-      const fileModel = files.get(threadId);
-      void fileModel.reveal(path);
-      void fileModel.open(path);
-    },
+    openFile,
     Guard: () => <FilesDialogs manager={files} />,
     confirmForget: (threadId: string) => files.guard(threadId),
     forget: (threadId: string) => {
@@ -150,7 +160,11 @@ export function createThreadPanelModel(manager?: FilesManager) {
         title: () => t("diff.tabTitle"),
         icon: FileDiff,
         content: (props) => (
-          <ChangesReview files={files} visible={props.visible} />
+          <ChangesReview
+            files={files}
+            visible={props.visible}
+            onOpenFile={(path) => void openFile(threadId, path)}
+          />
         ),
       });
     },

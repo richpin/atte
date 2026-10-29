@@ -16,6 +16,8 @@ export type FileOperation =
   | { type: "trash"; path: string };
 export const readFile = (threadId: string, path: string) =>
   invoke<DiskFile>("read_workspace_file", { threadId, path });
+export const resolveExistingFile = (threadId: string, path: string) =>
+  invoke<string>("resolve_existing_workspace_file", { threadId, path });
 export const listDirectory = (threadId: string, path: string) =>
   invoke<DirectoryListing>("list_workspace_directory", { threadId, path });
 export const searchPaths = (

@@ -203,6 +203,8 @@ export const en = {
     invalidPath: "Choose a valid name inside the working folder.",
     missing:
       "This file is missing or cannot be read. Your edits have been kept.",
+    openUnavailable:
+      "Could not open {{path}}. The file is no longer available.",
     readOnly: "Read-only",
     failed: "The file operation failed. Please try again.",
     partial: "Some items could not be read. Hover for details.",
