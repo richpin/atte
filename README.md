@@ -15,7 +15,7 @@
 
 </div>
 
----
+![Atte in light mode with sample projects, multiple coding agents, and the changes panel open in a macOS window](docs/images/atte-light-window.jpg)
 
 Atte is a desktop app that brings coding agents into a consistent interface. Choose an agent, open a local folder, and start a thread—all in one place.
 
