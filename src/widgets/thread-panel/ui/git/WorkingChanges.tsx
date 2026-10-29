@@ -1,6 +1,6 @@
 import * as ContextMenu from "@kobalte/core/context-menu";
 import { type FileChangeContent, FileChanges } from "features/review-changes";
-import { Circle, CircleCheck, FilePlus2 } from "lucide-solid";
+import { FileCheck, FilePen, FilePlus2 } from "lucide-solid";
 import { useI18n } from "shared/i18n";
 import { Button, FileDiff } from "shared/ui";
 import {
@@ -264,9 +264,9 @@ export function WorkingChanges(props: {
               {item().untracked ? (
                 <FilePlus2 class="size-3.5" aria-hidden="true" />
               ) : item().side === "staged" ? (
-                <CircleCheck class="size-3.5" aria-hidden="true" />
+                <FileCheck class="size-3.5" aria-hidden="true" />
               ) : (
-                <Circle class="size-3.5" aria-hidden="true" />
+                <FilePen class="size-3.5" aria-hidden="true" />
               )}
               {item().untracked ? "?" : item().status}
             </span>
