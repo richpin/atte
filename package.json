@@ -6,7 +6,6 @@
   "scripts": {
     "start": "vite",
     "dev": "vite",
-    "dev:content": "node scripts/content-demo.ts",
     "build": "vite build",
     "serve": "vite preview",
     "tauri": "tauri",

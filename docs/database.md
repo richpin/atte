@@ -12,13 +12,14 @@ Registry ID당 한 행에 목록 메타데이터와 현재 설치 정보를 함�
 | `registry_metadata` | TEXT, nullable | 이름·설명·아이콘·Registry 버전·배포 정보 JSON. 현재 Registry에 없으면 NULL |
 | `installed_version` | TEXT, nullable | 실제 설치한 버전 |
 | `artifact_path` | TEXT, nullable | 앱이 관리하는 설치 디렉터리 경로 |
+| `pending_artifact_path` | TEXT, nullable | 활성 전환을 기다리는 검증된 설치본 경로 |
 | `launch_definition` | TEXT, nullable | 실행 정의 JSON: id, name, command, args, env |
 
 설치 컬럼 세 개는 모두 NULL이거나 모두 값이 있어야 한다. 미설치 상태는 모두 NULL이다. 실제 파일 유무는 실행 가능 여부를 판단할 때 별도로 확인하므로 DB 기록만으로 설치 성공을 표시하지 않는다.
 
 Registry 갱신은 `registry_metadata`만 트랜잭션으로 교체한다. 목록에서 사라져도 설치 정보가 있으면 행을 유지한다. 목록에도 없고 설치도 없는 행은 제거한다. 캐시 메타데이터 해석 실패가 유효한 설치 정보의 복원을 막지 않는다.
 
-정상 설치에 대한 반복 설치 요청은 그대로 재사용한다. 배포 변경을 비교하는 `installation_source`는 없으며 자동 업데이트하지 않는다. 새 배포를 쓰려면 삭제 후 설치한다. 파일이 없거나 손상되어 재설치하는 경우에도 이전 연결과 남은 설치 파일을 먼저 정리한다.
+정상 설치에 대한 반복 설치 요청은 그대로 재사용한다. Registry의 버전·배포 정보와 설치본의 `installation.json`을 비교해 변경된 배포는 별도 불변 설치본으로 준비한다. `pending_artifact_path`를 저장한 뒤 기존 작업을 마치고 구버전 프로세스를 종료·회수하면 활성 설치 컬럼을 교체하고 pending을 비운다. 설치본 전환과 미참조 파일 정리는 [설치본 수명 ADR](adr/0003-stage-agent-installations-and-drain-runtimes.md)을 따른다.
 
 ## app_metadata
 
@@ -36,7 +37,7 @@ Registry 갱신은 `registry_metadata`만 트랜잭션으로 교체한다. 목�
 1. 삭제 위치가 앱의 설치 디렉터리인지 검사한다. 공용 `agents/runtime`과 외부 경로는 거부한다.
 2. 새 스레드 선택에서 제외하고 해당 에이전트의 모든 연결·작업을 종료한다. 프로세스 종료를 기다린 뒤 파일 삭제를 시작한다. 다른 에이전트는 영향을 받지 않는다.
 3. 설치 디렉터리를 즉시 삭제한다. 심볼릭 링크는 대상을 따라가지 않고 링크 자체만 제거한다.
-4. 성공하면 설치 컬럼을 NULL로 바꾼다. Registry에 남아 있는 행은 재설치를 위해 유지한다.
+4. 성공하면 활성 설치 컬럼과 `pending_artifact_path`를 NULL로 바꾼다. Registry에 남아 있는 행은 재설치를 위해 유지한다.
 
 파일 삭제 실패 시 설치 정보는 남고 UI에서 삭제 재시도를 할 수 있다. 연결은 이미 종료되었을 수 있다. 파일 삭제 후 DB 반영 전 앱이 종료되면 다음 실행에서 설치 파일 없음으로 표시하며 삭제를 다시 시도하거나 재설치할 수 있다. 없는 경로의 삭제는 성공으로 취급한다. 별도 삭제 대기 테이블이나 재시작 시의 정상 삭제 작업은 없다.
 
@@ -83,15 +84,3 @@ Registry 갱신은 `registry_metadata`만 트랜잭션으로 교체한다. 목�
 출시 전에는 스키마 버전을 v1으로 유지하고 [초기 스키마](../src-tauri/schema.sql)를 직접 수정한다. 새 DB는 이 SQL 하나를 트랜잭션으로 실행하고 `PRAGMA user_version = 1`을 기록한다. 현재 구조의 v1 DB는 그대로 다시 연다. 버전별 업그레이드 마이그레이션은 제공하지 않으며, 이전 개발용 구조의 DB는 호환 대상으로 삼지 않는다. 앱은 기존 DB를 자동 삭제하거나 버전 번호를 낮추지 않는다. 버전이 1보다 높은 DB는 열지 않는다.
 
 정의: [v1 SQL](../src-tauri/schema.sql), [저장소](../src-tauri/src/storage.rs), [스레드 interface](../src-tauri/src/thread.rs), [삭제 처리](../src-tauri/src/agent_management/removal.rs).
-
-## 새로고침과 설치의 갱신 범위
-
-| 동작 | registry_metadata | launch_definition 및 설치 컬럼 |
-| --- | --- | --- |
-| Registry 새로고침 성공 | 검증된 최신 항목으로 교체 | 유지 |
-| 새로고침 실패 | 이전 값 유지 | 유지 |
-| 설치 성공 | 유지 | 실제 설치 결과로 기록 |
-| 정상 설치에 대한 중복 설치 요청 | 유지 | 기존 값 유지 |
-| 삭제 성공 | Registry에 있는 항목이면 유지 | NULL로 비움 |
-
-목록 갱신은 모든 행의 Registry 메타데이터를 비운 뒤 받은 항목들을 ID 기준으로 반영하며, 이 과정 전체와 갱신 시각 저장이 하나의 트랜잭션이다. Registry에서 빠진 항목은 설치되어 있으면 메타데이터 없이 남고, 미설치이면 행을 삭제한다. 새로고침은 실행 중인 프로세스나 기존 스레드의 실행 정의를 바꾸지 않는다. 예를 들어 Registry의 패키지가 2.0으로 바뀌어도 설치된 1.0은 그대로 실행하며, 2.0을 쓰려면 삭제 후 설치한다.

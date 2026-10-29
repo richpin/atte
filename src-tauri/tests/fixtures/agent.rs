@@ -1,7 +1,7 @@
 //! Deterministic ACP peer. Stdout contains only newline-delimited JSON-RPC.
 mod concurrent;
-mod content_demo;
 mod elicitation;
+mod playable_content;
 use serde_json::{json, Value};
 use std::{
     env, fs,
@@ -516,12 +516,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     )?;
                     continue;
                 }
-                if matches!(mode.as_str(), "mixed-content" | "content-demo") {
+                if matches!(mode.as_str(), "mixed-content" | "playable-content") {
                     let image = json!({"type":"image","mimeType":"image/png","data":"aW1hZ2U="});
                     let audio = json!({"type":"audio","mimeType":"audio/wav","data":"YXVkaW8="});
                     let resource = json!({"type":"resource","resource":{"uri":"file:///report.txt","mimeType":"text/plain","text":"<h1>literal report</h1>"}});
-                    let updates = if mode == "content-demo" {
-                        content_demo::updates()?
+                    let updates = if mode == "playable-content" {
+                        playable_content::updates()?
                     } else {
                         vec![
                             json!({"sessionUpdate":"agent_message_chunk","messageId":"a","content":{"type":"text","text":"Before"}}),

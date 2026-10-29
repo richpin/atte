@@ -1,4 +1,4 @@
-//! Playable, deterministic content for manual desktop verification.
+//! Deterministic audio and resource links for ACP streaming and replay tests.
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use serde_json::{json, Value};
 use std::{env, fs};
@@ -37,18 +37,18 @@ pub fn updates() -> Result<Vec<Value>, Box<dyn std::error::Error>> {
     let file = json!({"type":"resource_link","name":"Local file test","uri":uri.as_str(),"mimeType":"text/html","description":"링크를 누르면 Files 탭에 preview.html 원문이 표시됩니다."});
     let resource = json!({"type":"resource","resource":{"uri":"test:///report.txt","mimeType":"text/plain","text":"ACP embedded text resource\n원문 펼치기, 내용 복사, 다른 이름으로 저장을 확인하세요."}});
     Ok(vec![
-        json!({"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"ACP 콘텐츠 테스트입니다. 아래 오디오는 1초짜리 440Hz 알림음이며 재생 버튼을 눌러야 들립니다. 웹·로컬 파일 링크도 눌러보세요."}}),
+        json!({"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"Audio and resource links follow."}}),
         json!({"sessionUpdate":"agent_message_chunk","content":audio}),
         json!({"sessionUpdate":"agent_message_chunk","content":web}),
         json!({"sessionUpdate":"agent_message_chunk","content":file}),
         json!({"sessionUpdate":"agent_message_chunk","content":resource}),
-        json!({"sessionUpdate":"tool_call","toolCallId":"content-demo-tool","title":"ACP tool content test","status":"completed","rawInput":{"test":"audio and resource links"},"content":[
+        json!({"sessionUpdate":"tool_call","toolCallId":"playable-content-tool","title":"ACP tool content test","status":"completed","rawInput":{"test":"audio and resource links"},"content":[
             {"type":"content","content":{"type":"text","text":"도구 결과 시작"}},
             {"type":"content","content":audio},
             {"type":"content","content":web},
             {"type":"content","content":file},
             {"type":"content","content":{"type":"text","text":"도구 결과 끝"}}
         ]}),
-        json!({"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"다른 대화로 이동하면 오디오가 멈춰야 합니다. 앱을 닫고 같은 테스트 명령으로 다시 열면 이 순서와 콘텐츠가 기록에서 복원됩니다."}}),
+        json!({"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"End of content."}}),
     ])
 }

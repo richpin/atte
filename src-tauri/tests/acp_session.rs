@@ -7228,13 +7228,13 @@ async fn shared_worktree_sessions_run_independently_and_deleting_one_keeps_the_o
 }
 
 #[tokio::test]
-async fn manual_content_demo_sends_playable_audio_links_and_restores_the_same_results() {
+async fn playable_content_sends_audio_links_and_restores_the_same_results() {
     use atte_lib::thread::ResponsePart;
     let folder = tempfile::tempdir().unwrap();
     let mut agent = mock_agent();
     agent
         .env
-        .insert("FIXTURE_MODE".into(), "content-demo".into());
+        .insert("FIXTURE_MODE".into(), "playable-content".into());
     agent.env.insert(
         "SESSION_FILE".into(),
         folder.path().join("history.json").to_string_lossy().into(),
