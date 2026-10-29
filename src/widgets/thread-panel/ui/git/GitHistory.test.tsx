@@ -102,6 +102,15 @@ it("opens Git from the tab chooser and reuses a commit diff tab", async () => {
       </QueryClientProvider>
     );
   });
+  const chooser = screen.getByRole("group", {
+    name: "여기에서 프로젝트를 탐색할 수 있습니다.",
+  });
+  expect(chooser.classList.contains("flex")).toBe(true);
+  expect(
+    Array.from(chooser.querySelectorAll("button"), (button) =>
+      button.textContent?.trim(),
+    ),
+  ).toEqual(["Git", "웹", "Files"]);
   fireEvent.click(screen.getByRole("button", { name: "Git" }));
   fireEvent.click(await screen.findByRole("tab", { name: "커밋 이력" }));
   await screen.findByRole("button", { name: "Subject 0 · commit-" });

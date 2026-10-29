@@ -93,24 +93,29 @@ export function createThreadPanelModel(manager?: FilesManager) {
           fallback={
             <div class="grid h-full place-content-center gap-4 p-6 text-center text-sm text-muted">
               <p>{t("threadPanel.newTabDescription")}</p>
-              <Button
-                variant="outline"
-                onClick={() => openFiles(threadId, web.id)}
+              <fieldset
+                aria-label={t("threadPanel.newTabDescription")}
+                class="flex items-center justify-center gap-2"
               >
-                <FolderTree class="size-4" />
-                Files
-              </Button>
-              <Button variant="outline" onClick={() => setKind("web")}>
-                <Globe class="size-4" />
-                {t("webBrowser.title")}
-              </Button>
-              <Button
-                variant="outline"
-                onClick={() => openGit(threadId, web.id)}
-              >
-                <GitBranch class="size-4" />
-                {t("git.title")}
-              </Button>
+                <Button
+                  variant="outline"
+                  onClick={() => openGit(threadId, web.id)}
+                >
+                  <GitBranch class="size-4" />
+                  {t("git.title")}
+                </Button>
+                <Button variant="outline" onClick={() => setKind("web")}>
+                  <Globe class="size-4" />
+                  {t("webBrowser.title")}
+                </Button>
+                <Button
+                  variant="outline"
+                  onClick={() => openFiles(threadId, web.id)}
+                >
+                  <FolderTree class="size-4" />
+                  Files
+                </Button>
+              </fieldset>
             </div>
           }
         >
