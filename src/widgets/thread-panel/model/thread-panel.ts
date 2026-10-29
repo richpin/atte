@@ -49,7 +49,15 @@ export function createThreadPanelModel(
   }
 
   function setOpen(threadId: string, open: boolean) {
-    ensure(threadId);
+    const panel = ensure(threadId);
+    if (open && panel.tabs.length === 0) {
+      const tab = createNewTab(1, threadId);
+      setPanels(threadId, {
+        tabs: [tab],
+        selectedTabId: tab.id,
+        nextTabNumber: 2,
+      });
+    }
     setPanels(threadId, "open", open);
   }
 
@@ -95,11 +103,11 @@ export function createThreadPanelModel(
     const index = panel.tabs.findIndex((tab) => tab.id === tabId);
     if (index < 0) return;
     if (panel.tabs.length === 1) {
-      const tab = createNewTab(1, threadId);
       setPanels(threadId, {
-        tabs: [tab],
-        selectedTabId: tab.id,
-        nextTabNumber: 2,
+        open: false,
+        tabs: [],
+        selectedTabId: "",
+        nextTabNumber: 1,
       });
       return;
     }

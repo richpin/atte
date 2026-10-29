@@ -1,4 +1,3 @@
-import { ChangeStats } from "features/review-changes";
 import { ChevronDown, ChevronsDownUp, ChevronsUpDown } from "lucide-solid";
 import { useI18n } from "shared/i18n";
 import {
@@ -16,6 +15,7 @@ import {
   onCleanup,
   Show,
 } from "solid-js";
+import { ChangeStats } from "./ChangeStats";
 
 export type FileChangeItem = {
   id: string;
@@ -75,8 +75,8 @@ export function FileChanges<T extends FileChangeItem>(props: {
           size="icon"
           class="size-7 shrink-0"
           disabled={props.items.length === 0}
-          aria-label={t(allOpen() ? "git.collapseAll" : "git.expandAll")}
-          title={t(allOpen() ? "git.collapseAll" : "git.expandAll")}
+          aria-label={t(allOpen() ? "diff.collapseAll" : "diff.expandAll")}
+          title={t(allOpen() ? "diff.collapseAll" : "diff.expandAll")}
           onClick={() => setCollapsed(allOpen() ? new Set(ids()) : new Set())}
         >
           <Show
@@ -87,10 +87,10 @@ export function FileChanges<T extends FileChangeItem>(props: {
           </Show>
         </Button>
         <span class="min-w-0 flex-1 text-xs text-muted">
-          {t("git.files", { count: props.items.length })}
+          {t("diff.files", { count: props.items.length })}
         </span>
         {props.toolbarActions}
-        <span role="img" aria-label={t("git.lineTotals", totals())}>
+        <span role="img" aria-label={t("diff.lineTotals", totals())}>
           <ChangeStats {...totals()} />
         </span>
       </div>
@@ -114,7 +114,7 @@ export function FileChanges<T extends FileChangeItem>(props: {
                     <CollapsibleTrigger
                       class="flex size-6 shrink-0 items-center justify-center rounded hover:bg-panel focus-visible:outline-2 focus-visible:outline-accent"
                       aria-label={t(
-                        open() ? "git.collapseFile" : "git.expandFile",
+                        open() ? "diff.collapseFile" : "diff.expandFile",
                         { path: item().path },
                       )}
                     >

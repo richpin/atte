@@ -98,8 +98,9 @@ it("reuses a turn's changes tab and preserves its file list alongside web tabs",
   ]);
   model.openChangesTab("one", "turn-1", files);
   const trigger = screen.getByRole("button", { name: /a.ts/ });
-  expect(trigger.getAttribute("aria-expanded")).toBe("false");
+  expect(trigger.getAttribute("aria-expanded")).toBe("true");
   // Keep the renderer closed here; its own tests cover asynchronous resources.
+  fireEvent.click(trigger);
   model.openChangesTab("one", "turn-1", files);
   expect(
     model.panel("one")?.tabs.filter((tab) => tab.id === "changes:turn-1"),
@@ -117,7 +118,7 @@ it("reuses a turn's changes tab and preserves its file list alongside web tabs",
   ).toHaveLength(2);
 });
 
-it("starts collapsed with a default tab and replaces the last closed tab", async () => {
+it("closes the panel with its last tab and starts at tab one when reopened", async () => {
   const { model } = setup();
   expect(screen.queryByRole("complementary")).toBeNull();
   model.setOpen("one", true);
@@ -145,15 +146,10 @@ it("starts collapsed with a default tab and replaces the last closed tab", async
     "새 탭 1",
   );
   await userEvent.click(screen.getByRole("button", { name: "새 탭 1 닫기" }));
-  expect(screen.getAllByRole("tab")).toHaveLength(1);
-  expect(screen.getByRole("tab", { selected: true }).textContent).toBe(
-    "새 탭 1",
-  );
-  expect(screen.getByRole("complementary")).toBeTruthy();
-  expect(document.activeElement).toBe(
-    screen.getByRole("tab", { name: "새 탭 1" }),
-  );
-  await userEvent.click(screen.getByRole("button", { name: "새 탭 1 닫기" }));
+  expect(model.panel("one")?.tabs).toHaveLength(0);
+  expect(model.panel("one")?.open).toBe(false);
+  expect(screen.queryByRole("complementary")).toBeNull();
+  model.setOpen("one", true);
   expect(screen.getByRole("tab", { selected: true }).textContent).toBe(
     "새 탭 1",
   );
@@ -163,7 +159,7 @@ it("starts collapsed with a default tab and replaces the last closed tab", async
   );
 });
 
-it("replaces the last custom tab through the public interface and cleans up its content while folded", () => {
+it("closes the last custom tab through the public interface and cleans up its content while folded", () => {
   const { model } = setup();
   const disposed = vi.fn();
   model.openTab("one", {
@@ -179,6 +175,7 @@ it("replaces the last custom tab through the public interface and cleans up its 
   model.closeTab("one", "file");
   expect(disposed).toHaveBeenCalledTimes(1);
   expect(model.panel("one")?.open).toBe(false);
+  expect(model.panel("one")?.tabs).toHaveLength(0);
   model.setOpen("one", true);
   expect(screen.getAllByRole("tab")).toHaveLength(1);
   expect(screen.getByRole("tab", { selected: true }).textContent).toBe(

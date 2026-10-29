@@ -6,11 +6,6 @@ type Localized<T> = {
 
 export const ko = {
   git: {
-    collapseAll: "전체 접기",
-    expandAll: "전체 펼치기",
-    collapseFile: "{{path}} 접기",
-    expandFile: "{{path}} 펼치기",
-    lineTotals: "텍스트 줄 변경: {{additions}}줄 추가, {{deletions}}줄 삭제",
     title: "Git",
     changes: "변경 사항",
     stagedChanges: "스테이징된 변경",
@@ -66,7 +61,6 @@ export const ko = {
     firstParent: "첫 부모 기준",
     compare: "비교 기준",
     emptyTree: "빈 tree",
-    files: "변경 파일 {{count}}개",
     emptyCommit: "파일 변경사항이 없는 커밋입니다.",
     metadataOnly: "텍스트 줄 변경이 없습니다.",
     binary: "바이너리 파일이 변경되었습니다. 텍스트 diff를 제공하지 않습니다.",
@@ -76,6 +70,11 @@ export const ko = {
       "Submodule 참조가 변경되었습니다. 텍스트 diff를 제공하지 않습니다.",
   },
   diff: {
+    collapseAll: "전체 접기",
+    expandAll: "전체 펼치기",
+    collapseFile: "{{path}} 접기",
+    expandFile: "{{path}} 펼치기",
+    lineTotals: "텍스트 줄 변경: {{additions}}줄 추가, {{deletions}}줄 삭제",
     title: "변경 사항",
     tabTitle: "변경 사항",
     files: "파일 {{count}}개 변경",

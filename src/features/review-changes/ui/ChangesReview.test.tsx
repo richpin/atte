@@ -1,10 +1,4 @@
-import {
-  cleanup,
-  fireEvent,
-  render,
-  screen,
-  within,
-} from "@solidjs/testing-library";
+import { cleanup, fireEvent, render, screen } from "@solidjs/testing-library";
 import userEvent from "@testing-library/user-event";
 import { prepareFileChanges } from "shared/diff";
 import { I18nProvider } from "shared/i18n";
@@ -23,7 +17,7 @@ afterEach(() => {
   localStorage.clear();
 });
 
-it("always totals all files and reported edits in the header and file rows", async () => {
+it("totals all files and reported edits in the toolbar and file rows", async () => {
   localStorage.setItem("atte.locale", "en");
   const files = await prepareFileChanges([
     {
@@ -40,15 +34,17 @@ it("always totals all files and reported edits in the header and file rows", asy
       <ChangesReview files={files} visible />
     </I18nProvider>
   ));
-  const header = container.querySelector("header");
-  if (!header) throw new Error("missing header");
-  expect(header.textContent).toContain("2 files changed");
+  expect(screen.queryByRole("heading", { name: "Changes" })).toBeNull();
+  expect(container.textContent).toContain("2 files changed");
   expect(container.textContent).not.toContain("reported edits");
-  expect(within(header).getByText("+5")).toBeTruthy();
-  expect(within(header).getByText("−2")).toBeTruthy();
-  const first = screen.getByRole("button", { name: /a.ts/ });
-  expect(first.textContent).toContain("+3");
-  expect(first.textContent).toContain("−2");
+  expect(
+    screen.getByRole("img", { name: /5 additions, 2 deletions/ }),
+  ).toBeTruthy();
+  const first = screen.getByText("a.ts").parentElement?.parentElement;
+  expect(first?.textContent).toContain("+3");
+  expect(first?.textContent).toContain("−2");
+  expect(screen.getByText("Edit 1")).toBeTruthy();
+  expect(screen.getByText("Edit 2")).toBeTruthy();
 });
 
 it("opens and closes file rows with the keyboard", async () => {
@@ -63,15 +59,18 @@ it("opens and closes file rows with the keyboard", async () => {
   ));
   const user = userEvent.setup();
   await user.tab();
-  const trigger = screen.getByRole("button", { name: /a.ts/ });
+  await user.tab();
+  const trigger = screen.getByRole("button", {
+    name: "Collapse /project/a.ts",
+  });
   expect(document.activeElement).toBe(trigger);
   await user.keyboard("{Enter}");
-  expect(trigger.getAttribute("aria-expanded")).toBe("true");
-  await user.keyboard(" ");
   expect(trigger.getAttribute("aria-expanded")).toBe("false");
+  await user.keyboard(" ");
+  expect(trigger.getAttribute("aria-expanded")).toBe("true");
 });
 
-it("starts collapsed, independently expands multiple files, and preserves state when hidden", async () => {
+it("starts expanded, independently collapses files, and preserves state when hidden", async () => {
   localStorage.setItem("atte.locale", "en");
   const files = await prepareFileChanges([
     {
@@ -89,23 +88,24 @@ it("starts collapsed, independently expands multiple files, and preserves state 
       <ChangesReview files={files} visible={visible()} />
     </I18nProvider>
   ));
-  const first = screen.getByRole("button", { name: /a.ts/ });
-  const second = screen.getByRole("button", { name: /b.ts/ });
-  expect(first.getAttribute("aria-expanded")).toBe("false");
-  expect(second.getAttribute("aria-expanded")).toBe("false");
-  expect(screen.queryByText("first diff")).toBeNull();
-  fireEvent.click(first);
-  fireEvent.click(second);
+  const first = screen.getByRole("button", { name: "Collapse /project/a.ts" });
+  const second = screen.getByRole("button", { name: "Collapse /project/b.ts" });
   expect(first.getAttribute("aria-expanded")).toBe("true");
   expect(second.getAttribute("aria-expanded")).toBe("true");
   expect(screen.getByText("first diff")).toBeTruthy();
-  const root = screen.getByRole("region", { name: "Changes" });
-  root.scrollTop = 80;
-  setVisible(false);
-  setVisible(true);
-  expect(root.scrollTop).toBe(80);
-  expect(first.getAttribute("aria-expanded")).toBe("true");
   fireEvent.click(first);
   expect(first.getAttribute("aria-expanded")).toBe("false");
+  expect(second.getAttribute("aria-expanded")).toBe("true");
+  expect(screen.queryByText("first diff")).toBeNull();
+  const root = screen.getByRole("region", { name: "Changes" });
+  const scroll = root.querySelector(".overflow-auto");
+  if (!(scroll instanceof HTMLElement)) throw new Error("missing scroll area");
+  scroll.scrollTop = 80;
+  setVisible(false);
+  setVisible(true);
+  expect(scroll.scrollTop).toBe(80);
+  expect(first.getAttribute("aria-expanded")).toBe("false");
+  fireEvent.click(first);
+  expect(first.getAttribute("aria-expanded")).toBe("true");
   expect(second.getAttribute("aria-expanded")).toBe("true");
 });

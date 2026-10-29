@@ -1,11 +1,5 @@
 export const en = {
   git: {
-    collapseAll: "Collapse all",
-    expandAll: "Expand all",
-    collapseFile: "Collapse {{path}}",
-    expandFile: "Expand {{path}}",
-    lineTotals:
-      "Text line changes: {{additions}} additions, {{deletions}} deletions",
     title: "Git",
     changes: "Changes",
     stagedChanges: "Staged Changes",
@@ -62,7 +56,6 @@ export const en = {
     firstParent: "First parent",
     compare: "Compare",
     emptyTree: "Empty tree",
-    files: "{{count}} changed files",
     emptyCommit: "This commit has no file changes.",
     metadataOnly: "No text lines changed.",
     binary: "Binary file changed. A text diff is not available.",
@@ -71,6 +64,12 @@ export const en = {
     submodule: "Submodule reference changed. A text diff is not available.",
   },
   diff: {
+    collapseAll: "Collapse all",
+    expandAll: "Expand all",
+    collapseFile: "Collapse {{path}}",
+    expandFile: "Expand {{path}}",
+    lineTotals:
+      "Text line changes: {{additions}} additions, {{deletions}} deletions",
     title: "Changes",
     tabTitle: "Changes",
     files: "{{count}} files changed",

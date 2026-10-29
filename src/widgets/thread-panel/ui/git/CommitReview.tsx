@@ -1,3 +1,4 @@
+import { type FileChangeContent, FileChanges } from "features/review-changes";
 import { GitCommitHorizontal } from "lucide-solid";
 import { useI18n } from "shared/i18n";
 import { Button, FileDiff } from "shared/ui";
@@ -8,7 +9,6 @@ import {
   readCommitFile,
 } from "../../api/git-history";
 import { prepareCommitPatch } from "../../lib/git-patch";
-import { type FileChangeContent, FileChanges } from "./FileChanges";
 
 function changeColor(change: string) {
   switch (change[0]) {

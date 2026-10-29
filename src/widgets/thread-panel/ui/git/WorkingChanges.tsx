@@ -1,4 +1,5 @@
 import * as ContextMenu from "@kobalte/core/context-menu";
+import { type FileChangeContent, FileChanges } from "features/review-changes";
 import { Circle, CircleCheck, FilePlus2 } from "lucide-solid";
 import { useI18n } from "shared/i18n";
 import { Button, FileDiff } from "shared/ui";
@@ -18,7 +19,6 @@ import {
   type WorkingSnapshot,
 } from "../../api/git-working";
 import { prepareCommitPatch } from "../../lib/git-patch";
-import { type FileChangeContent, FileChanges } from "./FileChanges";
 
 export type WorkingItem = {
   id: string;
