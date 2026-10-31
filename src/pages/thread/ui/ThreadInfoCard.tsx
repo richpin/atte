@@ -1,5 +1,6 @@
+import { X } from "lucide-solid";
 import { useI18n } from "shared/i18n";
-import { Card, Progress } from "shared/ui";
+import { Button, Card, Progress } from "shared/ui";
 import { Show } from "solid-js";
 import type { ContextUsage } from "../model/types";
 
@@ -9,7 +10,10 @@ function formatTokens(value: number) {
     : `${Number((value / 1_000).toFixed(1))}K`;
 }
 
-export function ThreadInfoCard(props: { usage: ContextUsage | null }) {
+export function ThreadInfoCard(props: {
+  usage: ContextUsage | null;
+  onClose: () => void;
+}) {
   const { t } = useI18n();
   const usage = () =>
     props.usage && props.usage.size > 0 ? props.usage : null;
@@ -29,7 +33,17 @@ export function ThreadInfoCard(props: { usage: ContextUsage | null }) {
 
   return (
     <Card class="absolute top-3 right-6 h-32 w-60 rounded-3xl border-line bg-input-surface p-5 text-ink shadow-sm">
-      <h2 class="text-sm font-medium">{t("thread.context")}</h2>
+      <h2 class="pr-7 text-sm font-medium">{t("thread.context")}</h2>
+      <Button
+        variant="ghost"
+        size="icon"
+        class="absolute top-3.5 right-3.5 size-6 text-muted hover:text-ink"
+        aria-label={t("thread.closeInformation")}
+        title={t("thread.closeInformation")}
+        onClick={props.onClose}
+      >
+        <X aria-hidden="true" class="size-2.5" />
+      </Button>
       <Show
         when={usage()}
         fallback={

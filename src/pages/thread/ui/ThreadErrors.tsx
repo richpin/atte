@@ -50,7 +50,7 @@ export function ThreadErrors(props: {
               props.thread.failureDetail?.message.trim()
             }
           >
-            <p class="max-h-48 overflow-y-auto whitespace-pre-wrap break-words">
+            <p class="max-h-48 overflow-y-auto whitespace-pre-wrap break-words rounded-lg border border-danger/25 bg-canvas/50 px-3 py-2 text-xs">
               {props.thread?.failureDetail?.message}
             </p>
           </Show>

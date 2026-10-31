@@ -21,6 +21,7 @@ const timelineComposerGap = 48;
 export function ThreadPage(props: {
   active: boolean;
   showInfoCard: boolean;
+  onCloseInfoCard: () => void;
   findRequest?: number;
   model: ThreadModel;
   agents: PreparedAgent[];
@@ -219,7 +220,10 @@ export function ThreadPage(props: {
                 findRequest={props.findRequest}
                 overlay={
                   <Show when={thread() && props.showInfoCard}>
-                    <ThreadInfoCard usage={thread()?.contextUsage ?? null} />
+                    <ThreadInfoCard
+                      usage={thread()?.contextUsage ?? null}
+                      onClose={props.onCloseInfoCard}
+                    />
                   </Show>
                 }
                 followKey={`${thread()?.id}:${activeTurnId()}`}

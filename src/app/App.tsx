@@ -467,6 +467,7 @@ function ShellContent(props: { shell: AppShellModel }) {
               }}
               active={shell.view() === "thread"}
               showInfoCard={showInfoCard()}
+              onCloseInfoCard={() => setShowInfoCard(false)}
               findRequest={findRequest()}
               model={threads}
               agents={shell.agents()}

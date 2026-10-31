@@ -280,6 +280,7 @@ export const ko = {
       close: "검색 닫기 (Esc)",
     },
     information: "스레드 정보",
+    closeInformation: "스레드 정보 닫기",
     context: "Context",
     contextUsageUnavailable: "사용량 정보 없음",
     contextUsageExact: "{{used}} / {{size}} 토큰",

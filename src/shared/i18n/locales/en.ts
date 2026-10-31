@@ -277,6 +277,7 @@ export const en = {
       close: "Close find (Esc)",
     },
     information: "Thread information",
+    closeInformation: "Close thread information",
     context: "Context",
     contextUsageUnavailable: "Usage unavailable",
     contextUsageExact: "{{used}} / {{size}} tokens",
