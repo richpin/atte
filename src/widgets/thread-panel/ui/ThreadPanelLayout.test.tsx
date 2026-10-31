@@ -158,7 +158,7 @@ it("reuses a turn's changes tab and preserves its file list alongside web tabs",
     model.panel("one")?.tabs.filter((tab) => tab.id === "changes:turn-1"),
   ).toHaveLength(1);
   model.newTab("one");
-  expect(screen.getByRole("button", { name: "웹" })).toBeTruthy();
+  expect(screen.getByRole("button", { name: "Web" })).toBeTruthy();
   model.selectTab("one", "changes:turn-1");
   expect(screen.getByRole("button", { name: "/project/a.ts 펼치기" })).toBe(
     trigger,

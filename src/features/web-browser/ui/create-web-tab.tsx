@@ -10,6 +10,7 @@ export function createWebTab(
   options: {
     url?: string;
     title?: () => string;
+    fallbackTitle?: string;
     startBlank?: boolean;
     translate?: ReturnType<typeof useI18n>["t"];
   } = {},
@@ -30,8 +31,8 @@ export function createWebTab(
     ),
     title: () =>
       web()
-        ? title() || t("webBrowser.title")
-        : (options.title?.() ?? t("webBrowser.title")),
+        ? title() || options.fallbackTitle || t("webBrowser.title")
+        : (options.title?.() ?? options.fallbackTitle ?? t("webBrowser.title")),
     content: (props: { active: boolean; visible: boolean }) => (
       <Show
         when={web()}

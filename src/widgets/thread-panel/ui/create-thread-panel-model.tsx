@@ -81,6 +81,7 @@ export function createThreadPanelModel(manager?: FilesManager) {
   const model = createModel((number, threadId) => {
     const web = createWebTab(threadId, {
       translate: t,
+      fallbackTitle: "Web",
       startBlank: true,
       title: () => t("threadPanel.newTabTitle", { number }),
     });
@@ -108,7 +109,7 @@ export function createThreadPanelModel(manager?: FilesManager) {
                 </Button>
                 <Button variant="outline" onClick={() => setKind("web")}>
                   <Globe class="size-4" />
-                  {t("webBrowser.title")}
+                  Web
                 </Button>
                 <Button
                   variant="outline"
@@ -149,7 +150,10 @@ export function createThreadPanelModel(manager?: FilesManager) {
       model.forget(threadId);
     },
     openWebTab: (threadId: string, url: string) =>
-      model.openTab(threadId, createWebTab(threadId, { url, translate: t })),
+      model.openTab(
+        threadId,
+        createWebTab(threadId, { url, translate: t, fallbackTitle: "Web" }),
+      ),
     openChangesTab: (
       threadId: string,
       turnId: string,

@@ -110,7 +110,7 @@ it("opens Git from the tab chooser and reuses a commit diff tab", async () => {
     Array.from(chooser.querySelectorAll("button"), (button) =>
       button.textContent?.trim(),
     ),
-  ).toEqual(["Git", "웹", "Files"]);
+  ).toEqual(["Git", "Web", "Files"]);
   fireEvent.click(screen.getByRole("button", { name: "Git" }));
   fireEvent.click(await screen.findByRole("tab", { name: "커밋 이력" }));
   await screen.findByRole("button", { name: "Subject 0 · commit-" });
