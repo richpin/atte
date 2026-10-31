@@ -9,6 +9,7 @@
     "build": "vite build",
     "serve": "vite preview",
     "tauri": "tauri",
+    "release:macos": "node --experimental-strip-types scripts/release-macos.ts",
     "prepare": "husky",
     "format": "biome format --write .",
     "format:check": "biome format .",

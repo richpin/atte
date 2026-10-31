@@ -4,5 +4,6 @@ dist
 
 /.scratch/
 /docs/research/
+/.env.release.local
 
 .DS_Store
