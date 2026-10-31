@@ -4325,6 +4325,61 @@ mod title_tests {
     }
 
     #[test]
+    fn permission_request_persists_waiting_state_without_storage_errors() {
+        let folder = tempfile::tempdir().unwrap();
+        let store = Arc::new(Store::open(&folder.path().join("atte.sqlite")).unwrap());
+        let threads = Threads::with_store(vec![prepared_codex()], store.clone()).unwrap();
+        let draft = threads.create(folder.path()).unwrap();
+        let updates = updates_for(&threads, draft.id);
+        let turn = Uuid::new_v4();
+        {
+            let mut state = updates.state.lock().unwrap();
+            state.thread.status = ThreadStatus::Running;
+            state.thread.turns.push(Turn {
+                id: turn,
+                message: String::new(),
+                attachments: Vec::new(),
+                response_parts: Vec::new(),
+                stop_reason: None,
+            });
+        }
+        let mut stream = threads.subscribe(draft.id).unwrap();
+        stream.try_recv().unwrap();
+        let request = Uuid::new_v4();
+        let reply = updates.request_permission(
+            turn,
+            PermissionRequest {
+                id: request,
+                tool_call_id: "tool".into(),
+                title: "Run tool?".into(),
+                details: String::new(),
+                plan_review: None,
+                options: vec![PermissionOption {
+                    id: "allow".into(),
+                    name: "Allow".into(),
+                }],
+            },
+        );
+        assert!(reply.is_some());
+        let ThreadUpdate::Patch { thread, errors, .. } = stream.try_recv().unwrap() else {
+            panic!("expected permission patch");
+        };
+        assert_eq!(thread.metadata.status, ThreadStatus::WaitingForInput);
+        assert_eq!(thread.storage_error, None);
+        assert!(errors.is_empty());
+        assert_eq!(
+            store.threads().unwrap()[0].status,
+            ThreadStatus::WaitingForInput
+        );
+
+        threads
+            .answer_permission(draft.id, request, "allow".into())
+            .unwrap();
+        assert_eq!(store.threads().unwrap()[0].status, ThreadStatus::Running);
+        assert!(threads.get(draft.id).unwrap().storage_error.is_none());
+    }
+
+    #[test]
     fn title_storage_failure_uses_the_existing_error_subscription() {
         let folder = tempfile::tempdir().unwrap();
         let database = folder.path().join("atte.sqlite");

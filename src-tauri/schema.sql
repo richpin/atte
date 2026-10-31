@@ -28,7 +28,7 @@ CREATE TABLE threads (
         'connecting',
         'sessionReady',
         'running',
-        'waitingForApproval',
+        'waitingForInput',
         'cancelling',
         'failed'
     )),

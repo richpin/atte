@@ -56,7 +56,7 @@ Registry 갱신은 `registry_metadata`만 트랜잭션으로 교체한다. 목�
 | `created_at` | INTEGER NOT NULL | 생성 Unix 초 |
 | `updated_at` | INTEGER NOT NULL | 로컬 상태 변경 Unix 초 |
 | `last_prompt_at` | INTEGER, nullable | 단조 증가하는 마지막 입력 전송 시도 Unix 밀리초; 미전송이면 NULL |
-| `status` | TEXT NOT NULL | 마지막 연결·실행 상태 |
+| `status` | TEXT NOT NULL | 마지막 연결·실행 상태; 미해소 승인·질문 요청이 있으면 `waitingForInput` |
 | `failure` | TEXT | 마지막 연결·실행 오류 종류 |
 | `interrupted` | INTEGER NOT NULL | 이전 작업의 중단 여부, 0 또는 1 |
 | `queued_messages` | TEXT NOT NULL DEFAULT '[]' | 제출 순서의 대기 메시지 JSON 배열; 사용자 입력·첨부·상태를 포함 |
