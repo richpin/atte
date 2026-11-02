@@ -26,6 +26,7 @@ export function ElicitationInput(props: {
   onAnswer: (action: "accept" | "decline" | "cancel") => void;
 }) {
   const { t } = useI18n();
+  const fields = () => Object.entries(props.request.schema.properties);
   return (
     <section aria-label={t("thread.elicitation.title")}>
       <div class="mb-2 flex items-center justify-between gap-2">
@@ -56,8 +57,19 @@ export function ElicitationInput(props: {
         </p>
       </Show>
       <div class="mt-4 flex flex-col gap-4">
-        <For each={Object.entries(props.request.schema.properties)}>
-          {([name, field]) => {
+        <For each={fields()}>
+          {([name, field], index) => {
+            const previousField = () => fields()[index() - 1]?.[1];
+            const freeformChoiceNumber = () => {
+              const previous = previousField();
+              const previousChoices =
+                previous?.type === "string" ? choices(previous) : undefined;
+              return field.type === "string" &&
+                !choices(field) &&
+                previousChoices?.length
+                ? previousChoices.length + 1
+                : undefined;
+            };
             const required = () =>
               props.request.schema.required?.includes(name) ?? false;
             const label = () =>
@@ -70,7 +82,7 @@ export function ElicitationInput(props: {
             return (
               <fieldset
                 disabled={props.disabled}
-                class="min-w-0"
+                class={freeformChoiceNumber() ? "-mt-2 min-w-0" : "min-w-0"}
                 aria-describedby={error() ? `${id}-error` : undefined}
                 aria-invalid={!!error()}
               >
@@ -78,26 +90,53 @@ export function ElicitationInput(props: {
                   when={field.type === "boolean" || choices(field)}
                   fallback={
                     <TextField
+                      class={freeformChoiceNumber() ? "gap-0" : undefined}
                       value={String(props.values[name] ?? "")}
                       onChange={(value) => props.onChange(name, value)}
                       validationState={error() ? "invalid" : "valid"}
                       disabled={props.disabled}
                       required={required()}
                     >
-                      <TextFieldLabel>{label()}</TextFieldLabel>
-                      <TextFieldInput
-                        type={
-                          field.type === "number" || field.type === "integer"
-                            ? "number"
-                            : "text"
-                        }
-                        step={field.type === "integer" ? 1 : "any"}
-                        min={field.minimum}
-                        max={field.maximum}
-                        minLength={field.minLength}
-                        maxLength={field.maxLength}
-                        aria-describedby={error() ? `${id}-error` : undefined}
-                      />
+                      <TextFieldLabel
+                        class={freeformChoiceNumber() ? "sr-only" : undefined}
+                      >
+                        {label()}
+                      </TextFieldLabel>
+                      <div class="relative">
+                        <Show when={freeformChoiceNumber()}>
+                          {(number) => (
+                            <span
+                              aria-hidden="true"
+                              class="pointer-events-none absolute top-2 left-3 grid size-7 place-items-center rounded-md border border-line bg-panel text-xs font-normal text-muted"
+                            >
+                              {number()}
+                            </span>
+                          )}
+                        </Show>
+                        <TextFieldInput
+                          type={
+                            field.type === "number" || field.type === "integer"
+                              ? "number"
+                              : "text"
+                          }
+                          step={field.type === "integer" ? 1 : "any"}
+                          min={field.minimum}
+                          max={field.maximum}
+                          minLength={field.minLength}
+                          maxLength={field.maxLength}
+                          placeholder={
+                            freeformChoiceNumber()
+                              ? field.title || name
+                              : undefined
+                          }
+                          class={
+                            freeformChoiceNumber()
+                              ? "h-11 rounded-xl border-transparent bg-transparent py-2 pr-3 pl-13 placeholder:text-muted hover:bg-menu-hover focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent focus-visible:ring-0 focus-visible:ring-offset-0"
+                              : undefined
+                          }
+                          aria-describedby={error() ? `${id}-error` : undefined}
+                        />
+                      </div>
                     </TextField>
                   }
                 >

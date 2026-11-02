@@ -24,9 +24,11 @@ const request: ElicitationRequest = {
         oneOf: [
           { const: "safe", title: "Careful" },
           { const: "fast", title: "Quick" },
+          { const: "other", title: "Other" },
         ],
         default: "safe",
       },
+      note: { type: "string", title: "Additional answer or note" },
       checks: {
         type: "array",
         title: "Checks",
@@ -45,6 +47,31 @@ beforeEach(() => localStorage.setItem("atte.locale", "en"));
 afterEach(() => {
   cleanup();
   localStorage.clear();
+});
+
+it("numbers a freeform answer after the preceding choices", async () => {
+  const { answer } = setup();
+  const note = screen.getByRole("textbox", {
+    name: "Additional answer or note",
+  });
+  expect(note).toHaveProperty("placeholder", "Additional answer or note");
+  expect(
+    note.parentElement?.querySelector('[aria-hidden="true"]')?.textContent,
+  ).toBe("4");
+  expect(screen.getByText("Additional answer or note").className).toContain(
+    "sr-only",
+  );
+  await userEvent.type(note, "A different approach");
+  await userEvent.click(screen.getByRole("button", { name: "Submit" }));
+  expect(answer).toHaveBeenCalledExactlyOnceWith({
+    action: "accept",
+    values: {
+      name: "initial",
+      count: 2,
+      strategy: "safe",
+      note: "A different approach",
+    },
+  });
 });
 
 function setup(disabled = false, errors: Record<string, string> = {}) {
