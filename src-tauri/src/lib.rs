@@ -18,6 +18,8 @@ mod open_working_folder;
 mod response_content;
 mod skills;
 pub mod storage;
+#[cfg(target_os = "macos")]
+mod tab_menu;
 pub mod thread;
 mod workspace_files;
 pub mod worktree;
@@ -488,7 +490,12 @@ fn unsubscribe_thread(
 /// Runs the desktop application and its managed thread state.
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    let app = tauri::Builder::default()
+    let app = tauri::Builder::default();
+    #[cfg(target_os = "macos")]
+    let app = app
+        .menu(tab_menu::menu)
+        .on_menu_event(tab_menu::on_menu_event);
+    let app = app
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(app_updates::AppUpdates::default())

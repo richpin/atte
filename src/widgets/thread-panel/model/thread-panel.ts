@@ -24,17 +24,16 @@ export type ThreadPanelState = {
   fullWidth: boolean;
   tabs: ThreadPanelTab[];
   selectedTabId: string;
-  nextTabNumber: number;
 };
 
 export function createThreadPanelModel(
-  createNewTab: (number: number, threadId: string) => ThreadPanelTab,
+  createNewTab: (threadId: string) => ThreadPanelTab,
 ) {
   const [panels, setPanels] = createStore<Record<string, ThreadPanelState>>({});
 
   function ensure(threadId: string, initialTab?: ThreadPanelTab) {
     if (!panels[threadId]) {
-      const tab = initialTab ?? createNewTab(1, threadId);
+      const tab = initialTab ?? createNewTab(threadId);
       setPanels(threadId, {
         threadId,
         open: false,
@@ -42,7 +41,6 @@ export function createThreadPanelModel(
         fullWidth: false,
         tabs: [tab],
         selectedTabId: tab.id,
-        nextTabNumber: initialTab ? 1 : 2,
       });
     }
     return panels[threadId];
@@ -51,11 +49,10 @@ export function createThreadPanelModel(
   function setOpen(threadId: string, open: boolean) {
     const panel = ensure(threadId);
     if (open && panel.tabs.length === 0) {
-      const tab = createNewTab(1, threadId);
+      const tab = createNewTab(threadId);
       setPanels(threadId, {
         tabs: [tab],
         selectedTabId: tab.id,
-        nextTabNumber: 2,
       });
     }
     setPanels(threadId, "open", open);
@@ -69,14 +66,31 @@ export function createThreadPanelModel(
     setPanels(threadId, { selectedTabId: tab.id, open: true });
   }
 
+  function replaceTab(
+    threadId: string,
+    placeholderId: string,
+    tab: ThreadPanelTab,
+  ) {
+    const panel = panels[threadId];
+    const index =
+      panel?.tabs.findIndex((entry) => entry.id === placeholderId) ?? -1;
+    if (!panel || index < 0) return;
+    if (panel.tabs.some((entry) => entry.id === tab.id)) {
+      setPanels(threadId, { selectedTabId: tab.id, open: true });
+      void closeTab(threadId, placeholderId);
+      return;
+    }
+    setPanels(threadId, "tabs", index, tab);
+    setPanels(threadId, { selectedTabId: tab.id, open: true });
+  }
+
   function newTab(threadId: string) {
     const panel = panels[threadId];
     if (!panel) {
       setOpen(threadId, true);
       return;
     }
-    const tab = createNewTab(panel.nextTabNumber, threadId);
-    setPanels(threadId, "nextTabNumber", panel.nextTabNumber + 1);
+    const tab = createNewTab(threadId);
     openTab(threadId, tab);
   }
 
@@ -107,7 +121,6 @@ export function createThreadPanelModel(
         open: false,
         tabs: [],
         selectedTabId: "",
-        nextTabNumber: 1,
       });
       return;
     }
@@ -135,6 +148,7 @@ export function createThreadPanelModel(
       threadId ? panels[threadId] : undefined,
     setOpen,
     openTab,
+    replaceTab,
     newTab,
     selectTab,
     closeTab,

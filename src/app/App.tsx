@@ -2,6 +2,7 @@ import * as ToggleButtonPrimitive from "@kobalte/core/toggle-button";
 import { makeResizeObserver } from "@solid-primitives/resize-observer";
 import { QueryClient, QueryClientProvider } from "@tanstack/solid-query";
 import { isTauri } from "@tauri-apps/api/core";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { AgentAuthenticationProvider } from "features/agent-authentication";
 import { AppUpdateNotice, createAppUpdates } from "features/app-updates";
 import { OpenWorkingFolderMenu } from "features/open-working-folder";
@@ -452,6 +453,11 @@ function ShellContent(props: { shell: AppShellModel }) {
           threadId={threads.selectedThreadId()}
           active={shell.view() === "thread"}
           panelId={threadPanelId}
+          onCloseThread={() => shell.showNewThread()}
+          onCloseWindow={() => {
+            if (isTauri()) void getCurrentWindow().close();
+            else window.close();
+          }}
         >
           <WebLinkProvider
             onOpen={(url) => {

@@ -19,7 +19,9 @@ import { ThreadPanelLayout } from "./ThreadPanelLayout";
 vi.mock("features/workspace-files", async (original) => ({
   ...(await original<object>()),
   resolveExistingFile: vi.fn(),
+  WorkspaceFiles: () => <p>Files</p>,
 }));
+vi.mock("./git/GitPanel", () => ({ GitPanel: () => <p>Git</p> }));
 
 let layoutWidth: number;
 let observers: ResizeObserverFixture[];
@@ -59,6 +61,8 @@ function setup() {
   const model = createThreadPanelModel();
   const [threadId, setThreadId] = createSignal("one");
   const [active, setActive] = createSignal(true);
+  const closeThread = vi.fn();
+  const closeWindow = vi.fn();
   render(() => (
     <I18nProvider>
       <ThreadPanelLayout
@@ -66,6 +70,8 @@ function setup() {
         threadId={threadId()}
         active={active()}
         panelId="project-panel"
+        onCloseThread={closeThread}
+        onCloseWindow={closeWindow}
       >
         <main>Conversation</main>
       </ThreadPanelLayout>
@@ -95,7 +101,16 @@ function setup() {
       }
     }
   }
-  return { model, setThreadId, setActive, handle, panel, resize };
+  return {
+    model,
+    setThreadId,
+    setActive,
+    closeThread,
+    closeWindow,
+    handle,
+    panel,
+    resize,
+  };
 }
 
 it("opens an available changed file in the reusable Files tab", async () => {
@@ -117,6 +132,41 @@ it("opens an available changed file in the reusable Files tab", async () => {
   );
   expect(model.panel("one")?.selectedTabId).toBe("files:one");
   expect(model.panel("one")?.tabs).toHaveLength(1);
+});
+
+it.each([
+  ["Files", "files:one"],
+  ["Git", "git:one"],
+  ["Web", null],
+])("keeps a chosen %s view at its new tab's position", async (view, id) => {
+  const { model } = setup();
+  model.setOpen("one", true);
+  model.newTab("one");
+  const first = model.panel("one")?.tabs[0];
+  const second = model.panel("one")?.tabs[1];
+  if (!first || !second) throw new Error("Missing new tabs");
+  model.selectTab("one", first.id);
+
+  await userEvent.click(screen.getByRole("button", { name: view }));
+
+  expect(model.panel("one")?.tabs.map((tab) => tab.id)).toEqual([
+    id ?? first.id,
+    second.id,
+  ]);
+  expect(model.panel("one")?.tabs[1]?.title()).toBe("새 탭");
+  expect(model.panel("one")?.selectedTabId).toBe(id ?? first.id);
+});
+
+it("reuses an existing Files tab when chosen from another new tab", async () => {
+  const { model } = setup();
+  model.setOpen("one", true);
+  await userEvent.click(screen.getByRole("button", { name: "Files" }));
+  model.newTab("one");
+
+  await userEvent.click(screen.getByRole("button", { name: "Files" }));
+
+  expect(model.panel("one")?.tabs.map((tab) => tab.id)).toEqual(["files:one"]);
+  expect(model.panel("one")?.selectedTabId).toBe("files:one");
 });
 
 it("keeps the current tab when a changed file is unavailable and shows a toast", async () => {
@@ -174,45 +224,108 @@ it("reuses a turn's changes tab and preserves its file list alongside web tabs",
   ).toHaveLength(2);
 });
 
-it("closes the panel with its last tab and starts at tab one when reopened", async () => {
+it("closes the panel with its last tab and starts with a new tab when reopened", async () => {
   const { model } = setup();
   expect(screen.queryByRole("complementary")).toBeNull();
   model.setOpen("one", true);
   expect(screen.getAllByRole("tab")).toHaveLength(1);
-  expect(screen.getByRole("tab", { selected: true }).textContent).toBe(
-    "새 탭 1",
-  );
+  expect(screen.getByRole("tab", { selected: true }).textContent).toBe("새 탭");
   const add = screen.getByRole("button", { name: "새 탭" });
   await userEvent.click(add);
   await userEvent.click(add);
   expect(screen.getAllByRole("tab")).toHaveLength(3);
-  expect(screen.getByRole("tab", { selected: true }).textContent).toBe(
-    "새 탭 3",
+  expect(screen.getByRole("tab", { selected: true }).textContent).toBe("새 탭");
+  await userEvent.click(screen.getAllByRole("tab")[1]);
+  await userEvent.click(
+    screen.getAllByRole("button", { name: "새 탭 닫기" })[1],
   );
-  await userEvent.click(screen.getByRole("tab", { name: "새 탭 2" }));
-  await userEvent.click(screen.getByRole("button", { name: "새 탭 2 닫기" }));
-  expect(screen.getByRole("tab", { selected: true }).textContent).toBe(
-    "새 탭 3",
+  expect(screen.getByRole("tab", { selected: true })).toBe(
+    screen.getAllByRole("tab")[1],
   );
-  expect(document.activeElement).toBe(
-    screen.getByRole("tab", { name: "새 탭 3" }),
+  expect(document.activeElement).toBe(screen.getAllByRole("tab")[1]);
+  await userEvent.click(
+    screen.getAllByRole("button", { name: "새 탭 닫기" })[1],
   );
-  await userEvent.click(screen.getByRole("button", { name: "새 탭 3 닫기" }));
-  expect(screen.getByRole("tab", { selected: true }).textContent).toBe(
-    "새 탭 1",
-  );
-  await userEvent.click(screen.getByRole("button", { name: "새 탭 1 닫기" }));
+  expect(screen.getByRole("tab", { selected: true }).textContent).toBe("새 탭");
+  await userEvent.click(screen.getByRole("button", { name: "새 탭 닫기" }));
   expect(model.panel("one")?.tabs).toHaveLength(0);
   expect(model.panel("one")?.open).toBe(false);
   expect(screen.queryByRole("complementary")).toBeNull();
   model.setOpen("one", true);
-  expect(screen.getByRole("tab", { selected: true }).textContent).toBe(
-    "새 탭 1",
-  );
+  expect(screen.getByRole("tab", { selected: true }).textContent).toBe("새 탭");
   await userEvent.click(add);
-  expect(screen.getByRole("tab", { selected: true }).textContent).toBe(
-    "새 탭 2",
+  expect(screen.getByRole("tab", { selected: true }).textContent).toBe("새 탭");
+});
+
+it("uses standard tab shortcuts for the active project panel", async () => {
+  const { model, setThreadId, setActive, closeThread, closeWindow } = setup();
+  model.setOpen("one", true);
+  fireEvent.keyDown(window, { key: "t", metaKey: true });
+  expect(model.panel("one")?.tabs).toHaveLength(2);
+  expect(model.panel("one")?.selectedTabId).toBe(
+    model.panel("one")?.tabs[1]?.id,
   );
+
+  fireEvent.keyDown(window, { key: "Tab", ctrlKey: true, shiftKey: true });
+  expect(model.panel("one")?.selectedTabId).toBe(
+    model.panel("one")?.tabs[0]?.id,
+  );
+  fireEvent.keyDown(window, { key: "Tab", ctrlKey: true });
+  expect(model.panel("one")?.selectedTabId).toBe(
+    model.panel("one")?.tabs[1]?.id,
+  );
+  fireEvent.keyDown(window, { key: "2", metaKey: true });
+  expect(model.panel("one")?.selectedTabId).toBe(
+    model.panel("one")?.tabs[1]?.id,
+  );
+  fireEvent.keyDown(window, {
+    key: "{",
+    code: "BracketLeft",
+    metaKey: true,
+    shiftKey: true,
+  });
+  expect(model.panel("one")?.selectedTabId).toBe(
+    model.panel("one")?.tabs[0]?.id,
+  );
+  fireEvent.keyDown(window, { key: "9", metaKey: true });
+  expect(model.panel("one")?.selectedTabId).toBe(
+    model.panel("one")?.tabs[1]?.id,
+  );
+  fireEvent.keyDown(window, { key: "8", metaKey: true });
+  expect(model.panel("one")?.selectedTabId).toBe(
+    model.panel("one")?.tabs[1]?.id,
+  );
+  fireEvent.keyDown(window, { key: "w", metaKey: true });
+  expect(model.panel("one")?.tabs).toHaveLength(1);
+
+  fireEvent.keyDown(window, { key: "w", metaKey: true });
+  expect(model.panel("one")?.open).toBe(false);
+  fireEvent.keyDown(window, { key: "w", metaKey: true });
+  expect(closeThread).toHaveBeenCalledTimes(1);
+
+  setThreadId("two");
+  fireEvent.keyDown(window, { key: "t", metaKey: true });
+  expect(model.panel("two")?.tabs).toHaveLength(1);
+  setActive(false);
+  fireEvent.keyDown(window, { key: "t", metaKey: true });
+  expect(model.panel("two")?.tabs).toHaveLength(1);
+  fireEvent.keyDown(window, { key: "w", metaKey: true });
+  expect(closeWindow).toHaveBeenCalledTimes(1);
+});
+
+it("keeps a tab open when its close guard rejects the shortcut", async () => {
+  const { model } = setup();
+  const beforeClose = vi.fn().mockResolvedValue(false);
+  model.openTab("one", {
+    id: "unsaved",
+    title: () => "Unsaved",
+    content: () => <p>Unsaved changes</p>,
+    beforeClose,
+  });
+  fireEvent.keyDown(window, { key: "w", metaKey: true });
+  await waitFor(() => expect(beforeClose).toHaveBeenCalledTimes(1));
+  expect(model.panel("one")?.tabs).toHaveLength(1);
+  expect(model.panel("one")?.open).toBe(true);
 });
 
 it("closes the last custom tab through the public interface and cleans up its content while folded", () => {
@@ -234,9 +347,7 @@ it("closes the last custom tab through the public interface and cleans up its co
   expect(model.panel("one")?.tabs).toHaveLength(0);
   model.setOpen("one", true);
   expect(screen.getAllByRole("tab")).toHaveLength(1);
-  expect(screen.getByRole("tab", { selected: true }).textContent).toBe(
-    "새 탭 1",
-  );
+  expect(screen.getByRole("tab", { selected: true }).textContent).toBe("새 탭");
   model.newTab("two");
   expect(model.panel("two")?.tabs).toHaveLength(1);
 });
@@ -246,19 +357,21 @@ it("uses Kobalte keyboard navigation and keeps selection when closing another ta
   model.setOpen("one", true);
   const add = screen.getByRole("button", { name: "새 탭" });
   for (let index = 0; index < 2; index++) await userEvent.click(add);
-  const first = screen.getByRole("tab", { name: "새 탭 1" });
+  const first = screen.getAllByRole("tab")[0];
   await userEvent.click(first);
   await userEvent.keyboard("{ArrowRight}");
-  expect(screen.getByRole("tab", { selected: true }).textContent).toBe(
-    "새 탭 2",
+  expect(screen.getByRole("tab", { selected: true })).toBe(
+    screen.getAllByRole("tab")[1],
   );
   await userEvent.keyboard("{End}");
-  expect(screen.getByRole("tab", { selected: true }).textContent).toBe(
-    "새 탭 3",
+  expect(screen.getByRole("tab", { selected: true })).toBe(
+    screen.getAllByRole("tab")[2],
   );
   await userEvent.keyboard("{Home}");
   expect(screen.getByRole("tab", { selected: true })).toBe(first);
-  await userEvent.click(screen.getByRole("button", { name: "새 탭 2 닫기" }));
+  await userEvent.click(
+    screen.getAllByRole("button", { name: "새 탭 닫기" })[1],
+  );
   expect(screen.getByRole("tab", { selected: true })).toBe(first);
   expect(screen.getAllByRole("tabpanel")).toHaveLength(1);
 });

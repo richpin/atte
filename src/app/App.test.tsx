@@ -222,9 +222,7 @@ it("keeps project tabs independent per thread, folds without clearing and resets
   await userEvent.click(toggle);
   expect(screen.queryByRole("tab")).toBeNull();
   await userEvent.click(toggle);
-  expect(screen.getByRole("tab", { selected: true }).textContent).toBe(
-    "새 탭 2",
-  );
+  expect(screen.getByRole("tab", { selected: true }).textContent).toBe("새 탭");
   await userEvent.click(getSidebarThreadButton(two.title));
   expect(toggle.getAttribute("aria-expanded")).toBe("false");
   await userEvent.click(toggle);
@@ -232,9 +230,7 @@ it("keeps project tabs independent per thread, folds without clearing and resets
   await userEvent.click(screen.getByRole("button", { name: "새 탭" }));
   await userEvent.click(getSidebarThreadButton(one.title));
   expect(screen.getAllByRole("tab")).toHaveLength(2);
-  expect(screen.getByRole("tab", { selected: true }).textContent).toBe(
-    "새 탭 2",
-  );
+  expect(screen.getByRole("tab", { selected: true }).textContent).toBe("새 탭");
   await openAgentManagement();
   expect(screen.queryByRole("tab")).toBeNull();
   await userEvent.click(await waitFor(() => getSidebarThreadButton(one.title)));

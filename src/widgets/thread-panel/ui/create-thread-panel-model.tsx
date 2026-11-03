@@ -13,7 +13,10 @@ import { useI18n } from "shared/i18n";
 import { Button, showErrorToast } from "shared/ui";
 import { createSignal, Show } from "solid-js";
 import type { GitCommit } from "../api/git-history";
-import { createThreadPanelModel as createModel } from "../model/thread-panel";
+import {
+  createThreadPanelModel as createModel,
+  type ThreadPanelTab,
+} from "../model/thread-panel";
 import { CommitReview } from "./git/CommitReview";
 import { GitPanel } from "./git/GitPanel";
 
@@ -39,7 +42,7 @@ export function createThreadPanelModel(manager?: FilesManager) {
     });
   };
   const openGit = (threadId: string, placeholder: string) => {
-    model.openTab(threadId, {
+    model.replaceTab(threadId, placeholder, {
       id: `git:${threadId}`,
       title: () => t("git.title"),
       icon: GitBranch,
@@ -54,12 +57,11 @@ export function createThreadPanelModel(manager?: FilesManager) {
         />
       ),
     });
-    model.closeTab(threadId, placeholder);
   };
   const openFiles = (threadId: string, placeholder?: string) => {
     const fileModel = files.get(threadId);
     const id = `files:${threadId}`;
-    model.openTab(threadId, {
+    const tab: ThreadPanelTab = {
       id,
       title: () => "Files",
       icon: FolderTree,
@@ -75,21 +77,21 @@ export function createThreadPanelModel(manager?: FilesManager) {
           visible={props.visible}
         />
       ),
-    });
-    if (placeholder) model.closeTab(threadId, placeholder);
+    };
+    if (placeholder) model.replaceTab(threadId, placeholder, tab);
+    else model.openTab(threadId, tab);
   };
-  const model = createModel((number, threadId) => {
+  const model = createModel((threadId) => {
     const web = createWebTab(threadId, {
       translate: t,
       fallbackTitle: "Web",
       startBlank: true,
-      title: () => t("threadPanel.newTabTitle", { number }),
+      title: () => t("threadPanel.newTab"),
     });
     const [kind, setKind] = createSignal<"web">();
     return {
       ...web,
-      title: () =>
-        kind() ? web.title() : t("threadPanel.newTabTitle", { number }),
+      title: () => (kind() ? web.title() : t("threadPanel.newTab")),
       content: (props: { active: boolean; visible: boolean }) => (
         <Show
           when={kind()}

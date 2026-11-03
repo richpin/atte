@@ -1,7 +1,21 @@
 import { makeResizeObserver } from "@solid-primitives/resize-observer";
+import { isTauri } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { useI18n } from "shared/i18n";
 import { Resizable, ResizableHandle, ResizablePanel } from "shared/ui";
-import { createMemo, createSignal, For, type JSX, onMount } from "solid-js";
+import {
+  createMemo,
+  createSignal,
+  For,
+  type JSX,
+  onCleanup,
+  onMount,
+} from "solid-js";
+import {
+  runTabShortcut,
+  shortcutFromKey,
+  type TabShortcut,
+} from "../lib/tab-shortcuts";
 import {
   THREAD_CONTENT_MIN_WIDTH,
   THREAD_PANEL_MIN_WIDTH,
@@ -15,6 +29,8 @@ export function ThreadPanelLayout(props: {
   active: boolean;
   panelId: string;
   children: JSX.Element;
+  onCloseThread: () => void;
+  onCloseWindow: () => void;
 }) {
   const { t } = useI18n();
   const [rootWidth, setRootWidth] = createSignal(0);
@@ -46,6 +62,47 @@ export function ThreadPanelLayout(props: {
     if (!root) return;
     setRootWidth(root.offsetWidth);
     observe(root);
+  });
+
+  onMount(() => {
+    const run = (shortcut: TabShortcut) =>
+      runTabShortcut(
+        shortcut,
+        props.model,
+        props.threadId,
+        props.active,
+        props.onCloseThread,
+        props.onCloseWindow,
+      );
+    if (isTauri()) {
+      let disposed = false;
+      let unlisten: (() => void) | undefined;
+      void listen<TabShortcut>(
+        "project-tab-shortcut",
+        (event) => run(event.payload),
+        {
+          target: { kind: "Webview", label: "main" },
+        },
+      )
+        .then((stop) => {
+          if (disposed) stop();
+          else unlisten = stop;
+        })
+        .catch(() => undefined);
+      onCleanup(() => {
+        disposed = true;
+        unlisten?.();
+      });
+      return;
+    }
+    const keydown = (event: KeyboardEvent) => {
+      const shortcut = shortcutFromKey(event);
+      if (!shortcut) return;
+      event.preventDefault();
+      run(shortcut);
+    };
+    window.addEventListener("keydown", keydown);
+    onCleanup(() => window.removeEventListener("keydown", keydown));
   });
 
   function resize(nextSizes: number[]) {
