@@ -1,3 +1,4 @@
+import { Sparkles } from "lucide-solid";
 import { baseKeymap } from "prosemirror-commands";
 import { closeHistory, history, redo, undo } from "prosemirror-history";
 import { keymap } from "prosemirror-keymap";
@@ -94,6 +95,20 @@ export function PromptEditor(props: {
     view = new EditorView(host, {
       state: state(),
       nodeViews: {
+        command(node) {
+          const dom = (
+            <span
+              data-command={node.attrs.name}
+              title={`/${node.attrs.name}`}
+              contentEditable={false}
+              class="inline-flex max-w-full items-center gap-1 rounded-md bg-command/10 px-1.5 py-0.5 align-middle text-command"
+            >
+              <Sparkles aria-hidden="true" class="size-3.5 shrink-0" />
+              <span class="min-w-0 truncate">{node.attrs.name}</span>
+            </span>
+          ) as HTMLElement;
+          return { dom };
+        },
         mention(node) {
           const chip = createFileMentionChip(
             node.attrs.path,

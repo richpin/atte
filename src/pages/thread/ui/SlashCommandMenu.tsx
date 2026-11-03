@@ -1,5 +1,6 @@
 import * as Popper from "@kobalte/core/popper";
 import { createInteractOutside } from "@kobalte/core/primitives/create-interact-outside";
+import { Sparkles } from "lucide-solid";
 import { useI18n } from "shared/i18n";
 import { FileIcon } from "shared/ui";
 import { createEffect, For, onCleanup, Show } from "solid-js";
@@ -72,10 +73,8 @@ export function SlashCommandMenu(props: {
                       id={`${props.id}-${index()}`}
                       role="option"
                       aria-selected={props.selected === command.name}
-                      class="flex w-full cursor-default justify-center rounded-lg px-3 py-2 text-left text-xs"
+                      class="flex w-full cursor-default flex-row items-center gap-2 rounded-lg px-3 py-2 text-left text-xs"
                       classList={{
-                        "flex-row items-center gap-2": props.files,
-                        "flex-col": !props.files,
                         "bg-menu-hover": props.selected === command.name,
                       }}
                       onMouseMove={() => props.onHighlight(command.name)}
@@ -85,11 +84,15 @@ export function SlashCommandMenu(props: {
                         when={props.files}
                         fallback={
                           <>
-                            <span class="truncate text-sm font-medium">
+                            <Sparkles
+                              aria-hidden="true"
+                              class="size-4 shrink-0"
+                            />
+                            <span class="min-w-0 shrink truncate text-sm font-medium">
                               /{command.name}
                             </span>
                             <span
-                              class="truncate text-muted"
+                              class="min-w-0 flex-1 truncate text-muted"
                               title={command.description}
                             >
                               {command.description}

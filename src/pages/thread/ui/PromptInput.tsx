@@ -1,4 +1,5 @@
 import { makeResizeObserver } from "@solid-primitives/resize-observer";
+import { Sparkles } from "lucide-solid";
 import { useI18n } from "shared/i18n";
 import {
   batch,
@@ -391,13 +392,14 @@ export function PromptInput(props: {
             <span class="inline-flex max-w-1/2 shrink-0 items-center rounded-md bg-command/10 px-1.5 py-0.5 text-sm leading-5 text-command">
               <button
                 type="button"
-                class="min-w-0 truncate rounded-sm text-left outline-none focus-visible:ring-1 focus-visible:ring-current"
+                class="inline-flex min-w-0 items-center gap-1 rounded-sm text-left outline-none focus-visible:ring-1 focus-visible:ring-current"
                 title={name()}
                 aria-label={t("thread.editCommand", { name: name() })}
                 disabled={props.disabled}
                 onClick={editSelectedCommand}
               >
-                {name()}
+                <Sparkles aria-hidden="true" class="size-3.5 shrink-0" />
+                <span class="min-w-0 truncate">{name()}</span>
               </button>
             </span>
           )}
