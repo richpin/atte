@@ -11,7 +11,7 @@
 
 ## 릴리스
 
-1. `package.json`, `src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json`의 버전을 같은 안정 SemVer로 올리고 Cargo lock 파일도 갱신한다. 예: `0.1.1`. 이 명령은 stable 배포용이며 prerelease 버전은 거부한다.
+1. `package.json`, `src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json`의 버전을 같은 안정 SemVer로 맞추고 Cargo lock 파일도 갱신한다. 예: `0.1.0`. 이 명령은 stable 배포용이며 prerelease 버전은 거부한다.
 2. 프로젝트 루트에서 `pnpm release:macos`를 실행한다. 배포 명령은 공개키를 Tauri 설정에 주입한다. 일반 개발 빌드에는 키와 updater artifact가 필요하지 않다.
 3. 모든 검증이 성공하면 `src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/`에서 이번 실행이 출력한 DMG, `atte_<version>_aarch64.app.tar.gz`, 그 `.sig`, `latest.json`을 가져온다.
 4. `v<version>` 태그의 GitHub Release를 draft로 만들고 네 파일을 모두 업로드한다. 태그는 빌드한 코드와 일치해야 한다. 같은 버전의 파일을 나중에 덮어쓰지 않는다. 최초 릴리스 이후에도 모든 stable Release에는 `latest.json`과 updater 파일을 포함한다.
