@@ -108,7 +108,7 @@ it("saves separate settings and waits for the subscription before displaying cha
   );
 });
 
-it("keeps settings on save failure and exposes a persistent error", async () => {
+it("keeps settings on save failure", async () => {
   mount();
   const original = vi.mocked(invoke).getMockImplementation();
   vi.mocked(invoke).mockImplementation((command, args) =>
@@ -119,16 +119,22 @@ it("keeps settings on save failure and exposes a persistent error", async () => 
   await waitFor(() => expect(model.loading()).toBe(false));
   await model.save({ completion: false, permission: true });
   expect(model.state()?.preferences.completion).toBe(true);
-  expect((await screen.findByRole("alert")).textContent).toContain("failed");
+  expect(model.error()).toBe(true);
 });
 
-it("shows OS denial and allows opening macOS notification settings", async () => {
+it("opens macOS notification settings from the card heading", async () => {
   snapshot.authorization = "denied";
   mount();
-  expect((await screen.findByRole("status")).textContent).toContain("blocked");
-  fireEvent.click(
-    screen.getByRole("button", { name: "Open macOS notification settings" }),
-  );
+  const heading = await screen.findByRole("heading", {
+    name: "Desktop notifications",
+  });
+  const button = screen.getByRole("button", {
+    name: "Open macOS notification settings",
+  });
+  expect(heading.parentElement?.contains(button)).toBe(true);
+  expect(screen.queryByRole("status")).toBeNull();
+  expect(screen.queryByRole("alert")).toBeNull();
+  fireEvent.click(button);
   await waitFor(() =>
     expect(invoke).toHaveBeenCalledWith("open_notification_settings"),
   );
@@ -168,15 +174,14 @@ it("reconnects with a fresh snapshot and ignores the previous subscription", asy
   });
 });
 
-it("keeps the system prompt pending instead of reporting a denial", async () => {
+it("disables system settings while the permission prompt is pending", async () => {
   snapshot.authorization = "requesting";
   mount();
-  expect((await screen.findByRole("status")).textContent).toContain(
-    "permission prompt",
-  );
-  expect(
-    screen.getByRole("button", { name: "Open macOS notification settings" }),
-  ).toHaveProperty("disabled", true);
+  const button = await screen.findByRole("button", {
+    name: "Open macOS notification settings",
+  });
+  expect(button).toHaveProperty("disabled", true);
+  expect(screen.queryByRole("status")).toBeNull();
   expect(
     screen.queryByRole("button", { name: "Allow notifications" }),
   ).toBeNull();

@@ -64,13 +64,13 @@ export function GeneralPage(props: {
             onChange={(value) => {
               if (isThemePreference(value)) setPreference(value);
             }}
-            class="grid shrink-0 grid-cols-3 rounded-lg border border-line bg-canvas p-1"
+            class="grid shrink-0 grid-cols-3 rounded-xl border border-line bg-canvas p-1"
           >
             <For each={themeOptions}>
               {(option) => (
                 <SegmentedControl.Item
                   value={option.value}
-                  class="rounded-md px-3 py-1.5 text-center text-xs text-muted transition-colors data-[checked]:bg-ink data-[checked]:text-canvas has-[input:focus-visible]:outline-2 has-[input:focus-visible]:outline-offset-2 has-[input:focus-visible]:outline-accent"
+                  class="rounded-lg px-3 py-1.5 text-center text-xs text-muted transition-colors data-[checked]:bg-ink data-[checked]:text-canvas has-[input:focus-visible]:outline-2 has-[input:focus-visible]:outline-offset-2 has-[input:focus-visible]:outline-accent"
                 >
                   <SegmentedControl.ItemInput />
                   <SegmentedControl.ItemLabel>

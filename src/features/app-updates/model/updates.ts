@@ -8,6 +8,11 @@ type UpdateInfo = {
   notes: string | null;
 };
 type Progress = { downloaded: number; total: number | null };
+const REFRESH_FEEDBACK_MS = 400;
+
+function delay(milliseconds: number) {
+  return new Promise<void>((resolve) => setTimeout(resolve, milliseconds));
+}
 
 export function createAppUpdates() {
   const [info, setInfo] = createSignal<UpdateInfo>();
@@ -17,10 +22,15 @@ export function createAppUpdates() {
   const [error, setError] = createSignal(false);
   async function check() {
     if (!isTauri() || busy() || installed()) return;
+    const refreshing = info() !== undefined;
     setBusy(true);
     setError(false);
     try {
-      setInfo(await invoke<UpdateInfo>("check_app_update"));
+      const request = invoke<UpdateInfo>("check_app_update");
+      const next = refreshing
+        ? (await Promise.all([request, delay(REFRESH_FEEDBACK_MS)]))[0]
+        : await request;
+      setInfo(next);
     } catch {
       setError(true);
     } finally {

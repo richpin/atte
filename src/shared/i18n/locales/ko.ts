@@ -121,28 +121,12 @@ export const ko = {
       "앱을 사용하지 않을 때 알립니다. Dock 배지는 알림 설정과 관계없이 유지됩니다.",
     completion: "응답 완료 알림",
     permission: "승인 및 질문 알림",
-    allow: "알림 허용",
     openSettings: "macOS 알림 설정 열기",
-    retry: "다시 연결",
-    unavailable:
-      "시스템 알림을 사용할 수 없습니다. 설치된 .app에서 다시 시도해주세요.",
-    error:
-      "알림 설정 또는 전달을 완료할 수 없습니다. 설정을 확인하고 다시 시도해주세요.",
-    authorization: {
-      requesting: "macOS 알림 권한 요청에 응답해주세요.",
-      unknown: "알림 권한을 확인할 수 없습니다.",
-      notDetermined: "알림 권한이 필요합니다.",
-      granted:
-        "macOS에서 알림이 허용되어 있습니다. 소리와 표시는 시스템 설정을 따릅니다.",
-      denied:
-        "macOS에서 알림이 차단되어 있습니다. 시스템 설정에서 허용해주세요.",
-    },
   },
   appUpdates: {
     title: "앱 업데이트",
     available: "새 버전 {{ version }}을 사용할 수 있습니다.",
-    current: "최신 버전입니다.",
-    unavailable: "서명된 macOS 배포본에서 업데이트를 사용할 수 있습니다.",
+    latestVersion: "(최신 버전: {{ version }})",
     ready: "업데이트가 설치되었습니다. 재시작하면 적용됩니다.",
     check: "업데이트 확인",
     checking: "확인 중…",

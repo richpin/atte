@@ -77,7 +77,8 @@ describe("application updates", () => {
       ).toBe(false),
     );
   });
-  it("disables updates in development builds", async () => {
+  it("shows version information in development builds without the release notice", async () => {
+    const user = userEvent.setup();
     invoke.mockResolvedValue({
       ...available,
       supported: false,
@@ -85,14 +86,17 @@ describe("application updates", () => {
       notes: null,
     });
     mount();
-    await screen.findByText(/Updates are available in signed macOS releases/);
+    await screen.findByRole("region", { name: "App updates" });
+    expect(screen.getByText("0.1.0")).toBeTruthy();
+    expect(screen.getByText("(Latest version: 0.1.0)")).toBeTruthy();
     expect(
       screen.queryByRole("button", { name: "Download and install" }),
     ).toBeNull();
     expect(
-      screen
-        .getByRole("button", { name: "Check for updates" })
-        .hasAttribute("disabled"),
-    ).toBe(true);
+      screen.getByRole("button", { name: "Check for updates" }),
+    ).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "Check for updates" }));
+    expect(screen.getByRole("button", { name: "Checking…" })).toBeTruthy();
+    expect(invoke).toHaveBeenCalledTimes(2);
   });
 });
