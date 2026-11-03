@@ -8,6 +8,7 @@ import {
 import { QueryClient, QueryClientProvider } from "@tanstack/solid-query";
 import userEvent from "@testing-library/user-event";
 import { afterEach, expect, it, vi } from "vitest";
+import { openHistory } from "../../api/git-history";
 import {
   commitChanges,
   readWorkingChanges,
@@ -84,6 +85,37 @@ const snapshot = {
 afterEach(() => {
   cleanup();
   vi.resetAllMocks();
+});
+
+it("refreshes visible history automatically when HEAD changes", async () => {
+  vi.mocked(readWorkingChanges).mockResolvedValue(snapshot);
+  vi.mocked(openHistory).mockResolvedValue({
+    repository: { root: "/repo", references: [], head: "head", shallow: false },
+    page: { commits: [], cursor: null },
+  });
+  const client = new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  });
+  render(() => (
+    <QueryClientProvider client={client}>
+      <GitPanel
+        threadId="git-panel-auto-refresh"
+        visible
+        onOpenCommit={() => {}}
+      />
+    </QueryClientProvider>
+  ));
+  fireEvent.click(screen.getByRole("tab", { name: "커밋 이력" }));
+  await waitFor(() => expect(openHistory).toHaveBeenCalledTimes(1));
+  vi.mocked(readWorkingChanges).mockResolvedValue({
+    ...snapshot,
+    head: "new-head",
+  });
+  await client.invalidateQueries();
+  await waitFor(() => expect(openHistory).toHaveBeenCalledTimes(2));
+  await client.invalidateQueries();
+  expect(openHistory).toHaveBeenCalledTimes(2);
+  expect(screen.queryByText("HEAD가 변경되었습니다. 이력 새로고침")).toBeNull();
 });
 
 it("shows staged and unstaged entries and commits only the staged index", async () => {

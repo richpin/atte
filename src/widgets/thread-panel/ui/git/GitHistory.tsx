@@ -121,7 +121,6 @@ export function GitHistory(props: {
   threadId: string;
   visible: boolean;
   refreshToken?: number;
-  onRefresh?: () => void;
   onOpenCommit: (repository: string, commit: GitCommit) => void;
 }) {
   const { t } = useI18n();
@@ -257,7 +256,6 @@ export function GitHistory(props: {
             aria-label={t("git.refresh")}
             title={t("git.refresh")}
             onClick={() => {
-              props.onRefresh?.();
               void model.refresh();
             }}
           >

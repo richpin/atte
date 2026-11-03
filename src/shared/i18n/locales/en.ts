@@ -33,7 +33,6 @@ export const en = {
     changeGone: "This change is no longer available.",
     operationInProgress:
       "Git {{operation}} in progress. Resolve it before making changes here.",
-    historyChanged: "HEAD changed. Refresh history",
     allBranches: "All branches",
     branch: "History scope",
     workingBranch: "Current working branch",

@@ -38,7 +38,6 @@ export const ko = {
     workingReview: "작업 변경 사항",
     changeGone: "이 변경 사항은 더 이상 없습니다.",
     operationInProgress: "Git {{operation}} 진행 중입니다. 먼저 해결해주세요.",
-    historyChanged: "HEAD가 변경되었습니다. 이력 새로고침",
     allBranches: "모든 브랜치",
     branch: "이력 조회 범위",
     workingBranch: "현재 작업 브랜치",

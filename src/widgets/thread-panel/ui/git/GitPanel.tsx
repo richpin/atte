@@ -71,14 +71,14 @@ export function GitPanel(props: {
   const [tab, setTab] = createSignal(tabs.get(props.threadId) ?? "changes");
   const [refreshToken, setRefreshToken] = createSignal(0);
   const [error, setError] = createSignal("");
-  const [headChanged, setHeadChanged] = createSignal(false);
   const [commitOpen, setCommitOpen] = createSignal(false);
   const [pending, setPending] = createSignal<Pending | null>(null);
   let seenHead: string | null | undefined;
   createEffect(() => {
     const head = query.data?.head;
     if (head === undefined) return;
-    if (seenHead !== undefined && seenHead !== head) setHeadChanged(true);
+    if (seenHead !== undefined && seenHead !== head)
+      setRefreshToken((value) => value + 1);
     seenHead = head;
   });
   const root = () => query.data?.root ?? "";
@@ -166,7 +166,6 @@ export function GitPanel(props: {
           clearDraft(snapshot.root);
           setCommitOpen(false);
           seenHead = result.head;
-          setHeadChanged(false);
           setRefreshToken((value) => value + 1);
           break;
         }
@@ -412,24 +411,11 @@ export function GitPanel(props: {
           hidden={tab() !== "history"}
           class="flex min-h-0 flex-1 flex-col outline-none"
         >
-          <Show when={headChanged()}>
-            <button
-              type="button"
-              class="w-full border-b border-line px-3 py-2 text-left text-xs text-accent"
-              onClick={() => {
-                setRefreshToken((value) => value + 1);
-                setHeadChanged(false);
-              }}
-            >
-              {t("git.historyChanged")}
-            </button>
-          </Show>
           <div class="min-h-0 flex-1">
             <GitHistory
               threadId={props.threadId}
               visible={props.visible && tab() === "history"}
               refreshToken={refreshToken()}
-              onRefresh={() => setHeadChanged(false)}
               onOpenCommit={props.onOpenCommit}
             />
           </div>
