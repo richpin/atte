@@ -17,12 +17,22 @@ export function AppUpdateSettings(props: { updates: AppUpdates }) {
           <Button
             variant="outline"
             size="sm"
-            disabled={model().busy() || model().installed()}
-            onClick={() => void model().check()}
+            disabled={model().busy()}
+            onClick={() =>
+              void (model().installed()
+                ? model().restart()
+                : model().info()?.version
+                  ? model().install()
+                  : model().check())
+            }
           >
-            {model().busy() && !model().progress()
-              ? t("appUpdates.checking")
-              : t("appUpdates.check")}
+            {model().installed()
+              ? t("appUpdates.restart")
+              : model().busy() && !model().progress()
+                ? t("appUpdates.checking")
+                : model().info()?.version
+                  ? t("appUpdates.install")
+                  : t("appUpdates.check")}
           </Button>
         </div>
         <div
@@ -42,7 +52,7 @@ export function AppUpdateSettings(props: { updates: AppUpdates }) {
         <Show when={model().installed()}>
           <p class="text-sm text-muted">{t("appUpdates.ready")}</p>
         </Show>
-        <Show when={model().info()?.version && !model().installed()}>
+        <Show when={model().installed() ? null : model().info()?.version}>
           {(version) => (
             <p class="text-sm text-muted">
               {t("appUpdates.available", { version: version() })}
@@ -70,19 +80,7 @@ export function AppUpdateSettings(props: { updates: AppUpdates }) {
           </p>
         </Show>
         <div class="flex flex-wrap gap-2">
-          <Show when={model().info()?.version && !model().installed()}>
-            <Button
-              variant="outline"
-              disabled={model().busy()}
-              onClick={() => void model().install()}
-            >
-              {t("appUpdates.install")}
-            </Button>
-          </Show>
           <Show when={model().installed()}>
-            <Button variant="outline" onClick={() => void model().restart()}>
-              {t("appUpdates.restart")}
-            </Button>
             <p class="text-sm text-muted">{t("appUpdates.restartHint")}</p>
           </Show>
         </div>

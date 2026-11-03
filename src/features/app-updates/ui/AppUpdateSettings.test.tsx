@@ -41,6 +41,13 @@ describe("application updates", () => {
     const user = userEvent.setup();
     mount();
     await screen.findByText("Release notes");
+    expect(screen.getByText("Version 0.1.1 is available.")).toBeTruthy();
+    expect(
+      screen.queryByRole("button", { name: "Check for updates" }),
+    ).toBeNull();
+    expect(
+      screen.getAllByRole("button", { name: "Download and install" }),
+    ).toHaveLength(1);
     expect(invoke.mock.calls.map(([command]) => command)).toEqual([
       "check_app_update",
     ]);
@@ -98,5 +105,20 @@ describe("application updates", () => {
     await user.click(screen.getByRole("button", { name: "Check for updates" }));
     expect(screen.getByRole("button", { name: "Checking…" })).toBeTruthy();
     expect(invoke).toHaveBeenCalledTimes(2);
+  });
+  it("changes the check button into the install button when a manual check finds an update", async () => {
+    const user = userEvent.setup();
+    invoke
+      .mockResolvedValueOnce({ ...available, version: null, notes: null })
+      .mockResolvedValueOnce(available);
+    mount();
+    await screen.findByRole("button", { name: "Check for updates" });
+    await user.click(screen.getByRole("button", { name: "Check for updates" }));
+    expect(
+      await screen.findByRole("button", { name: "Download and install" }),
+    ).toBeTruthy();
+    expect(
+      screen.queryByRole("button", { name: "Check for updates" }),
+    ).toBeNull();
   });
 });
