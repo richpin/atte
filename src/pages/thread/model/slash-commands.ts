@@ -4,19 +4,24 @@ export function commandName(value: string): string | undefined {
   return /^\/([^\s]*)/.exec(value)?.[1];
 }
 
+interface CommandQuery {
+  query: string;
+  start: number;
+  end: number;
+}
+
 export function commandQuery(
   value: string,
   selectionStart: number,
   selectionEnd: number,
-): string | undefined {
-  const name = commandName(value);
-  if (
-    name === undefined ||
-    selectionStart < 1 ||
-    selectionEnd > name.length + 1
-  )
-    return undefined;
-  return name;
+): CommandQuery | undefined {
+  if (selectionStart < 1) return undefined;
+  const start = value.lastIndexOf("/", selectionStart - 1);
+  if (start < 0) return undefined;
+  const query = /^[^\s/]*/.exec(value.slice(start + 1))?.[0] ?? "";
+  const end = start + query.length + 1;
+  if (selectionEnd > end) return undefined;
+  return { query, start, end };
 }
 
 export function matchingCommands(
@@ -34,11 +39,15 @@ export function matchingCommands(
     );
 }
 
-export function completeCommand(value: string, name: string) {
-  const previous = commandName(value);
-  const suffix = previous === undefined ? "" : value.slice(previous.length + 1);
+export function completeCommand(
+  value: string,
+  name: string,
+  range: CommandQuery,
+) {
+  const suffix = value.slice(range.end);
+  const replacement = `/${name}${suffix ? "" : " "}`;
   return {
-    value: `/${name}${suffix || " "}`,
-    cursor: name.length + 2,
+    value: value.slice(0, range.start) + replacement + suffix,
+    cursor: range.start + replacement.length,
   };
 }

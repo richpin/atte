@@ -54,9 +54,7 @@ export function PromptInput(props: {
     return body.startsWith(" ") ? body.slice(1) : body;
   };
   const query = () =>
-    selectedCommand()
-      ? undefined
-      : commandQuery(props.value, selection().start, selection().end);
+    commandQuery(visibleValue(), selection().start, selection().end);
   const open = () =>
     requested() &&
     props.commands !== undefined &&
@@ -64,7 +62,7 @@ export function PromptInput(props: {
     !composing() &&
     query() !== undefined;
   const matches = createMemo(() =>
-    matchingCommands(props.commands ?? [], query() ?? ""),
+    matchingCommands(props.commands ?? [], query()?.query ?? ""),
   );
   const selected = () =>
     matches().find((command) => command.name === highlighted()) ?? matches()[0];
@@ -85,11 +83,18 @@ export function PromptInput(props: {
   }
 
   function selectCommand(command: AvailableCommand) {
-    const completed = completeCommand(props.value, command.name);
+    const range = query();
+    if (!range) return;
+    const name = selectedCommand();
+    const completed = completeCommand(visibleValue(), command.name, range);
+    const tokenize = !name && range.start === 0;
     setRequested(false);
-    props.onInput(completed.value, command.name);
+    props.onInput(
+      name ? `/${name} ${completed.value}` : completed.value,
+      name ?? (tokenize ? command.name : undefined),
+    );
     input?.focus();
-    const cursor = selectedCommand() ? 0 : completed.cursor;
+    const cursor = tokenize && selectedCommand() ? 0 : completed.cursor;
     input?.setSelectionRange(cursor, cursor);
     syncSelection();
     resizeInput();
@@ -237,7 +242,7 @@ export function PromptInput(props: {
             // Updating a controlled textarea can move its caret to the end.
             element.setSelectionRange(start, end);
             syncSelection();
-            if (!name && commandQuery(value, start, end) !== undefined) {
+            if (commandQuery(value, start, end) !== undefined) {
               setRequested(true);
               setHighlighted(undefined);
             }

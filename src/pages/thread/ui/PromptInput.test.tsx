@@ -285,9 +285,58 @@ it("suppresses selection and submission during IME composition and preserves Shi
   expect(onSubmit).not.toHaveBeenCalled();
 });
 
-it("does not open for paths, URLs, later lines or ordinary slash text", () => {
+it("completes at any slash while preserving surrounding text and the caret", () => {
+  const { input, edit, value } = autocomplete();
+  for (const prefix of [
+    "text ",
+    " ",
+    "text\n",
+    "https://host/",
+    "src/",
+    "word",
+  ]) {
+    const text = `${prefix}/r tail\nlast`;
+    edit(text, prefix.length + 2);
+    expect(screen.getByRole("option").textContent).toContain("/review");
+    fireEvent.keyDown(input, { key: "Tab" });
+    expect(value()).toBe(`${prefix}/review tail\nlast`);
+    expect(input.value).toBe(value());
+    expect(input.selectionStart).toBe(prefix.length + 7);
+    expect(
+      screen.queryByRole("button", { name: "review 명령 편집" }),
+    ).toBeNull();
+  }
+});
+
+it("completes the slash at the caret rather than another slash", () => {
+  const { input, edit, value } = autocomplete();
+  edit("/compact\n/rev/path", 13);
+  fireEvent.click(screen.getByRole("option", { name: /review/ }));
+  expect(value()).toBe("/compact\n/review/path");
+  expect(input.selectionStart).toBe(16);
+});
+
+it("completes inside the body while preserving an existing command token", async () => {
+  const { input, value } = autocomplete();
+  await userEvent.type(input, "/comp{Tab}first");
+  await userEvent.keyboard("{Shift>}{Enter}{/Shift}/rev");
+  expect(screen.getByRole("option", { name: /review/ })).toBeTruthy();
+  await userEvent.keyboard("{Enter}");
+  expect(value()).toBe("/compact first\n/review ");
+  expect(input.value).toBe("first\n/review ");
+  expect(input.selectionStart).toBe(input.value.length);
+  expect(
+    screen.getByRole("button", { name: "compact 명령 편집" }),
+  ).toBeTruthy();
+  input.setSelectionRange(0, input.value.length);
+  await userEvent.keyboard("/rev{Tab}");
+  expect(value()).toBe("/compact /review ");
+  expect(input.value).toBe("/review ");
+});
+
+it("does not open after whitespace outside the command name", () => {
   const { edit } = autocomplete();
-  for (const text of ["text /r", " /r", "text\n/r", "https://host/r"]) {
+  for (const text of ["text /r ", "text\n/r\n", "/review argument"]) {
     edit(text);
     expect(screen.queryByRole("listbox")).toBeNull();
   }
@@ -312,7 +361,9 @@ it("supports native typing, repeated selection keys and returning from arguments
   fireEvent.keyDown(input, { key: "Enter", repeat: true });
   expect(onSubmit).not.toHaveBeenCalled();
   await userEvent.type(input, "src/file.ts");
-  expect(screen.queryByRole("listbox")).toBeNull();
+  expect(screen.getByRole("status").textContent).toBe(
+    "일치하는 명령이 없습니다",
+  );
   await userEvent.click(
     screen.getByRole("button", { name: "review 명령 편집" }),
   );
