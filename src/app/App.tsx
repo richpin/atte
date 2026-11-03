@@ -3,6 +3,7 @@ import { makeResizeObserver } from "@solid-primitives/resize-observer";
 import { QueryClient, QueryClientProvider } from "@tanstack/solid-query";
 import { isTauri } from "@tauri-apps/api/core";
 import { AgentAuthenticationProvider } from "features/agent-authentication";
+import { createAppUpdates } from "features/app-updates";
 import { OpenWorkingFolderMenu } from "features/open-working-folder";
 import { listenForWebTabs } from "features/web-browser";
 import {
@@ -56,6 +57,7 @@ import { AppSidebar } from "widgets/app-sidebar";
 import { ThreadPanelLayout } from "widgets/thread-panel";
 import { createAppShellModel } from "./model/app-shell";
 import "./styles.css";
+import "./highlights.css";
 
 const SIDEBAR_DEFAULT_WIDTH = 256;
 const SIDEBAR_MIN_WIDTH = 224;
@@ -239,6 +241,7 @@ function ShellSidebar(props: { shell: AppShellModel }) {
 }
 
 function ShellContent(props: { shell: AppShellModel }) {
+  const updates = createAppUpdates();
   const shell = props.shell;
   const { threads } = shell;
   const { t, content } = useI18n();
@@ -425,6 +428,27 @@ function ShellContent(props: { shell: AppShellModel }) {
           </div>
         </Show>
       </header>
+      <Show when={updates.info()?.version || updates.installed()}>
+        <div
+          class="flex items-center justify-between gap-3 border-b border-line bg-input-surface px-6 py-2 text-sm"
+          role="status"
+        >
+          <span>
+            {updates.installed()
+              ? t("appUpdates.ready")
+              : t("appUpdates.available", {
+                  version: updates.info()?.version ?? "",
+                })}
+          </span>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => shell.showGeneral()}
+          >
+            {t("appUpdates.title")}
+          </Button>
+        </div>
+      </Show>
       <div hidden={shell.view() !== "new-thread"} class="min-h-0 flex-1">
         <NewThreadPage
           agents={shell.agents()}
@@ -477,7 +501,7 @@ function ShellContent(props: { shell: AppShellModel }) {
         </ThreadPanelLayout>
       </div>
       <div hidden={shell.view() !== "general"} class="min-h-0 flex-1">
-        <GeneralPage notifications={shell.notifications} />
+        <GeneralPage notifications={shell.notifications} updates={updates} />
       </div>
       <div hidden={shell.view() !== "agents"} class="min-h-0 flex-1">
         <AgentManagementPage

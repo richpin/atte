@@ -14,6 +14,7 @@ use tokio_util::{sync::CancellationToken, task::TaskTracker};
 #[derive(Default)]
 pub(crate) struct Lifecycle {
     pending: AtomicBool,
+    restart: AtomicBool,
     dirty_files: AtomicBool,
     finished: AtomicBool,
     stop: CancellationToken,
@@ -120,6 +121,7 @@ fn request_quit(app: &AppHandle) {
             let _ = window.set_focus();
         }
         if app.emit_to("main", "files-quit-requested", ()).is_err() {
+            lifecycle.restart.store(false, Ordering::Release);
             lifecycle.pending.store(false, Ordering::Release);
         }
         return;
@@ -140,7 +142,11 @@ fn finish_quit(app: &AppHandle) {
         let threads = app.state::<Threads>();
         tokio::join!(lifecycle.operations.wait(), threads.shutdown());
         lifecycle.finished.store(true, Ordering::Release);
-        app.exit(0);
+        if lifecycle.restart.load(Ordering::Acquire) {
+            app.restart();
+        } else {
+            app.exit(0);
+        }
     });
 }
 
@@ -159,5 +165,13 @@ pub(crate) fn resolve_quit(app: AppHandle, proceed: bool) {
         finish_quit(&app);
     } else {
         lifecycle.pending.store(false, Ordering::Release);
+        lifecycle.restart.store(false, Ordering::Release);
     }
+}
+
+pub(crate) fn request_restart(app: &AppHandle) {
+    app.state::<Lifecycle>()
+        .restart
+        .store(true, Ordering::Release);
+    request_quit(app);
 }

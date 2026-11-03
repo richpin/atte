@@ -138,6 +138,21 @@ export const ko = {
         "macOS에서 알림이 차단되어 있습니다. 시스템 설정에서 허용해주세요.",
     },
   },
+  appUpdates: {
+    title: "앱 업데이트",
+    available: "새 버전 {{ version }}을 사용할 수 있습니다.",
+    current: "최신 버전입니다.",
+    unavailable: "서명된 macOS 배포본에서 업데이트를 사용할 수 있습니다.",
+    ready: "업데이트가 설치되었습니다. 재시작하면 적용됩니다.",
+    check: "업데이트 확인",
+    checking: "확인 중…",
+    install: "다운로드 및 설치",
+    restart: "Atte 재시작",
+    restartHint:
+      "재시작하면 실행 중인 에이전트 작업이 종료됩니다. 나중에 재시작해도 됩니다.",
+    downloading: "다운로드 중…",
+    error: "업데이트에 실패했습니다. 연결을 확인하고 다시 시도해주세요.",
+  },
   settings: {
     general: "일반",
     agents: "에이전트",

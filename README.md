@@ -4,7 +4,7 @@
 <h1 align="center">Atte</h1>
 
 <p align="center">
-  Your coding agents, one consistent interface.
+  A lightweight desktop app for coding agents.
 </p>
 
 <p align="center">
@@ -17,7 +17,7 @@
 
 ![Atte in light mode with sample projects, multiple coding agents, and the changes panel open in a macOS window](docs/images/atte-light-window.jpg)
 
-Atte is a desktop app that brings coding agents into a consistent interface. Choose an agent, open a local folder, and start a thread—all in one place.
+Atte brings your coding agents together in a minimal desktop interface. Choose an agent, open a local folder, and start a thread.
 
 Currently in development, with macOS as the first target.
 

@@ -1,4 +1,5 @@
 import { SegmentedControl } from "@kobalte/core/segmented-control";
+import { AppUpdateSettings, type AppUpdates } from "features/app-updates";
 import {
   type DesktopNotifications,
   NotificationSettings,
@@ -38,7 +39,10 @@ const languageLabels: Record<LocalePreference, TranslationKey> = {
   ko: "language.korean",
 };
 
-export function GeneralPage(props: { notifications: DesktopNotifications }) {
+export function GeneralPage(props: {
+  notifications: DesktopNotifications;
+  updates: AppUpdates;
+}) {
   const {
     t,
     preference: languagePreference,
@@ -105,6 +109,7 @@ export function GeneralPage(props: { notifications: DesktopNotifications }) {
           </Select>
         </div>
         <NotificationSettings notifications={props.notifications} />
+        <AppUpdateSettings updates={props.updates} />
       </section>
     </main>
   );

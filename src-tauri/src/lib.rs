@@ -2,6 +2,8 @@
 pub mod agent;
 pub mod agent_management;
 mod agent_runtime;
+mod app_data;
+mod app_updates;
 mod browser;
 mod file_mentions;
 mod file_selection;
@@ -488,6 +490,8 @@ fn unsubscribe_thread(
 pub fn run() {
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .manage(app_updates::AppUpdates::default())
         // Remote web tabs handle new-window requests themselves. The opener's
         // automatic click interceptor would swallow their target="_blank" links.
         .plugin(
@@ -497,6 +501,7 @@ pub fn run() {
         )
         .setup(|app| {
             let app_data = app.path().app_data_dir()?;
+            app_data::migrate_previous_identifier(&app_data)?;
             let management = agent_management::AgentManagement::open(&app_data)?;
             let threads = management.restore_threads()?;
             app.manage(threads);
@@ -589,6 +594,9 @@ pub fn run() {
                 workspace_files::save_workspace_file,
                 workspace_files::operate_workspace_file,
                 lifecycle::resolve_quit,
+                app_updates::check_app_update,
+                app_updates::install_app_update,
+                app_updates::restart_after_update,
                 lifecycle::set_files_dirty,
                 browser::create_web_tab,
                 browser::web_tab_action,

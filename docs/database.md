@@ -1,6 +1,6 @@
 # 로컬 DB 구조
 
-현재 스키마: SQLite v1. Rust의 `Store`가 DB 접근과 트랜잭션을 소유하며 설치 관리와 스레드 module이 같은 저장소를 공유한다. 파일 위치는 Tauri 앱 데이터 폴더의 `atte.sqlite`이며, macOS 기본 위치는 `~/Library/Application Support/com.atte.app/atte.sqlite`다. 별도 DB 서버는 없다.
+현재 스키마: SQLite v1. Rust의 `Store`가 DB 접근과 트랜잭션을 소유하며 설치 관리와 스레드 module이 같은 저장소를 공유한다. 파일 위치는 Tauri 앱 데이터 폴더의 `atte.sqlite`이며, macOS 기본 위치는 `~/Library/Application Support/com.atte.desktop/atte.sqlite`다. 기존 `com.atte.app` 데이터 폴더가 있고 새 폴더가 없으면 첫 실행 시 폴더를 옮긴다. 별도 DB 서버는 없다.
 
 ## agents
 

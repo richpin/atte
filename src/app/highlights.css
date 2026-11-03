@@ -1,0 +1,9 @@
+::highlight(thread-find-all) {
+  background-color: var(--color-find-match);
+  color: var(--color-find-foreground);
+}
+
+::highlight(thread-find-current) {
+  background-color: var(--color-find-current);
+  color: var(--color-find-foreground);
+}

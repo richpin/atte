@@ -1,5 +1,6 @@
 import { spawnSync } from "node:child_process";
-import { existsSync, readdirSync, statSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmdirSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
 const root = resolve(import.meta.dirname, "..");
@@ -43,14 +44,35 @@ if (!identity || !teamId || !profile) {
 const identities = output("security", ["find-identity", "-v", "-p", "codesigning"]);
 if (!identities.includes(`"${identity}"`)) fail(`Signing identity not found in Keychain: ${identity}`);
 
+const publicKeyPath = process.env.ATTE_UPDATER_PUBLIC_KEY_PATH;
+const privateKey = process.env.TAURI_SIGNING_PRIVATE_KEY;
+if (!publicKeyPath || !privateKey) {
+  fail("Set ATTE_UPDATER_PUBLIC_KEY_PATH and TAURI_SIGNING_PRIVATE_KEY in .env.release.local.");
+}
+const publicKey = readFileSync(publicKeyPath, "utf8").trim();
+if (!publicKey) fail("Updater public key is empty.");
+// Both the bundler and signer receive the key contents, never a command-line secret.
+process.env.TAURI_SIGNING_PRIVATE_KEY = existsSync(privateKey)
+  ? readFileSync(privateKey, "utf8").trim()
+  : privateKey;
+const config = JSON.parse(readFileSync(join(root, "src-tauri/tauri.conf.json"), "utf8"));
+const version: string = config.version;
+const packageVersion = JSON.parse(readFileSync(join(root, "package.json"), "utf8")).version;
+const cargoVersion = readFileSync(join(root, "src-tauri/Cargo.toml"), "utf8").match(/^version = "([^"]+)"/m)?.[1];
+if (version !== packageVersion || version !== cargoVersion) fail("Keep Tauri, package.json and Cargo.toml versions aligned.");
+if (version.includes("-")) fail("This command publishes stable update metadata; use a stable version.");
+const releaseConfig = JSON.stringify({
+  bundle: { createUpdaterArtifacts: true },
+  plugins: { updater: { pubkey: publicKey } },
+});
 const startedAt = Date.now();
 console.log("Building signed macOS DMG...");
-run("pnpm", ["tauri", "build", "--bundles", "dmg"], {
+run("pnpm", ["tauri", "build", "--target", "aarch64-apple-darwin", "--bundles", "dmg", "--config", releaseConfig], {
   ...process.env,
   APPLE_SIGNING_IDENTITY: identity,
 });
 
-const dmgDirectory = join(root, "src-tauri", "target", "release", "bundle", "dmg");
+const dmgDirectory = join(root, "src-tauri", "target", "aarch64-apple-darwin", "release", "bundle", "dmg");
 const dmgs = readdirSync(dmgDirectory)
   .filter((name) => name.endsWith(".dmg"))
   .map((name) => join(dmgDirectory, name))
@@ -76,4 +98,42 @@ if (!gatekeeper.includes("source=Notarized Developer ID")) {
   fail(`Gatekeeper did not accept a notarized Developer ID: ${gatekeeper.trim()}`);
 }
 console.log(gatekeeper.trim());
+// Tauri consumes the intermediate .app when bundling a DMG. Recover the exact
+// notarized app from that DMG before creating the updater archive.
+const macosDirectory = join(dmgDirectory, "..", "macos");
+const app = join(macosDirectory, `${config.productName}.app`);
+const mountPoint = mkdtempSync(join(tmpdir(), "atte-release-dmg-"));
+let attached = false;
+try {
+  run("hdiutil", ["attach", "-readonly", "-nobrowse", "-mountpoint", mountPoint, dmg]);
+  attached = true;
+  const mountedApp = join(mountPoint, `${config.productName}.app`);
+  if (!existsSync(mountedApp)) fail(`DMG is missing ${config.productName}.app.`);
+  rmSync(app, { recursive: true, force: true });
+  run("ditto", [mountedApp, app]);
+} finally {
+  if (attached) run("hdiutil", ["detach", mountPoint]);
+  rmdirSync(mountPoint);
+}
+run("xcrun", ["stapler", "staple", app]);
+run("xcrun", ["stapler", "validate", app]);
+run("codesign", ["--verify", "--deep", "--strict", app]);
+run("spctl", ["--assess", "--type", "execute", "--verbose=4", app]);
+const archiveName = `${config.productName}_${version}_aarch64.app.tar.gz`;
+const archive = join(dmgDirectory, archiveName);
+run("tar", ["-czf", archive, "-C", macosDirectory, `${config.productName}.app`], {
+  ...process.env,
+  COPYFILE_DISABLE: "1",
+});
+run("pnpm", ["tauri", "signer", "sign", "--app-version", version, archive]);
+const updaterSignature = readFileSync(`${archive}.sig`, "utf8").trim();
+const url = `https://github.com/richpin/atte/releases/download/v${version}/${archiveName}`;
+writeFileSync(join(dmgDirectory, "latest.json"), JSON.stringify({
+  version,
+  pub_date: new Date().toISOString(),
+  platforms: {
+    "darwin-aarch64": { url, signature: updaterSignature },
+  },
+}, null, 2) + "\n");
 console.log(`Ready to distribute: ${dmg}`);
+console.log(`Upload ${archive}, ${archive}.sig and ${join(dmgDirectory, "latest.json")} to the same v${version} GitHub Release.`);

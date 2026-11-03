@@ -358,11 +358,12 @@ fn request(app: &AppHandle) {
     });
 }
 
-pub(super) fn open_settings(_app: &AppHandle) -> Result<(), String> {
+pub(super) fn open_settings(app: &AppHandle) -> Result<(), String> {
     let _main = MainThreadMarker::new().ok_or("Settings requires the main thread")?;
-    let url = NSURL::URLWithString(&NSString::from_str(
-        "x-apple.systempreferences:com.apple.Notifications-Settings.extension?id=com.atte.app",
-    ))
+    let url = NSURL::URLWithString(&NSString::from_str(&format!(
+        "x-apple.systempreferences:com.apple.Notifications-Settings.extension?id={}",
+        app.config().identifier
+    )))
     .ok_or("Notification Settings URL unavailable")?;
     if NSWorkspace::sharedWorkspace().openURL(&url) {
         Ok(())
