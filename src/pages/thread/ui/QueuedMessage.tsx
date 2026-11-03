@@ -1,8 +1,10 @@
 import { Trash } from "lucide-solid";
 import { useI18n } from "shared/i18n";
 import { createMemo, createSignal, For, Show } from "solid-js";
+import { attachmentMentions } from "../model/file-mentions";
 import type { QueuedMessage as QueuedMessageData } from "../model/types";
 import { AttachmentChip } from "./AttachmentChip";
+import { MentionText } from "./MentionText";
 
 export function QueuedMessage(props: {
   messages: QueuedMessageData[];
@@ -48,7 +50,14 @@ export function QueuedMessage(props: {
                     </span>
                   }
                 >
-                  <span class="min-w-0 flex-1 truncate">{message()?.text}</span>
+                  <span class="min-w-0 flex-1 truncate">
+                    <MentionText
+                      text={message()?.text ?? ""}
+                      mentions={attachmentMentions(
+                        message()?.attachments ?? [],
+                      )}
+                    />
+                  </span>
                 </Show>
                 <Show when={message()?.status === "failed"}>
                   <span class="text-danger">{t("thread.queuedFailed")}</span>

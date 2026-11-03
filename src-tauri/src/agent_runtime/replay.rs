@@ -66,10 +66,69 @@ impl Replay {
                 }
                 if let Some(turn) = self.turns.last_mut() {
                     match chunk.content {
-                        ContentBlock::Text(text) => turn.message.push_str(&text.text),
-                        ContentBlock::ResourceLink(link) => turn
-                            .attachments
-                            .push(Attachment::file(Uuid::new_v4(), link.name, link.uri)),
+                        ContentBlock::Text(text) => {
+                            if let Some(resources) = text
+                                .meta
+                                .as_ref()
+                                .and_then(|m| m.get("atte/resources"))
+                                .and_then(|v| {
+                                    serde_json::from_value::<Vec<Attachment>>(v.clone()).ok()
+                                })
+                            {
+                                let offset = turn.message.encode_utf16().count();
+                                let body = text.text.encode_utf16().collect::<Vec<_>>();
+                                for mut attachment in resources {
+                                    if let Some(resource) = &mut attachment.resource {
+                                        resource.embedded = false;
+                                        resource.mentions.retain(|m| {
+                                            m.start < m.end
+                                                && m.end <= body.len()
+                                                && body[m.start..m.end]
+                                                    == format!("@{}", m.path)
+                                                        .encode_utf16()
+                                                        .collect::<Vec<_>>()
+                                        });
+                                        for mention in &mut resource.mentions {
+                                            mention.start += offset;
+                                            mention.end += offset;
+                                        }
+                                        if !resource.mentions.is_empty() {
+                                            turn.attachments.push(attachment);
+                                        }
+                                    }
+                                }
+                            }
+                            turn.message.push_str(&text.text);
+                        }
+                        ContentBlock::ResourceLink(link) => {
+                            if !turn
+                                .attachments
+                                .iter()
+                                .any(|a| a.uri.as_deref() == Some(link.uri.as_str()))
+                            {
+                                turn.attachments.push(Attachment::file(
+                                    Uuid::new_v4(),
+                                    link.name,
+                                    link.uri,
+                                ));
+                            }
+                        }
+                        ContentBlock::Resource(resource) => {
+                            let uri = match resource.resource {
+                                agent_client_protocol::schema::v1::EmbeddedResourceResource::TextResourceContents(r) => r.uri,
+                                agent_client_protocol::schema::v1::EmbeddedResourceResource::BlobResourceContents(r) => r.uri,
+                                _ => return,
+                            };
+                            if !turn
+                                .attachments
+                                .iter()
+                                .any(|a| a.uri.as_deref() == Some(uri.as_str()))
+                            {
+                                let name = uri.rsplit('/').next().unwrap_or("Resource").to_string();
+                                turn.attachments
+                                    .push(Attachment::file(Uuid::new_v4(), name, uri));
+                            }
+                        }
                         ContentBlock::Image(image) => turn.attachments.push(Attachment::media(
                             Uuid::new_v4(),
                             attachment_name(image.meta.as_ref(), "Image"),

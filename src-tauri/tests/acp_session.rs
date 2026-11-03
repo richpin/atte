@@ -7295,3 +7295,174 @@ async fn playable_content_sends_audio_links_and_restores_the_same_results() {
     );
     threads.shutdown().await;
 }
+
+#[tokio::test]
+async fn sends_embedded_mentions_or_links_and_restores_chip_locations_without_snapshot_bytes() {
+    for supported in [true, false] {
+        let root = tempfile::tempdir().unwrap();
+        let log = root.path().join("prompts.jsonl");
+        let session = root.path().join("session.json");
+        let store = std::sync::Arc::new(
+            atte_lib::storage::Store::open(&root.path().join("atte.sqlite")).unwrap(),
+        );
+        let mut agent = mock_agent();
+        if supported {
+            agent.env.insert("EMBEDDED_CONTEXT".into(), "1".into());
+        }
+        agent
+            .env
+            .insert("PROMPT_JSON_LOG".into(), log.to_string_lossy().into());
+        agent
+            .env
+            .insert("SESSION_FILE".into(), session.to_string_lossy().into());
+        let threads = Threads::with_store(vec![agent.clone()], store.clone()).unwrap();
+        let draft = threads.create(root.path()).unwrap();
+        threads.connect(draft.id).unwrap();
+        let ready = settle(&threads, draft.id).await;
+        assert_eq!(ready.prompt_capabilities.embedded_context, supported);
+        let directory = root
+            .path()
+            .join("prompt-attachments")
+            .join(draft.id.to_string());
+        std::fs::create_dir_all(&directory).unwrap();
+        let body = "review @a.txt and @b.bin";
+        let attachments = [("a.txt", b"hello".as_slice(), 7, 13, true), ("b.bin", &[0, 255], 18, 24, false)].into_iter().enumerate().map(|(order, (path, bytes, start, end, text))| {
+            let id = uuid::Uuid::new_v4();
+            std::fs::write(directory.join(id.to_string()), bytes).unwrap();
+            serde_json::from_value::<Attachment>(serde_json::json!({
+                "id":id,"name":path,"uri":format!("file:///workspace/{path}"),"kind":"file","mimeType":if text {"text/plain"} else {"application/octet-stream"},
+                "resource":{"path":path,"embedded":true,"text":text,"mentions":[{"id":uuid::Uuid::new_v4(),"path":path,"start":start,"end":end,"order":order}]}
+            })).unwrap()
+        }).collect::<Vec<_>>();
+        threads
+            .send_input(
+                draft.id,
+                UserInput {
+                    body: body.into(),
+                    attachments: attachments.clone(),
+                },
+            )
+            .unwrap();
+        settle(&threads, draft.id).await;
+        let request: serde_json::Value =
+            serde_json::from_str(std::fs::read_to_string(&log).unwrap().trim()).unwrap();
+        assert_eq!(request["prompt"][0]["text"], body);
+        assert_eq!(
+            request["prompt"][0]["_meta"]["atte/resources"]
+                .as_array()
+                .unwrap()
+                .len(),
+            2
+        );
+        if supported {
+            assert_eq!(request["prompt"][1]["resource"]["text"], "hello");
+            assert_eq!(request["prompt"][2]["resource"]["blob"], "AP8=");
+        } else {
+            assert_eq!(request["prompt"][1]["type"], "resource_link");
+            assert_eq!(request["prompt"][2]["type"], "resource_link");
+        }
+        assert!(attachments
+            .iter()
+            .all(|a| !directory.join(a.id.to_string()).exists()));
+        threads.shutdown().await;
+        drop(threads);
+        let restored = Threads::with_store(vec![agent], store).unwrap();
+        restored.connect(draft.id).unwrap();
+        let loaded = settle(&restored, draft.id).await;
+        assert_eq!(loaded.turns[0].attachments.len(), 2);
+        assert_eq!(
+            loaded.turns[0].attachments[0]
+                .resource
+                .as_ref()
+                .unwrap()
+                .mentions[0]
+                .start,
+            7
+        );
+        assert!(
+            !loaded.turns[0].attachments[0]
+                .resource
+                .as_ref()
+                .unwrap()
+                .embedded
+        );
+        restored.shutdown().await;
+    }
+}
+
+#[tokio::test]
+async fn restores_queued_resource_snapshots_and_uses_links_if_reconnected_without_support() {
+    for supported in [true, false] {
+        let root = tempfile::tempdir().unwrap();
+        let database = root.path().join("atte.sqlite");
+        let log = root.path().join("prompts.jsonl");
+        let store = std::sync::Arc::new(atte_lib::storage::Store::open(&database).unwrap());
+        let original = Threads::with_store(vec![mock_agent()], store.clone()).unwrap();
+        let draft = original.create(root.path()).unwrap();
+        drop(original);
+        let id = uuid::Uuid::new_v4();
+        let queued = uuid::Uuid::new_v4();
+        let snapshot = root
+            .path()
+            .join("prompt-attachments")
+            .join(draft.id.to_string())
+            .join(id.to_string());
+        std::fs::create_dir_all(snapshot.parent().unwrap()).unwrap();
+        std::fs::write(&snapshot, "submitted version").unwrap();
+        let attachment: Attachment = serde_json::from_value(serde_json::json!({
+            "id":id,"name":"deleted.txt","kind":"file","uri":"file:///workspace/deleted.txt","mimeType":"text/plain",
+            "resource":{"path":"deleted.txt","text":true,"embedded":true,"mentions":[{"id":uuid::Uuid::new_v4(),"path":"deleted.txt","start":0,"end":12,"order":0}]}
+        })).unwrap();
+        let pending = atte_lib::thread::QueuedMessage {
+            id: queued,
+            input: UserInput {
+                body: "@deleted.txt".into(),
+                attachments: vec![attachment.clone()],
+            },
+            status: QueuedMessageStatus::Failed,
+        };
+        rusqlite::Connection::open(&database)
+            .unwrap()
+            .execute(
+                "UPDATE threads SET queued_messages=?2 WHERE id=?1",
+                rusqlite::params![
+                    draft.id.to_string(),
+                    serde_json::to_string(&[pending]).unwrap()
+                ],
+            )
+            .unwrap();
+        let mut agent = mock_agent();
+        if supported {
+            agent.env.insert("EMBEDDED_CONTEXT".into(), "1".into());
+        }
+        agent
+            .env
+            .insert("PROMPT_JSON_LOG".into(), log.to_string_lossy().into());
+        let restored = Threads::with_store(vec![agent], store).unwrap();
+        assert_eq!(
+            restored.get(draft.id).unwrap().queued_messages[0]
+                .input
+                .attachments,
+            vec![attachment]
+        );
+        drop(restored.subscribe(draft.id).unwrap());
+        assert!(snapshot.exists());
+        restored.connect(draft.id).unwrap();
+        let ready = settle(&restored, draft.id).await;
+        assert_eq!(ready.queued_messages.len(), 1);
+        restored.retry_queued_message(draft.id, queued).unwrap();
+        settle(&restored, draft.id).await;
+        let request: serde_json::Value =
+            serde_json::from_str(std::fs::read_to_string(log).unwrap().trim()).unwrap();
+        if supported {
+            assert_eq!(
+                request["prompt"][1]["resource"]["text"],
+                "submitted version"
+            );
+        } else {
+            assert_eq!(request["prompt"][1]["type"], "resource_link");
+        }
+        assert!(!snapshot.exists());
+        restored.shutdown().await;
+    }
+}

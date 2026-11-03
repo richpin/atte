@@ -12,6 +12,7 @@ import {
   Show,
   Switch,
 } from "solid-js";
+import { attachmentMentions, mentionFileName } from "../model/file-mentions";
 import type { Attachment, ResponsePart, Turn } from "../model/types";
 import { AttachmentChip } from "./AttachmentChip";
 import { Plan } from "./Plan";
@@ -70,17 +71,28 @@ function UserMessage(props: { message: string; attachments: Attachment[] }) {
           on:thread-search-reveal={() => setExpanded(true)}
         >
           <Show when={props.message}>
-            <Markdown source={props.message} variant="user" streaming={false} />
+            <Markdown
+              source={props.message}
+              variant="user"
+              streaming={false}
+              inlineChips={attachmentMentions(props.attachments).map((m) => ({
+                start: m.start,
+                end: m.end,
+                label: `@${m.path}`,
+                displayLabel: mentionFileName(m.path),
+                title: m.path,
+              }))}
+            />
           </Show>
         </div>
       </div>
-      <Show when={props.attachments.length > 0}>
+      <Show when={props.attachments.some((a) => !a.resource)}>
         <div
           class={
             props.message ? "mt-3 flex flex-wrap gap-2" : "flex flex-wrap gap-2"
           }
         >
-          <For each={props.attachments}>
+          <For each={props.attachments.filter((a) => !a.resource)}>
             {(attachment) => (
               <AttachmentChip name={attachment.name} kind={attachment.kind} />
             )}

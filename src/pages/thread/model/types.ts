@@ -59,7 +59,11 @@ export interface Thread {
   configuration: ThreadConfiguration[];
   contextUsage: ContextUsage | null;
   availableCommands: AvailableCommand[];
-  promptCapabilities?: { image: boolean; audio: boolean };
+  promptCapabilities?: {
+    image: boolean;
+    audio: boolean;
+    embeddedContext?: boolean;
+  };
 }
 
 export type ThreadConfigurationValue =
@@ -107,7 +111,23 @@ export interface QueuedMessage {
   status: "pending" | "failed";
 }
 
+export interface FileMention {
+  id: string;
+  path: string;
+  start: number;
+  end: number;
+  order: number;
+}
+
+export interface FileResource {
+  path: string;
+  mentions: FileMention[];
+  embedded: boolean;
+  text: boolean;
+}
+
 export interface Attachment {
+  resource?: FileResource;
   id: string;
   name: string;
   kind?: AttachmentKind;
@@ -116,6 +136,7 @@ export interface Attachment {
 }
 
 export interface UserInput {
+  mentions?: FileMention[];
   text: string;
   attachments: Attachment[];
 }

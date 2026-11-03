@@ -24,9 +24,11 @@ import {
   Switch as ToggleSwitch,
 } from "shared/ui";
 import { createSignal, For, Show } from "solid-js";
+import type { CommandToken } from "../model/prompt-document";
 import type {
   Attachment,
   ElicitationRequest,
+  FileMention,
   FormValues,
   MediaKind,
   PermissionRequest,
@@ -39,6 +41,7 @@ import { AttachmentChip } from "./AttachmentChip";
 import { ElicitationInput } from "./ElicitationInput";
 import { InteractionNavigation } from "./InteractionNavigation";
 import { PermissionInput } from "./PermissionInput";
+import type { PromptEditorHandle } from "./PromptEditor";
 import { PromptInput } from "./PromptInput";
 import { QueuedMessage } from "./QueuedMessage";
 
@@ -47,6 +50,8 @@ export function ThreadComposer(props: {
   thread: Thread;
   draft: string;
   draftCommand?: string;
+  draftMentions?: FileMention[];
+  draftCommandTokens?: CommandToken[];
   draftAttachments?: Attachment[];
   attachmentErrors?: string[];
   answerPending: boolean;
@@ -56,8 +61,13 @@ export function ThreadComposer(props: {
   actionsEnabled: boolean;
   canSend: boolean;
   signInOpen?: boolean;
-  promptRef?: (element: HTMLTextAreaElement) => void;
-  onDraftChange: (message: string, command?: string) => void;
+  promptRef?: (element: PromptEditorHandle) => void;
+  onDraftChange: (
+    message: string,
+    command?: string,
+    mentions?: FileMention[],
+    commandTokens?: CommandToken[],
+  ) => void;
   onSelectFiles?: () => void;
   onSelectMedia?: (kind: MediaKind) => void;
   onPasteImage?: (image: File) => void;
@@ -248,6 +258,9 @@ export function ThreadComposer(props: {
           </Show>
           <PromptInput
             value={props.draft}
+            mentions={props.draftMentions}
+            commandTokens={props.draftCommandTokens}
+            threadId={props.thread.id}
             selectedCommand={props.draftCommand}
             commands={props.thread.availableCommands}
             menuAnchor={composer}

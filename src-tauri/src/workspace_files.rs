@@ -100,6 +100,7 @@ pub(crate) struct DirectoryListing {
 struct SearchIndex {
     thread: Uuid,
     root: PathBuf,
+    respect_gitignore: bool,
     entries: tokio::sync::OnceCell<Arc<Vec<Entry>>>,
     stop: Arc<AtomicBool>,
 }
@@ -443,6 +444,52 @@ fn scan(
         }
     }
 }
+fn scan_mentions(
+    root: &Path,
+    directory: &Path,
+    entries: &mut BTreeMap<String, Entry>,
+    warnings: &mut Vec<String>,
+    stop: &AtomicBool,
+) {
+    let walker = ignore::WalkBuilder::new(directory)
+        .standard_filters(false)
+        .parents(true)
+        .git_ignore(true)
+        .require_git(false)
+        .follow_links(false)
+        .filter_entry(|entry| entry.depth() == 0 || entry.file_name() != ".git")
+        .build();
+    for entry in walker {
+        if stop.load(Ordering::Acquire) {
+            break;
+        }
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(error) => {
+                warnings.push(error.to_string());
+                continue;
+            }
+        };
+        if entry.depth() == 0 {
+            continue;
+        }
+        let Some(relative) = entry.path().strip_prefix(root).ok().and_then(Path::to_str) else {
+            warnings.push(entry.path().display().to_string());
+            continue;
+        };
+        if let Some(kind) = entry.file_type() {
+            entries.insert(
+                relative.to_owned(),
+                Entry {
+                    path: relative.to_owned(),
+                    directory: kind.is_dir(),
+                    symlink: kind.is_symlink(),
+                },
+            );
+        }
+    }
+}
+
 fn list_directory(root: &Path, relative: &str) -> Result<DirectoryListing, FileError> {
     let directory = if relative.is_empty() {
         root.to_path_buf()
@@ -630,18 +677,24 @@ pub(crate) async fn search_workspace_paths(
     thread_id: Uuid,
     search_id: Uuid,
     query: String,
+    respect_gitignore: Option<bool>,
+    files_only: Option<bool>,
 ) -> Result<Vec<Entry>, FileError> {
     let root = root(&threads, thread_id)?;
     let index = {
         let mut searches = files.searches.lock().map_err(|_| FileError::Unavailable)?;
         if let Some(index) = searches.get(&search_id) {
-            if index.thread == thread_id && index.root == root {
+            if index.thread == thread_id
+                && index.root == root
+                && index.respect_gitignore == respect_gitignore.unwrap_or(false)
+            {
                 index.clone()
             } else {
                 index.stop.store(true, Ordering::Release);
                 let index = Arc::new(SearchIndex {
                     thread: thread_id,
                     root: root.clone(),
+                    respect_gitignore: respect_gitignore.unwrap_or(false),
                     entries: tokio::sync::OnceCell::new(),
                     stop: Arc::new(AtomicBool::new(false)),
                 });
@@ -652,6 +705,7 @@ pub(crate) async fn search_workspace_paths(
             let index = Arc::new(SearchIndex {
                 thread: thread_id,
                 root: root.clone(),
+                respect_gitignore: respect_gitignore.unwrap_or(false),
                 entries: tokio::sync::OnceCell::new(),
                 stop: Arc::new(AtomicBool::new(false)),
             });
@@ -667,6 +721,11 @@ pub(crate) async fn search_workspace_paths(
             tauri::async_runtime::spawn_blocking(move || {
                 let mut entries = BTreeMap::new();
                 let mut warnings = Vec::new();
+                let scan = if respect_gitignore.unwrap_or(false) {
+                    scan_mentions
+                } else {
+                    scan
+                };
                 scan(&scan_root, &scan_root, &mut entries, &mut warnings, &stop);
                 Arc::new(entries.into_values().collect::<Vec<_>>())
             })
@@ -678,6 +737,15 @@ pub(crate) async fn search_workspace_paths(
     Ok(entries
         .iter()
         .filter(|entry| entry.path.to_lowercase().contains(&query))
+        .filter(|entry| {
+            !files_only.unwrap_or(false)
+                || (!entry.directory
+                    && (!entry.symlink
+                        || root
+                            .join(&entry.path)
+                            .canonicalize()
+                            .is_ok_and(|path| path.starts_with(&root) && path.is_file())))
+        })
         .cloned()
         .collect())
 }
@@ -796,6 +864,80 @@ mod tests {
     fn fixture() -> tempfile::TempDir {
         tempfile::tempdir_in(std::env::temp_dir().canonicalize().unwrap()).unwrap()
     }
+    #[test]
+    fn mention_scan_respects_nested_gitignore_and_keeps_unignored_hidden_files() {
+        let folder = fixture();
+        let root = folder.path();
+        fs::create_dir_all(root.join(".git/objects")).unwrap();
+        fs::create_dir_all(root.join("node_modules")).unwrap();
+        fs::write(root.join(".git/objects/private"), "git").unwrap();
+        fs::write(root.join("node_modules/dependency"), "ignored").unwrap();
+        fs::write(root.join(".hidden"), "hidden").unwrap();
+        fs::write(root.join(".gitignore"), "node_modules/\n*.log\n!keep.log\n").unwrap();
+        fs::create_dir(root.join("src")).unwrap();
+        fs::write(root.join("src/.gitignore"), "*.tmp\n!important.tmp\n").unwrap();
+        for path in [
+            "debug.log",
+            "keep.log",
+            "src/debug.log",
+            "src/cache.tmp",
+            "src/important.tmp",
+            "src/main.ts",
+        ] {
+            fs::write(root.join(path), "file").unwrap();
+        }
+        let mut entries = BTreeMap::new();
+        scan_mentions(
+            root,
+            root,
+            &mut entries,
+            &mut Vec::new(),
+            &AtomicBool::new(false),
+        );
+        assert!(!entries
+            .keys()
+            .any(|path| path.split('/').any(|part| part == ".git")));
+        assert!(entries.contains_key(".hidden"));
+        for excluded in [
+            "node_modules",
+            "node_modules/dependency",
+            "debug.log",
+            "src/debug.log",
+            "src/cache.tmp",
+        ] {
+            assert!(
+                !entries.contains_key(excluded),
+                "unexpected ignored path: {excluded}"
+            );
+        }
+        for included in [".gitignore", "keep.log", "src/important.tmp", "src/main.ts"] {
+            assert!(
+                entries.contains_key(included),
+                "missing unignored path: {included}"
+            );
+        }
+    }
+    #[test]
+    fn mention_scan_applies_parent_gitignore_without_a_git_repository() {
+        let folder = fixture();
+        let workspace = folder.path().join("workspace");
+        fs::create_dir(&workspace).unwrap();
+        fs::write(folder.path().join(".gitignore"), "*.secret\n").unwrap();
+        fs::write(workspace.join(".gitignore"), "!keep.secret\n").unwrap();
+        fs::write(workspace.join("private.secret"), "ignored").unwrap();
+        fs::write(workspace.join("keep.secret"), "included").unwrap();
+        let mut entries = BTreeMap::new();
+        scan_mentions(
+            &workspace,
+            &workspace,
+            &mut entries,
+            &mut Vec::new(),
+            &AtomicBool::new(false),
+        );
+        assert!(!entries.contains_key("private.secret"));
+        assert!(entries.contains_key("keep.secret"));
+    }
+
     #[test]
     fn includes_hidden_ignored_files_and_empty_folders_without_following_links() {
         let folder = fixture();

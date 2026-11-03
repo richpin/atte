@@ -151,3 +151,51 @@ it("shows attachment-only queued input as read-only chips", () => {
     }),
   ).toBeTruthy();
 });
+
+it("shows a Pierre file icon before the basename in a queued mention", async () => {
+  render(() => (
+    <I18nProvider>
+      <QueuedMessage
+        messages={[
+          {
+            id: "mention",
+            text: "Review @src/index.ts",
+            attachments: [
+              {
+                id: "resource",
+                name: "index.ts",
+                resource: {
+                  path: "src/index.ts",
+                  embedded: true,
+                  text: true,
+                  mentions: [
+                    {
+                      id: "m1",
+                      path: "src/index.ts",
+                      start: 7,
+                      end: 20,
+                      order: 0,
+                    },
+                  ],
+                },
+              },
+            ],
+            status: "pending",
+          },
+        ]}
+        disabled={false}
+        onRetry={async () => {}}
+        onDelete={async () => {}}
+      />
+    </I18nProvider>
+  ));
+  const chip = screen
+    .getByText("index.ts")
+    .closest<HTMLElement>("[data-file-mention]");
+  expect(chip?.title).toBe("src/index.ts");
+  await waitFor(() =>
+    expect(chip?.querySelector("svg use")?.getAttribute("href")).toContain(
+      "file-tree-builtin-typescript",
+    ),
+  );
+});

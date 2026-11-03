@@ -37,6 +37,11 @@ export {
 } from "./dropdown-menu";
 export { EditableFile } from "./editable-file";
 export { FileDiff } from "./file-diff";
+export { FileIcon } from "./file-icon";
+export {
+  createFileMentionChip,
+  fileMentionChipClass,
+} from "./file-mention-chip";
 export { FileTree, type TreeAction } from "./file-tree";
 export { ImagePreview } from "./image-preview";
 export { LanguageMenu } from "./language-menu";

@@ -1,15 +1,18 @@
 import * as Popper from "@kobalte/core/popper";
 import { createInteractOutside } from "@kobalte/core/primitives/create-interact-outside";
 import { useI18n } from "shared/i18n";
+import { FileIcon } from "shared/ui";
 import { createEffect, For, onCleanup, Show } from "solid-js";
 import { Portal } from "solid-js/web";
 import type { AvailableCommand } from "../model/types";
 
 export function SlashCommandMenu(props: {
   id: string;
-  input: HTMLTextAreaElement | undefined;
+  input: HTMLElement | undefined;
   anchor: HTMLElement | undefined;
-  commands: AvailableCommand[];
+  commands: (AvailableCommand & { path?: string })[];
+  files?: boolean;
+  status?: string;
   hasCommands: boolean;
   selected: string | undefined;
   onSelect: (command: AvailableCommand) => void;
@@ -54,7 +57,9 @@ export function SlashCommandMenu(props: {
               id={props.id}
               role="listbox"
               onMouseDown={(event) => event.preventDefault()}
-              aria-label={t("thread.slashCommands")}
+              aria-label={t(
+                props.files ? "thread.fileMentions" : "thread.slashCommands",
+              )}
             >
               <For each={props.commands}>
                 {(command, index) => {
@@ -67,34 +72,58 @@ export function SlashCommandMenu(props: {
                       id={`${props.id}-${index()}`}
                       role="option"
                       aria-selected={props.selected === command.name}
-                      class="flex w-full cursor-default flex-col justify-center rounded-lg px-3 py-2 text-left text-xs"
+                      class="flex w-full cursor-default justify-center rounded-lg px-3 py-2 text-left text-xs"
                       classList={{
+                        "flex-row items-center gap-2": props.files,
+                        "flex-col": !props.files,
                         "bg-menu-hover": props.selected === command.name,
                       }}
                       onMouseMove={() => props.onHighlight(command.name)}
                       onClick={() => props.onSelect(command)}
                     >
-                      <span class="truncate text-sm font-medium">
-                        /{command.name}
-                      </span>
-                      <span
-                        class="truncate text-muted"
-                        title={command.description}
+                      <Show
+                        when={props.files}
+                        fallback={
+                          <>
+                            <span class="truncate text-sm font-medium">
+                              /{command.name}
+                            </span>
+                            <span
+                              class="truncate text-muted"
+                              title={command.description}
+                            >
+                              {command.description}
+                            </span>
+                          </>
+                        }
                       >
-                        {command.description}
-                      </span>
+                        <FileIcon path={command.name} />
+                        <span
+                          class="min-w-0 shrink truncate text-sm"
+                          title={command.name}
+                        >
+                          {command.name.split("/").at(-1)}
+                        </span>
+                        <span
+                          class="min-w-0 flex-1 truncate text-xs text-muted"
+                          title={command.name}
+                        >
+                          {command.description}
+                        </span>
+                      </Show>
                     </button>
                   );
                 }}
               </For>
             </div>
-            <Show when={props.commands.length === 0}>
+            <Show when={props.status || props.commands.length === 0}>
               <p role="status" class="px-3 py-3 text-xs text-muted">
-                {t(
-                  props.hasCommands
-                    ? "thread.noMatchingCommands"
-                    : "thread.noCommands",
-                )}
+                {props.status ??
+                  t(
+                    props.hasCommands
+                      ? "thread.noMatchingCommands"
+                      : "thread.noCommands",
+                  )}
               </p>
             </Show>
           </div>

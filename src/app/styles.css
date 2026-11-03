@@ -3,6 +3,8 @@
 @custom-variant dark (&:where([data-theme="dark"], [data-theme="dark"] *));
 
 @theme {
+  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --font-mono: var(--font-sans);
   --color-find-match: #fde047;
   --color-find-current: #fb923c;
   --color-find-foreground: #171717;
@@ -155,8 +157,11 @@
 }
 
 :root {
+  --diffs-font-family: var(--font-sans);
+  --diffs-header-font-family: var(--font-sans);
+  --trees-font-family-override: var(--font-sans);
   color-scheme: light;
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-family: var(--font-sans);
   font-synthesis: none;
   -webkit-font-smoothing: antialiased;
 }
@@ -359,4 +364,20 @@ button:enabled {
   .app-resizable > [data-corvu-resizable-panel] {
     transition: none;
   }
+}
+
+.prompt-editor {
+  position: relative;
+}
+.prompt-editor:has(> br.ProseMirror-trailingBreak:only-child)::before {
+  content: attr(data-placeholder);
+  color: var(--color-muted);
+  pointer-events: none;
+  position: absolute;
+}
+.prompt-editor .ProseMirror-selectednode {
+  outline: 1px solid currentColor;
+}
+.prompt-editor[aria-disabled="true"] {
+  cursor: not-allowed;
 }

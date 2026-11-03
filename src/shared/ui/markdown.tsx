@@ -4,6 +4,8 @@ import morphdom from "morphdom";
 import { createEffect, on, onCleanup } from "solid-js";
 import { useI18n } from "../i18n";
 import { useTheme } from "../theme";
+import { hydrateFileIconElement } from "./file-icon";
+import { type InlineChip, prepareInlineChips } from "./markdown-inline-chips";
 import { renderMarkdown, safeWebUrl } from "./markdown-parser";
 import { type HighlightedCode, highlightCode } from "./syntax-highlighter";
 import { useWebLink } from "./web-link";
@@ -13,6 +15,7 @@ const copyFeedbackDuration = 2_000;
 
 export type MarkdownProps = {
   source: string;
+  inlineChips?: InlineChip[];
   variant: "user" | "agent";
   streaming?: boolean;
   generation?: string;
@@ -167,7 +170,9 @@ export function Markdown(props: MarkdownProps) {
 
   function showPlainText(source: string) {
     codeSources = [];
-    body.replaceChildren(document.createTextNode(source));
+    const chips = prepareInlineChips(source, props.inlineChips ?? []);
+    body.replaceChildren(document.createTextNode(chips.source));
+    chips.decorate(body);
     body.dataset.fallback = "true";
   }
 
@@ -179,16 +184,31 @@ export function Markdown(props: MarkdownProps) {
     }
 
     try {
-      const rendered = renderMarkdown(source);
+      const chips = prepareInlineChips(source, props.inlineChips ?? []);
+      const rendered = renderMarkdown(chips.source);
+      const codeBlocks = rendered.codeBlocks.map((block) => ({
+        ...block,
+        source: chips.plain(block.source),
+        language: chips.containsToken(block.source)
+          ? undefined
+          : block.language,
+      }));
       const next = document.createElement("div");
       next.innerHTML = rendered.html;
       decorateTables(next);
-      decorateCodeBlocks(next, rendered.codeBlocks);
+      decorateCodeBlocks(next, codeBlocks);
+      chips.decorate(next);
       if (disposed || generation !== renderGeneration) return;
       morphdom(body, next, { childrenOnly: true });
-      codeSources = rendered.codeBlocks.map((block) => block.source);
+      for (const chip of body.querySelectorAll<HTMLElement>(
+        "[data-file-mention]",
+      )) {
+        const svg = chip.querySelector<SVGSVGElement>("svg.file-type-icon");
+        if (svg) hydrateFileIconElement(svg, chip.dataset.fileMention ?? "");
+      }
+      codeSources = codeBlocks.map((block) => block.source);
       delete body.dataset.fallback;
-      highlightCodeBlocks(rendered.codeBlocks, streaming);
+      highlightCodeBlocks(codeBlocks, streaming);
     } catch {
       showPlainText(source);
     }
@@ -309,6 +329,7 @@ export function Markdown(props: MarkdownProps) {
           props.generation,
           locale(),
           resolvedTheme(),
+          props.inlineChips,
         ] as const,
       ([source, streaming, generation], previous) => {
         latestSource = source;

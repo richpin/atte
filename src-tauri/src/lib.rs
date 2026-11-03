@@ -3,6 +3,7 @@ pub mod agent;
 pub mod agent_management;
 mod agent_runtime;
 mod browser;
+mod file_mentions;
 mod file_selection;
 mod git;
 mod git_history;
@@ -303,7 +304,24 @@ async fn send_message(
     selected_files: State<'_, SelectedFiles>,
 ) -> Result<(), ThreadError> {
     let resolved = selected_files.resolve(window.label(), id, &input)?;
-    threads.send_input(id, resolved)?;
+    let app = window.app_handle().clone();
+    let resolved = tauri::async_runtime::spawn_blocking(move || {
+        crate::file_mentions::prepare(&app.state::<Threads>(), id, resolved, input.mentions)
+    })
+    .await
+    .map_err(|error| ThreadError::Unavailable(error.to_string()))??;
+    let snapshots = resolved
+        .attachments
+        .iter()
+        .filter(|a| a.resource.as_ref().is_some_and(|r| r.embedded))
+        .map(|a| a.id)
+        .collect::<Vec<_>>();
+    if let Err(error) = threads.send_input(id, resolved) {
+        if let Some(store) = threads.media_store() {
+            store.remove(id, snapshots);
+        }
+        return Err(error);
+    }
     let _ = selected_files.forget(window.label(), &input.attachments);
     Ok(())
 }

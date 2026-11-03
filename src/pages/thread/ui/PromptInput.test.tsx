@@ -2,6 +2,8 @@ import { cleanup, fireEvent, render, screen } from "@solidjs/testing-library";
 import userEvent from "@testing-library/user-event";
 import { createSignal } from "solid-js";
 import { afterEach, expect, it, vi } from "vitest";
+import type { CommandToken } from "../model/prompt-document";
+import type { PromptEditorHandle } from "./PromptEditor";
 import { PromptInput } from "./PromptInput";
 
 afterEach(() => {
@@ -26,8 +28,12 @@ it("grows from two visual lines through ten before scrolling internally", () => 
       disconnect() {}
     },
   );
+  let editor!: PromptEditorHandle;
   render(() => (
     <PromptInput
+      inputRef={(handle) => {
+        editor = handle;
+      }}
       value=""
       disabled={false}
       onInput={() => {}}
@@ -41,12 +47,12 @@ it("grows from two visual lines through ten before scrolling internally", () => 
     get: () => contentHeight,
   });
 
-  fireEvent.input(input, { target: { value: "six wrapped lines" } });
+  editor.replaceText(0, editor.value.length, "six wrapped lines");
   expect(input.style.height).toBe("120px");
   expect(input.classList).toContain("overflow-y-auto");
 
   contentHeight = 240;
-  fireEvent.input(input, { target: { value: "twelve wrapped lines" } });
+  editor.replaceText(0, editor.value.length, "twelve wrapped lines");
   expect(input.style.height).toBe("200px");
 });
 
@@ -58,8 +64,12 @@ it("includes textarea padding and borders outside the ten text lines", () => {
     borderTopWidth: "1px",
     borderBottomWidth: "1px",
   } as CSSStyleDeclaration);
+  let editor!: PromptEditorHandle;
   render(() => (
     <PromptInput
+      inputRef={(handle) => {
+        editor = handle;
+      }}
       value=""
       disabled={false}
       onInput={() => {}}
@@ -72,7 +82,7 @@ it("includes textarea padding and borders outside the ten text lines", () => {
     get: () => 248,
   });
 
-  fireEvent.input(input, { target: { value: "twelve visual lines" } });
+  editor.replaceText(0, editor.value.length, "twelve visual lines");
 
   expect(input.style.height).toBe("210px");
 });
@@ -97,7 +107,7 @@ it("keeps text paste native and ignores an accompanying image", () => {
     },
   });
 
-  expect(accepted).toBe(true);
+  expect(accepted).toBe(false);
   expect(onPasteImage).not.toHaveBeenCalled();
 });
 
@@ -157,18 +167,25 @@ const commands = [
 function autocomplete(initial = "") {
   const [value, setValue] = createSignal(initial);
   const [available, setAvailable] = createSignal(commands);
+  const [tokens, setTokens] = createSignal<CommandToken[]>([]);
   const [selectedCommand, setSelectedCommand] = createSignal<string>();
   const [scope, setScope] = createSignal("first");
   const onSubmit = vi.fn();
+  let editor!: PromptEditorHandle;
   render(() => (
     <>
       <PromptInput
+        inputRef={(handle) => {
+          editor = handle;
+        }}
         value={value()}
         commands={available()}
         selectedCommand={selectedCommand()}
+        commandTokens={tokens()}
         focusScope={scope()}
         disabled={false}
-        onInput={(text, command) => {
+        onInput={(text, command, _mentions, commands) => {
+          setTokens(commands ?? []);
           setValue(text);
           setSelectedCommand(command);
         }}
@@ -179,14 +196,12 @@ function autocomplete(initial = "") {
       </button>
     </>
   ));
-  const input = screen.getByRole("combobox") as HTMLTextAreaElement;
+  const input = screen.getByRole("combobox") as HTMLElement;
   input.focus();
   const edit = (text: string, cursor = text.length) => {
-    fireEvent.input(input, {
-      target: { value: text, selectionStart: cursor, selectionEnd: cursor },
-    });
+    editor.replaceText(0, editor.value.length, text, cursor);
   };
-  return { input, edit, value, setAvailable, setScope, onSubmit };
+  return { input, editor, edit, value, setAvailable, setScope, onSubmit };
 }
 
 it("opens all commands and completes with Enter before a separate submission", () => {
@@ -203,7 +218,7 @@ it("opens all commands and completes with Enter before a separate submission", (
   expect(value()).toBe("/review ");
   expect(screen.queryByRole("listbox")).toBeNull();
   expect(screen.queryByText("Files to review")).toBeNull();
-  expect(input.placeholder).toBe("Files to review");
+  expect(input.dataset.placeholder).toBe("Files to review");
   expect(input.hasAttribute("aria-describedby")).toBe(false);
   expect(screen.queryByRole("button", { name: "review 명령 제거" })).toBeNull();
   expect(document.activeElement).toBe(input);
@@ -224,17 +239,17 @@ it("uses Tab and candidate clicks to replace only the name", () => {
 });
 
 it("dismisses until the name is edited and keeps ordinary cursor movements closed", () => {
-  const { input, edit } = autocomplete();
+  const { input, editor, edit } = autocomplete();
   edit("/");
   fireEvent.keyDown(input, { key: "Escape" });
   fireEvent.click(input);
   expect(screen.queryByRole("listbox")).toBeNull();
   edit("/r");
   expect(screen.getByRole("option").textContent).toContain("/review");
-  input.setSelectionRange(0, 0);
+  editor.setSelectionRange(0, 0);
   fireEvent.select(input);
   expect(screen.queryByRole("listbox")).toBeNull();
-  input.setSelectionRange(2, 2);
+  editor.setSelectionRange(2, 2);
   fireEvent.select(input);
   expect(screen.queryByRole("listbox")).toBeNull();
   edit("/re");
@@ -273,7 +288,7 @@ it("preserves the highlighted command on updates and resets when it disappears",
   expect(value()).toBe("/compact ");
 });
 
-it("suppresses selection and submission during IME composition and preserves Shift+Enter", () => {
+it("suppresses selection and submission during IME composition and preserves Shift+Enter", async () => {
   const { input, edit, value, onSubmit } = autocomplete();
   edit("/r");
   fireEvent.compositionStart(input);
@@ -281,12 +296,13 @@ it("suppresses selection and submission during IME composition and preserves Shi
   expect(onSubmit).not.toHaveBeenCalled();
   expect(value()).toBe("/r");
   fireEvent.compositionEnd(input);
+  await Promise.resolve();
   expect(fireEvent.keyDown(input, { key: "Enter", shiftKey: true })).toBe(true);
   expect(onSubmit).not.toHaveBeenCalled();
 });
 
 it("completes at any slash while preserving surrounding text and the caret", () => {
-  const { input, edit, value } = autocomplete();
+  const { input, editor, edit, value } = autocomplete();
   for (const prefix of [
     "text ",
     " ",
@@ -300,38 +316,38 @@ it("completes at any slash while preserving surrounding text and the caret", () 
     expect(screen.getByRole("option").textContent).toContain("/review");
     fireEvent.keyDown(input, { key: "Tab" });
     expect(value()).toBe(`${prefix}/review tail\nlast`);
-    expect(input.value).toBe(value());
-    expect(input.selectionStart).toBe(prefix.length + 7);
-    expect(
-      screen.queryByRole("button", { name: "review 명령 편집" }),
-    ).toBeNull();
+    expect(editor.value).toBe(value());
+    expect(editor.selectionStart).toBe(prefix.length + 7);
+    const chip = input.querySelector("[data-command]");
+    expect(chip?.textContent).toBe("review");
+    expect(chip?.classList).toContain("text-command");
   }
 });
 
 it("completes the slash at the caret rather than another slash", () => {
-  const { input, edit, value } = autocomplete();
+  const { editor, edit, value } = autocomplete();
   edit("/compact\n/rev/path", 13);
   fireEvent.click(screen.getByRole("option", { name: /review/ }));
   expect(value()).toBe("/compact\n/review/path");
-  expect(input.selectionStart).toBe(16);
+  expect(editor.selectionStart).toBe(16);
 });
 
 it("completes inside the body while preserving an existing command token", async () => {
-  const { input, value } = autocomplete();
+  const { input, editor, value } = autocomplete();
   await userEvent.type(input, "/comp{Tab}first");
   await userEvent.keyboard("{Shift>}{Enter}{/Shift}/rev");
   expect(screen.getByRole("option", { name: /review/ })).toBeTruthy();
   await userEvent.keyboard("{Enter}");
   expect(value()).toBe("/compact first\n/review ");
-  expect(input.value).toBe("first\n/review ");
-  expect(input.selectionStart).toBe(input.value.length);
+  expect(editor.value).toBe("first\n/review ");
+  expect(editor.selectionStart).toBe(editor.value.length);
   expect(
     screen.getByRole("button", { name: "compact 명령 편집" }),
   ).toBeTruthy();
-  input.setSelectionRange(0, input.value.length);
+  editor.setSelectionRange(0, editor.value.length);
   await userEvent.keyboard("/rev{Tab}");
   expect(value()).toBe("/compact /review ");
-  expect(input.value).toBe("/review ");
+  expect(editor.value).toBe("/review ");
 });
 
 it("does not open after whitespace outside the command name", () => {
@@ -353,7 +369,7 @@ it("closes on thread switches and directly submits without applying the candidat
 });
 
 it("supports native typing, repeated selection keys and returning from arguments", async () => {
-  const { input, value, onSubmit } = autocomplete();
+  const { input, editor, value, onSubmit } = autocomplete();
   await userEvent.type(input, "/rev");
   expect(screen.getByRole("option").textContent).toContain("/review");
   await userEvent.keyboard("{Tab}");
@@ -367,21 +383,21 @@ it("supports native typing, repeated selection keys and returning from arguments
   await userEvent.click(
     screen.getByRole("button", { name: "review 명령 편집" }),
   );
-  input.setSelectionRange(4, 4);
+  editor.setSelectionRange(4, 4);
   fireEvent.select(input);
   await userEvent.keyboard("{Backspace}");
   expect(value()).toBe("/reiew src/file.ts");
-  expect(input.selectionStart).toBe(3);
+  expect(editor.selectionStart).toBe(3);
   expect(screen.getByRole("listbox")).toBeTruthy();
 });
 
 it("dismisses on an outside pointer interaction and keeps focus during candidate clicks", async () => {
-  const { input, value } = autocomplete();
+  const { input, editor, value } = autocomplete();
   await userEvent.type(input, "/");
   await userEvent.click(screen.getByRole("option", { name: /review/ }));
   expect(value()).toBe("/review ");
   expect(document.activeElement).toBe(input);
-  input.setSelectionRange(0, 0);
+  editor.setSelectionRange(0, 0);
   fireEvent.keyDown(input, { key: "Backspace" });
   await userEvent.type(input, "/");
   await userEvent.click(screen.getByRole("button", { name: "Send directly" }));
@@ -391,46 +407,99 @@ it("dismisses on an outside pointer interaction and keeps focus during candidate
 });
 
 it("shows an autocomplete selection as a blue token without a slash and edits its arguments", async () => {
-  const { input, value } = autocomplete();
+  const { input, editor, value } = autocomplete();
   await userEvent.type(input, "/rev{Tab}src");
   const token = screen.getByRole("button", { name: "review 명령 편집" });
   expect(token.textContent).toBe("review");
   expect(token.parentElement?.classList).toContain("text-command");
-  expect(input.value).toBe("src");
+  expect(editor.value).toBe("src");
   expect(value()).toBe("/review src");
   await userEvent.type(input, " extra");
-  expect(input.value).toBe("src extra");
+  expect(editor.value).toBe("src extra");
   expect(value()).toBe("/review src extra");
-  input.setSelectionRange(0, 0);
+  editor.setSelectionRange(0, 0);
   fireEvent.keyDown(input, { key: "Backspace" });
-  expect(input.value).toBe("src extra");
+  expect(editor.value).toBe("src extra");
   expect(value()).toBe("src extra");
   expect(document.activeElement).toBe(input);
 });
 
 it("removes the token with Backspace at the start and keeps the rest of the message", async () => {
-  const { input, value } = autocomplete();
+  const { input, editor, value } = autocomplete();
   await userEvent.type(input, "/rev{Enter}files");
-  input.setSelectionRange(0, 0);
+  editor.setSelectionRange(0, 0);
   fireEvent.keyDown(input, { key: "Backspace" });
   expect(value()).toBe("files");
-  expect(input.selectionStart).toBe(0);
+  expect(editor.selectionStart).toBe(0);
   expect(screen.queryByRole("button", { name: "review 명령 편집" })).toBeNull();
 });
 
 it("keeps manually typed commands as plain text and preserves Codex skill prefixes in tokens", async () => {
-  const { input, value, setAvailable } = autocomplete();
+  const { input, editor, value, setAvailable } = autocomplete();
   setAvailable([{ name: "$review", description: "Review", inputHint: null }]);
   await userEvent.type(input, "/$review ");
   expect(
     screen.queryByRole("button", { name: "$review 명령 편집" }),
   ).toBeNull();
-  expect(input.value).toBe("/$review ");
+  expect(editor.value).toBe("/$review ");
   await userEvent.clear(input);
   await userEvent.type(input, "/$rev{Tab}");
   expect(
     screen.getByRole("button", { name: "$review 명령 편집" }).textContent,
   ).toBe("$review");
   expect(value()).toBe("/$review ");
-  expect(input.value).toBe("");
+  expect(editor.value).toBe("");
+});
+
+it("keeps multiple inline command chips through edits, deletion and undo", () => {
+  const { input, editor, edit, value } = autocomplete();
+  edit("text /rev");
+  fireEvent.keyDown(input, { key: "Tab" });
+  editor.replaceText(editor.value.length, editor.value.length, "/comp");
+  fireEvent.keyDown(input, { key: "Enter" });
+  expect(value()).toBe("text /review /compact ");
+  expect(input.querySelectorAll("[data-command]")).toHaveLength(2);
+  editor.replaceText(0, 0, "prefix ");
+  expect(input.querySelectorAll("[data-command]")).toHaveLength(2);
+  editor.setSelectionRange(19, 19);
+  fireEvent.keyDown(input, { key: "Backspace" });
+  expect(value()).toBe("prefix text  /compact ");
+  expect(input.querySelectorAll("[data-command]")).toHaveLength(1);
+  fireEvent.keyDown(input, { key: "z", ctrlKey: true });
+  expect(value()).toBe("prefix text /review /compact ");
+  expect(input.querySelectorAll("[data-command]")).toHaveLength(2);
+});
+
+it("edits an inline chip on click and can complete it again", () => {
+  const { input, editor, edit, value } = autocomplete();
+  edit("text /rev tail", 9);
+  fireEvent.keyDown(input, { key: "Tab" });
+  const chip = input.querySelector("[data-command]");
+  expect(chip).toBeTruthy();
+  fireEvent.click(chip as Element);
+  expect(input.querySelector("[data-command]")).toBeNull();
+  expect(editor.selectionStart).toBe(12);
+  expect(screen.getByRole("option", { name: /review/ })).toBeTruthy();
+  fireEvent.keyDown(input, { key: "Tab" });
+  expect(value()).toBe("text /review tail");
+  expect(input.querySelector("[data-command]")?.textContent).toBe("review");
+});
+
+it("copies inline command text with slashes and retains chips when pasted internally", () => {
+  const { input, editor, edit, value } = autocomplete();
+  edit("text /rev");
+  fireEvent.keyDown(input, { key: "Tab" });
+  editor.setSelectionRange(0, editor.value.length);
+  const formats = new Map<string, string>();
+  const clipboardData = {
+    files: [],
+    getData: (type: string) => formats.get(type) ?? "",
+    setData: (type: string, data: string) => formats.set(type, data),
+  };
+  fireEvent.copy(input, { clipboardData });
+  expect(formats.get("text/plain")).toBe("text /review ");
+  editor.setSelectionRange(editor.value.length, editor.value.length);
+  fireEvent.paste(input, { clipboardData });
+  expect(value()).toBe("text /review text /review ");
+  expect(input.querySelectorAll("[data-command]")).toHaveLength(2);
 });

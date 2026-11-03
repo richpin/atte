@@ -24,6 +24,8 @@ pub(crate) struct FileSelectionError {
 #[derive(Debug, Deserialize)]
 pub(crate) struct SubmittedInput {
     pub(crate) text: String,
+    #[serde(default)]
+    pub(crate) mentions: Vec<crate::file_mentions::FileMention>,
     pub(crate) attachments: Vec<Uuid>,
 }
 
@@ -143,6 +145,16 @@ impl MediaStore {
         let mime_type = media_type(&name, requested, bytes, declared_mime)
             .ok_or_else(|| ThreadError::InvalidMessage(invalid_media_message(requested)))?;
         let id = Uuid::new_v4();
+        self.snapshot_bytes(thread, id, bytes)?;
+        Ok(Attachment::media(id, name, requested, mime_type))
+    }
+
+    pub(crate) fn snapshot_bytes(
+        &self,
+        thread: Uuid,
+        id: Uuid,
+        bytes: &[u8],
+    ) -> Result<(), ThreadError> {
         let directory = self.thread_directory(thread);
         std::fs::create_dir_all(&directory).map_err(|_| snapshot_unavailable())?;
         let temporary = directory.join(format!(".{id}.tmp"));
@@ -157,7 +169,7 @@ impl MediaStore {
             .lock()
             .map_err(|_| snapshot_unavailable())?
             .insert((thread, id));
-        Ok(Attachment::media(id, name, requested, mime_type))
+        Ok(())
     }
 
     pub(crate) fn read(&self, thread: Uuid, attachment: Uuid) -> Result<Vec<u8>, ThreadError> {
@@ -396,6 +408,7 @@ mod tests {
         let thread = Uuid::new_v4();
         selected.remember("main", thread, &selection).unwrap();
         let submitted = SubmittedInput {
+            mentions: Vec::new(),
             text: "read this".into(),
             attachments: vec![selection.attachments[0].id],
         };
@@ -409,6 +422,7 @@ mod tests {
     fn rejects_an_attachment_id_that_was_not_issued() {
         let selected = SelectedFiles::default();
         let submitted = SubmittedInput {
+            mentions: Vec::new(),
             text: String::new(),
             attachments: vec![Uuid::new_v4()],
         };
@@ -429,6 +443,7 @@ mod tests {
         selected.remember("main", thread, &selection).unwrap();
         std::fs::remove_file(file).unwrap();
         let submitted = SubmittedInput {
+            mentions: Vec::new(),
             text: String::new(),
             attachments: vec![selection.attachments[0].id],
         };
@@ -451,6 +466,7 @@ mod tests {
         selected.forget("main", &[selection.attachments[0].id]);
 
         let submitted = SubmittedInput {
+            mentions: Vec::new(),
             text: String::new(),
             attachments: vec![selection.attachments[0].id],
         };
@@ -473,6 +489,7 @@ mod tests {
         selected.forget_owner("main");
 
         let submitted = SubmittedInput {
+            mentions: Vec::new(),
             text: String::new(),
             attachments: vec![selection.attachments[0].id],
         };

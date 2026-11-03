@@ -571,7 +571,7 @@ it("starts on new thread and preserves a thread draft across that navigation", a
   ).toBeTruthy();
   await userEvent.click(screen.getByRole("button", { name: saved.title }));
   expect(await screen.findByRole("textbox")).toHaveProperty(
-    "value",
+    "textContent",
     "preserved draft",
   );
 });
@@ -1238,8 +1238,9 @@ it("presents agent configuration and reconciles it from the thread subscription"
     await screen.findByRole("button", { name: "Model Model B" }),
   ).toBeTruthy();
   expect(
-    (screen.getByRole("textbox", { name: "메시지" }) as HTMLTextAreaElement)
-      .disabled,
+    screen
+      .getByRole("textbox", { name: "메시지" })
+      .getAttribute("aria-disabled") === "true",
   ).toBe(false);
   await userEvent.click(
     screen.getByRole("switch", { name: "Planning mode: 켜짐" }),
@@ -1728,7 +1729,7 @@ it("preserves the selected thread and draft when deleting another thread", async
     screen.getByRole("heading", { name: "계속 작업", hidden: true }),
   ).toBeTruthy();
   expect(screen.getByRole("textbox", { hidden: true })).toHaveProperty(
-    "value",
+    "textContent",
     "유지할 입력",
   );
 });
@@ -1876,7 +1877,10 @@ it("loads selected history once and keeps newer list metadata when an older thre
   expect(screen.getByRole("heading", { name: "복원한 제목" })).toBeTruthy();
   await userEvent.type(screen.getByRole("textbox"), "작성 중인 질문");
   await userEvent.click(screen.getByRole("button", { name: "복원한 제목" }));
-  expect(screen.getByRole("textbox")).toHaveProperty("value", "작성 중인 질문");
+  expect(screen.getByRole("textbox")).toHaveProperty(
+    "textContent",
+    "작성 중인 질문",
+  );
   expect(
     vi
       .mocked(invoke)
@@ -1998,9 +2002,9 @@ it("automatically connects a new thread and disables sending while connecting", 
   });
   expect(screen.queryByRole("button", { name: "에이전트 연결" })).toBeNull();
   expect(screen.queryByRole("button", { name: "다시 연결" })).toBeNull();
-  expect((screen.getByRole("textbox") as HTMLTextAreaElement).disabled).toBe(
-    true,
-  );
+  expect(
+    screen.getByRole("textbox").getAttribute("aria-disabled") === "true",
+  ).toBe(true);
   expect(
     (screen.getByRole("button", { name: "전송" }) as HTMLButtonElement)
       .disabled,
@@ -2399,7 +2403,7 @@ it.each(["escape", "close", "outside"] as const)(
         ),
     ).toBe(false);
     expect(screen.getByRole("textbox", { hidden: true })).toHaveProperty(
-      "value",
+      "textContent",
       "keep after cancel",
     );
     await userEvent.click(screen.getByRole("button", { name: "로그인 취소" }));
@@ -2455,7 +2459,7 @@ it("shows login failure once in the dialog and retries discovery into an empty s
   ).toBeTruthy();
   await userEvent.keyboard("{Escape}");
   expect(screen.getByRole("textbox", { hidden: true })).toHaveProperty(
-    "value",
+    "textContent",
     "keep after failure",
   );
 });
@@ -2492,7 +2496,7 @@ it("keeps successful login distinct from reconnect failure and retains recovery 
   expect(screen.queryByRole("button", { name: "다시 시도" })).toBeNull();
   await userEvent.keyboard("{Escape}");
   expect(screen.getByRole("textbox", { hidden: true })).toHaveProperty(
-    "value",
+    "textContent",
     "recover this draft",
   );
   expect(screen.getByRole("button", { name: "다시 연결" })).toHaveProperty(
@@ -2530,7 +2534,7 @@ it("shows reconnect command failure without turning successful sign-in into a lo
   expect(screen.queryByRole("button", { name: "다시 시도" })).toBeNull();
   await userEvent.keyboard("{Escape}");
   expect(screen.getByRole("textbox", { hidden: true })).toHaveProperty(
-    "value",
+    "textContent",
     "keep after command failure",
   );
   await userEvent.click(screen.getByRole("button", { name: "다시 연결" }));
@@ -2543,7 +2547,7 @@ it("shows reconnect command failure without turning successful sign-in into a lo
   });
   await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
   expect(await screen.findByRole("textbox")).toHaveProperty(
-    "value",
+    "textContent",
     "keep after command failure",
   );
   await waitFor(() =>
@@ -2855,7 +2859,7 @@ it("reconnects the still-selected origin once without sending preserved input", 
   receive({ ...ready, queuedMessages: failed.queuedMessages });
   await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
   expect(await screen.findByRole("textbox")).toHaveProperty(
-    "value",
+    "textContent",
     "keep this draft",
   );
   expect(screen.getByText("wait for me")).toBeTruthy();
@@ -3207,7 +3211,7 @@ it("sends with Enter, inserts a newline with Shift+Enter, and preserves IME comp
   fireEvent.keyDown(input, { key: "Enter", repeat: true });
   await userEvent.keyboard("{Shift>}{Enter}{/Shift}");
   await userEvent.type(input, "둘째 줄");
-  expect(input).toHaveProperty("value", "첫 줄\n둘째 줄");
+  expect(input).toHaveProperty("textContent", "첫 줄둘째 줄");
   expect(
     requests.mock.calls.filter(([command]) => command === "send_message"),
   ).toHaveLength(0);
@@ -3216,7 +3220,7 @@ it("sends with Enter, inserts a newline with Shift+Enter, and preserves IME comp
     id: "draft-1",
     input: { text: "첫 줄\n둘째 줄", attachments: [] },
   });
-  await waitFor(() => expect(input).toHaveProperty("value", ""));
+  await waitFor(() => expect(input).toHaveProperty("textContent", ""));
   await userEvent.keyboard("{Enter}");
   expect(
     requests.mock.calls.filter(([command]) => command === "send_message"),
@@ -3447,9 +3451,7 @@ it("keeps the message on send failure and displays permission cancellation", asy
   expect((await screen.findByRole("alert")).textContent).toContain(
     "응답이 완료된",
   );
-  expect((screen.getByRole("textbox") as HTMLTextAreaElement).value).toBe(
-    "keep this",
-  );
+  expect(screen.getByRole("textbox").textContent).toBe("keep this");
   receiveFailure({
     ...ready,
     notice: "승인 UI가 아직 지원되지 않아 도구 실행 요청을 취소했습니다.",
@@ -4182,7 +4184,9 @@ it("keeps an existing thread after logout and follows a later authentication-req
     await screen.findByRole("button", { name: "Existing thread" }),
   );
   expect(screen.getByText("Preserved response")).toBeTruthy();
-  expect(screen.getByRole("textbox")).toHaveProperty("disabled", false);
+  expect(screen.getByRole("textbox").getAttribute("aria-disabled")).toBe(
+    "false",
+  );
 
   receive({
     ...ready,
@@ -4289,7 +4293,9 @@ it("keeps thread content after agent removal and offers setup and explicit retry
   expect(
     screen.getByRole("button", { name: "설치·인증 관리 열기" }),
   ).toBeTruthy();
-  expect(screen.getByRole("textbox")).toHaveProperty("disabled", true);
+  expect(screen.getByRole("textbox").getAttribute("aria-disabled")).toBe(
+    "true",
+  );
 });
 
 it("shows agent choices instead of the composer and restores the draft after one decision", async () => {
@@ -4356,7 +4362,7 @@ it("shows agent choices instead of the composer and restores the draft after one
   ).toHaveLength(1);
   resolve({ ...ready, status: "running", turns: [turn] });
   expect(await screen.findByRole("textbox")).toHaveProperty(
-    "value",
+    "textContent",
     "keep this draft",
   );
   await waitFor(() =>
@@ -4554,7 +4560,7 @@ it("loads centrally during manual reconnection and restores history and the draf
   receive({ ...saved, interrupted: true });
   expect(await screen.findByText("Previous answer")).toBeTruthy();
   expect(await screen.findByRole("textbox")).toHaveProperty(
-    "value",
+    "textContent",
     "preserve this draft",
   );
   expect(screen.queryByText(/이전 작업이 중단/)).toBeNull();
@@ -5234,7 +5240,7 @@ it("completes a subscribed slash command and preserves it after a failed send", 
   await startNewThreadWithAgent();
   const input = await screen.findByRole("combobox", { name: "메시지" });
   await userEvent.type(input, "/rev{Enter}src");
-  expect(input).toHaveProperty("value", "src");
+  expect(input).toHaveProperty("textContent", "src");
   expect(screen.getByRole("button", { name: "review 명령 편집" })).toBeTruthy();
   expect(invoke).not.toHaveBeenCalledWith("send_message", expect.anything());
   await userEvent.click(screen.getByRole("button", { name: "전송" }));
@@ -5245,7 +5251,7 @@ it("completes a subscribed slash command and preserves it after a failed send", 
   expect((await screen.findByRole("alert")).textContent).toContain(
     "Send failed",
   );
-  expect(input).toHaveProperty("value", "src");
+  expect(input).toHaveProperty("textContent", "src");
   expect(screen.getByRole("button", { name: "review 명령 편집" })).toBeTruthy();
 });
 

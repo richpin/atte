@@ -38,6 +38,8 @@ export function ThreadPage(props: {
     connecting,
     draft,
     draftCommand,
+    draftMentions,
+    draftCommandTokens,
     draftAttachments,
     attachmentErrors,
     setDraft,
@@ -76,7 +78,7 @@ export function ThreadPage(props: {
     completedByAgent: {} as Record<string, number | undefined>,
   });
   const [signInThread, setSignInThread] = createSignal<string>();
-  let promptInput: HTMLTextAreaElement | undefined;
+  let promptInput: { focus: () => void } | undefined;
   let returnToPrompt = false;
   let dialogOrigin: string | undefined;
   const signInOpen = () =>
@@ -324,6 +326,8 @@ export function ThreadPage(props: {
                     thread={currentThread()}
                     draft={draft()}
                     draftCommand={draftCommand()}
+                    draftMentions={draftMentions()}
+                    draftCommandTokens={draftCommandTokens()}
                     draftAttachments={draftAttachments()}
                     attachmentErrors={attachmentErrors()}
                     answerPending={answerPending()}

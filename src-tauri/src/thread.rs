@@ -339,6 +339,8 @@ impl UserInput {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Attachment {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resource: Option<crate::file_mentions::FileResource>,
     pub id: Uuid,
     pub name: String,
     #[serde(default)]
@@ -350,12 +352,17 @@ pub struct Attachment {
 }
 
 impl Attachment {
+    pub(crate) fn has_snapshot(&self) -> bool {
+        self.kind != AttachmentKind::File || self.resource.as_ref().is_some_and(|r| r.embedded)
+    }
+
     /// Creates a linked-file attachment from its display name and URI.
     pub fn file(id: Uuid, name: impl Into<String>, uri: impl Into<String>) -> Self {
         Self {
             id,
             name: name.into(),
             kind: AttachmentKind::File,
+            resource: None,
             uri: Some(uri.into()),
             mime_type: None,
         }
@@ -372,6 +379,7 @@ impl Attachment {
             id,
             name: name.into(),
             kind: kind.into(),
+            resource: None,
             uri: None,
             mime_type: Some(mime_type.into()),
         }
@@ -411,6 +419,8 @@ impl From<MediaKind> for AttachmentKind {
 pub struct PromptCapabilities {
     pub image: bool,
     pub audio: bool,
+    #[serde(default)]
+    pub embedded_context: bool,
 }
 
 /// A queued input blocks later input after a delivery failure.
@@ -1945,7 +1955,7 @@ impl Threads {
         let durable_media = input
             .attachments
             .iter()
-            .any(|attachment| attachment.kind != AttachmentKind::File)
+            .any(|attachment| attachment.has_snapshot())
             .then(|| QueuedMessage {
                 id: Uuid::new_v4(),
                 input: input.clone(),
@@ -2509,7 +2519,7 @@ fn not_found() -> ThreadError {
 fn media_attachment_ids(attachments: &[Attachment]) -> impl Iterator<Item = Uuid> + '_ {
     attachments
         .iter()
-        .filter(|attachment| attachment.kind != AttachmentKind::File)
+        .filter(|attachment| attachment.has_snapshot())
         .map(|attachment| attachment.id)
 }
 
@@ -3128,6 +3138,12 @@ impl RuntimeUpdates {
             .is_ok_and(|state| state.generation == self.generation)
     }
 
+    pub(crate) fn supports_embedded_context(&self) -> bool {
+        self.state.lock().is_ok_and(|state| {
+            state.generation == self.generation && state.thread.prompt_capabilities.embedded_context
+        })
+    }
+
     pub fn media_bytes(&self, attachment: Uuid) -> Result<Vec<u8>, ThreadError> {
         let state = self.state.lock().map_err(|_| unavailable())?;
         if state.generation != self.generation {
@@ -3144,7 +3160,7 @@ impl RuntimeUpdates {
         if !input
             .attachments
             .iter()
-            .any(|attachment| attachment.kind != AttachmentKind::File)
+            .any(|attachment| attachment.has_snapshot())
         {
             return;
         }

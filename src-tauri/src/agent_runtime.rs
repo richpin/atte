@@ -714,6 +714,7 @@ async fn run_session(
         crate::thread::PromptCapabilities {
             image: capabilities.prompt_capabilities.image,
             audio: capabilities.prompt_capabilities.audio,
+            embedded_context: capabilities.prompt_capabilities.embedded_context,
         },
     );
     loop {
@@ -829,7 +830,48 @@ fn prompt_content(
     if !input.body.trim().is_empty() {
         content.push(input.body.clone().into());
     }
+    if let Some(ContentBlock::Text(text)) = content.first_mut() {
+        let mentions: Vec<_> = input
+            .attachments
+            .iter()
+            .filter(|a| a.resource.is_some())
+            .cloned()
+            .map(|mut a| {
+                if let Some(r) = &mut a.resource {
+                    r.embedded = false;
+                }
+                a
+            })
+            .collect();
+        if !mentions.is_empty() {
+            let mut meta = text.meta.take().unwrap_or_default();
+            meta.insert(
+                "atte/resources".into(),
+                serde_json::to_value(mentions).map_err(|_| PromptFailure::Request(None))?,
+            );
+            text.meta = Some(meta);
+        }
+    }
     for attachment in &input.attachments {
+        if let Some(resource) = &attachment.resource {
+            if resource.embedded && updates.supports_embedded_context() {
+                if let Ok(bytes) = updates.media_bytes(attachment.id) {
+                    let uri = attachment
+                        .uri
+                        .as_deref()
+                        .ok_or(PromptFailure::Request(None))?;
+                    let value = if resource.text {
+                        serde_json::json!({"type":"resource", "resource":{"uri":uri,"mimeType":attachment.mime_type,"text":String::from_utf8(bytes).map_err(|_| PromptFailure::Request(None))?}})
+                    } else {
+                        serde_json::json!({"type":"resource", "resource":{"uri":uri,"mimeType":attachment.mime_type,"blob":BASE64.encode(bytes)}})
+                    };
+                    content.push(
+                        serde_json::from_value(value).map_err(|_| PromptFailure::Request(None))?,
+                    );
+                    continue;
+                }
+            }
+        }
         content.push(match attachment.kind {
             AttachmentKind::File => ContentBlock::ResourceLink(ResourceLink::new(
                 attachment.name.clone(),

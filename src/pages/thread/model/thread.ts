@@ -37,10 +37,12 @@ import {
   type WorkingMode,
 } from "../api/threads";
 import { formAnswer, formDefaults } from "./elicitation";
+import type { CommandToken } from "./prompt-document";
 import type {
   Attachment,
   ConnectionFailure,
   ElicitationRequest,
+  FileMention,
   FormValues,
   MediaKind,
   Thread,
@@ -162,7 +164,16 @@ export function createThreadModel(
     Boolean(connectingThreadId()) && connectingThreadId() === thread()?.id;
   const [connectFailed, setConnectFailed] = createSignal(false);
   const [drafts, setDrafts] = createStore<
-    Record<string, { text: string; command?: string } | undefined>
+    Record<
+      string,
+      | {
+          text: string;
+          command?: string;
+          mentions?: FileMention[];
+          commandTokens?: CommandToken[];
+        }
+      | undefined
+    >
   >({});
   const [draftAttachmentState, setDraftAttachmentState] = createStore<
     Record<string, Attachment[] | undefined>
@@ -176,11 +187,28 @@ export function createThreadModel(
     const id = selectedThreadId();
     return id ? drafts[id]?.command : undefined;
   };
-  const setThreadDraft = (id: string, value: string, command?: string) =>
-    setDrafts(id, value ? { text: value, command } : undefined);
-  const setDraft = (value: string, command?: string) => {
+  const draftCommandTokens = () =>
+    drafts[selectedThreadId() ?? ""]?.commandTokens ?? [];
+  const draftMentions = () => drafts[selectedThreadId() ?? ""]?.mentions ?? [];
+  const setThreadDraft = (
+    id: string,
+    value: string,
+    command?: string,
+    mentions: FileMention[] = [],
+    commandTokens: CommandToken[] = [],
+  ) =>
+    setDrafts(
+      id,
+      value ? { text: value, command, mentions, commandTokens } : undefined,
+    );
+  const setDraft = (
+    value: string,
+    command?: string,
+    mentions: FileMention[] = [],
+    commandTokens: CommandToken[] = [],
+  ) => {
     const id = selectedThreadId();
-    if (id) setThreadDraft(id, value, command);
+    if (id) setThreadDraft(id, value, command, mentions, commandTokens);
   };
   const draftAttachments = () => {
     const id = selectedThreadId();
@@ -571,6 +599,7 @@ export function createThreadModel(
     const expectedView = view;
     const current = thread();
     const message = draft();
+    const mentions = draftMentions();
     const attachments = draftAttachments().map((attachment) => ({
       ...attachment,
     }));
@@ -579,7 +608,7 @@ export function createThreadModel(
     setSending(true);
     setError(undefined);
     try {
-      await sendMessage(current.id, { text: message, attachments });
+      await sendMessage(current.id, { text: message, attachments, mentions });
       if (drafts[current.id]?.text === message) setThreadDraft(current.id, "");
       if (
         draftAttachmentState[current.id]?.length === attachments.length &&
@@ -1025,6 +1054,8 @@ export function createThreadModel(
     connectFailed,
     draft,
     draftCommand,
+    draftMentions,
+    draftCommandTokens,
     setDraft,
     draftAttachments,
     attachmentErrors,

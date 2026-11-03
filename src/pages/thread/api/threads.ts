@@ -72,6 +72,7 @@ export function sendMessage(id: string, input: UserInput) {
     id,
     input: {
       text: input.text,
+      ...(input.mentions?.length ? { mentions: input.mentions } : {}),
       attachments: input.attachments.map(({ id }) => id),
     },
   });
@@ -186,4 +187,18 @@ function subscribe<T>(
     disposed = true;
     if (subscription) unsubscribe(subscription);
   };
+}
+
+export function searchMentionFiles(
+  threadId: string,
+  searchId: string,
+  query: string,
+) {
+  return invoke<{ path: string; directory: boolean; symlink: boolean }[]>(
+    "search_workspace_paths",
+    { threadId, searchId, query, respectGitignore: true },
+  );
+}
+export function closeMentionSearch(searchId: string) {
+  return invoke<void>("close_workspace_search", { searchId });
 }

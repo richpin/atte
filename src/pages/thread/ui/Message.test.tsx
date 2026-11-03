@@ -1,4 +1,10 @@
-import { cleanup, fireEvent, render, screen } from "@solidjs/testing-library";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@solidjs/testing-library";
 import { I18nProvider } from "shared/i18n";
 import { createSignal } from "solid-js";
 import { createStore } from "solid-js/store";
@@ -111,6 +117,38 @@ it("renders sent resource links as non-clickable basename chips", () => {
   expect(screen.getByText("diagram.png")).toBeTruthy();
   expect(screen.queryByRole("link")).toBeNull();
   expect(screen.queryByText(/secret/)).toBeNull();
+});
+
+it("shows a Pierre file icon before a sent file mention's basename", async () => {
+  const sent = turn("Review @src/index.ts");
+  sent.attachments = [
+    {
+      id: "resource",
+      name: "index.ts",
+      resource: {
+        path: "src/index.ts",
+        embedded: true,
+        text: true,
+        mentions: [
+          { id: "m1", path: "src/index.ts", start: 7, end: 20, order: 0 },
+        ],
+      },
+    },
+  ];
+  render(() => (
+    <I18nProvider>
+      <Message turns={[sent]} />
+    </I18nProvider>
+  ));
+  const chip = screen
+    .getByText("index.ts")
+    .closest<HTMLElement>("[data-file-mention]");
+  expect(chip?.title).toBe("src/index.ts");
+  await waitFor(() =>
+    expect(chip?.querySelector("svg use")?.getAttribute("href")).toContain(
+      "file-tree-builtin-typescript",
+    ),
+  );
 });
 
 it("renders sent media as basename-only read-only typed chips", () => {

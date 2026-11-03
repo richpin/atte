@@ -1764,3 +1764,26 @@ it("preserves selected command tokens per draft and after failed sends, then cle
   expect(model.draft()).toBe("/review plain text");
   expect(model.draftCommand()).toBeUndefined();
 });
+
+it("preserves inline command chip positions across thread switches and failed sends", async () => {
+  const model = setup();
+  await open(model, "A");
+  const tokens = [{ name: "review", start: 5, end: 12 }];
+  model.setDraft("text /review files", undefined, [], tokens);
+  await open(model, "B");
+  expect(model.draftCommandTokens()).toEqual([]);
+  await open(model, "A");
+  expect(model.draftCommandTokens()).toEqual(tokens);
+  commands.set("send_message", async () => {
+    throw new Error("Try again");
+  });
+  await model.send();
+  expect(model.draftCommandTokens()).toEqual(tokens);
+  commands.set("send_message", async () => {});
+  await model.send();
+  expect(model.draftCommandTokens()).toEqual([]);
+  expect(invoke).toHaveBeenCalledWith("send_message", {
+    id: "A",
+    input: { text: "text /review files", attachments: [] },
+  });
+});

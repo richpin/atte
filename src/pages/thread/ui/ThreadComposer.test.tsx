@@ -287,7 +287,7 @@ it.each<FormField>([
     expect(onSend).not.toHaveBeenCalled();
     setCurrent(readyThread());
     const prompt = screen.getByRole("combobox", { name: "Message" });
-    expect(prompt).toHaveProperty("value", "keep this draft");
+    expect(prompt).toHaveProperty("textContent", "keep this draft");
     expect(screen.getByText("notes.txt")).toBeTruthy();
     expect(screen.queryByRole("region", { name: "Agent question" })).toBeNull();
     prompt.focus();
@@ -475,7 +475,7 @@ it("keeps the selected request through list updates and recovers when requests r
     status: "sessionReady",
   }));
   expect(screen.getByRole("combobox", { name: "Message" })).toHaveProperty(
-    "value",
+    "textContent",
     "keep this draft",
   );
 });

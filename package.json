@@ -45,6 +45,12 @@
     "lucide-solid": "^1.47.0",
     "marked": "^18.0.13",
     "morphdom": "^2.7.8",
+    "prosemirror-commands": "^1.7.2",
+    "prosemirror-history": "^1.5.1",
+    "prosemirror-keymap": "^1.2.3",
+    "prosemirror-model": "^1.25.12",
+    "prosemirror-state": "^1.4.4",
+    "prosemirror-view": "^1.42.9",
     "solid-js": "^1.9.3",
     "tailwind-merge": "^3.7.0"
   },

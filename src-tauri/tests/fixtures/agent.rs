@@ -245,6 +245,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 if let Ok(media) = env::var("MEDIA_CAPABILITIES") {
                     agent_capabilities["promptCapabilities"] = json!({"image": media == "1" || media == "image", "audio": media == "1" || media == "audio"});
                 }
+                if env::var_os("EMBEDDED_CONTEXT").is_some() {
+                    agent_capabilities["promptCapabilities"]["embeddedContext"] = json!(true);
+                }
                 json!({"protocolVersion": if mode == "wrong-version" { 99 } else { 1 }, "agentCapabilities": agent_capabilities, "authMethods": if mode == "future-auth" { json!([{"id":"future-method","name":"Future auth","type":"future_protocol"}]) } else if mode == "key-auth" { json!([{"id": "api-key", "name": "API Key"}]) } else if env::var_os("AUTH_FILE").is_some() { json!([{ "id": "fixture-login", "name": "Fixture login" }, { "id": "fixture-denied", "name": "Denied login" }]) } else { json!([]) }})
             }
             "authenticate" => {
