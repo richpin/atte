@@ -32,7 +32,6 @@ export const ko = {
     commitDescription: "이 작업 폴더의 스테이징된 변경을 커밋합니다.",
     commitTitle: "커밋 제목",
     commitBody: "설명 (선택)",
-    commitStaged: "스테이징된 변경 커밋",
     clean: "작업 폴더에 변경 사항이 없습니다.",
     noCommits: "커밋 없음",
     workingReview: "작업 변경 사항",
@@ -41,7 +40,8 @@ export const ko = {
     allBranches: "모든 브랜치",
     branch: "이력 조회 범위",
     workingBranch: "현재 작업 브랜치",
-    refresh: "Git 상태 새로고침",
+    refresh: "새로고침",
+    refreshState: "Git 상태 새로고침",
     readOnly: "읽기 전용",
     history: "커밋 이력",
     loaded: "{{count}}개 불러옴",
@@ -238,7 +238,6 @@ export const ko = {
     resize: "프로젝트 패널 너비 조절",
     tabs: "프로젝트 탭",
     newTab: "새 탭",
-    newTabTitle: "새 탭 {{number}}",
     closeTab: "{{title}} 닫기",
     newTabDescription: "여기에서 프로젝트를 탐색할 수 있습니다.",
   },
@@ -382,7 +381,7 @@ export const ko = {
     menu: "스레드 메뉴",
     waitingForFirstMessage: "첫 메시지를 기다리고 있어요",
     subscriptionFailed: "스레드 상태를 구독할 수 없습니다.",
-    openAgentManagement: "설치·인증 관리 열기",
+    openAgentManagement: "열기",
     authentication: {
       title: "{{ agent }} 로그인",
       choose: "로그인 방법을 선택하세요.",
@@ -517,7 +516,6 @@ export const ko = {
     uninstallTitle: "{{ name }} 에이전트를 삭제할까요?",
     uninstallDescription:
       "이 에이전트의 모든 연결과 진행 중인 작업을 종료하고 설치 파일을 삭제합니다. 스레드 내용, 작업 폴더와 로그인 정보는 유지됩니다.",
-    confirmUninstall: "삭제 확인",
     email: "이메일",
     plan: "요금제",
     logout: "로그아웃",
@@ -527,7 +525,6 @@ export const ko = {
     logoutTitle: "{{ name }}에서 로그아웃할까요?",
     logoutDescription:
       "기존 스레드와 실행 중인 작업은 에이전트가 달리 알리기 전까지 그대로 유지됩니다.",
-    confirmLogout: "로그아웃 확인",
     logoutFailed: "로그아웃하지 못했습니다. 다시 시도해주세요.",
   },
   backend: {

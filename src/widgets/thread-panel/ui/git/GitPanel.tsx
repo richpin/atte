@@ -354,8 +354,8 @@ export function GitPanel(props: {
                   variant="ghost"
                   size="icon"
                   class="size-8 shrink-0"
-                  aria-label={t("git.refresh")}
-                  title={t("git.refresh")}
+                  aria-label={t("git.refreshState")}
+                  title={t("git.refreshState")}
                   onClick={() => {
                     setRefreshToken((value) => value + 1);
                     void query.refetch();

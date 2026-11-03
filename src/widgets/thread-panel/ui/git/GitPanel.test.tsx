@@ -4,6 +4,7 @@ import {
   render,
   screen,
   waitFor,
+  within,
 } from "@solidjs/testing-library";
 import { QueryClient, QueryClientProvider } from "@tanstack/solid-query";
 import userEvent from "@testing-library/user-event";
@@ -144,7 +145,9 @@ it("shows staged and unstaged entries and commits only the staged index", async 
   fireEvent.input(screen.getByRole("textbox", { name: "커밋 제목" }), {
     target: { value: "feat: add a" },
   });
-  fireEvent.click(screen.getByRole("button", { name: "스테이징된 변경 커밋" }));
+  fireEvent.click(
+    within(screen.getByRole("dialog")).getByRole("button", { name: "커밋" }),
+  );
   await waitFor(() =>
     expect(commitChanges).toHaveBeenCalledWith(
       "git-panel-test",
@@ -202,7 +205,9 @@ it("keeps the commit dialog and draft after a failed commit", async () => {
   fireEvent.input(screen.getByRole("textbox", { name: "커밋 제목" }), {
     target: { value: "fix: preserve draft" },
   });
-  fireEvent.click(screen.getByRole("button", { name: "스테이징된 변경 커밋" }));
+  fireEvent.click(
+    within(screen.getByRole("dialog")).getByRole("button", { name: "커밋" }),
+  );
   await screen.findAllByText("commit hook failed");
   expect(
     (screen.getByRole("textbox", { name: "커밋 제목" }) as HTMLInputElement)

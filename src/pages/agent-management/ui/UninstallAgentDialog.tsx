@@ -33,11 +33,11 @@ export function UninstallAgentDialog(props: {
               {t("common.cancel")}
             </AlertDialog.CloseButton>
             <AlertDialog.CloseButton
-              aria-label={t("agents.confirmUninstall")}
+              aria-label={t("agents.uninstall")}
               class="rounded-lg bg-primary px-4 py-2 text-primary-foreground focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-accent"
               onClick={props.onConfirm}
             >
-              {t("agents.confirmUninstall")}
+              {t("agents.uninstall")}
             </AlertDialog.CloseButton>
           </div>
         </AlertDialog.Content>

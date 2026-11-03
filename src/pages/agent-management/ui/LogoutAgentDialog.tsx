@@ -36,11 +36,11 @@ export function LogoutAgentDialog(props: {
               {t("common.cancel")}
             </AlertDialog.CloseButton>
             <AlertDialog.CloseButton
-              aria-label={t("agents.confirmLogout")}
+              aria-label={t("agents.logout")}
               class="rounded-lg bg-primary px-4 py-2 text-primary-foreground focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-accent"
               onClick={props.onConfirm}
             >
-              {t("agents.confirmLogout")}
+              {t("agents.logout")}
             </AlertDialog.CloseButton>
           </div>
         </AlertDialog.Content>

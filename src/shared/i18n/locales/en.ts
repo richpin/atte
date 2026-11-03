@@ -26,7 +26,6 @@ export const en = {
     commitDescription: "Commit the staged changes in this working folder.",
     commitTitle: "Commit summary",
     commitBody: "Description (optional)",
-    commitStaged: "Commit staged changes",
     clean: "No changes in this working folder.",
     noCommits: "No commits yet",
     workingReview: "Working changes",
@@ -36,7 +35,8 @@ export const en = {
     allBranches: "All branches",
     branch: "History scope",
     workingBranch: "Current working branch",
-    refresh: "Refresh Git state",
+    refresh: "Refresh",
+    refreshState: "Refresh Git state",
     readOnly: "Read-only",
     history: "Commit history",
     loaded: "{{count}} loaded",
@@ -234,7 +234,6 @@ export const en = {
     resize: "Resize project panel",
     tabs: "Project tabs",
     newTab: "New tab",
-    newTabTitle: "New tab {{number}}",
     closeTab: "Close {{title}}",
     newTabDescription: "Explore your project here.",
   },
@@ -377,7 +376,7 @@ export const en = {
     menu: "Thread menu",
     waitingForFirstMessage: "Waiting for your first message",
     subscriptionFailed: "Thread updates are unavailable.",
-    openAgentManagement: "Open installation and authentication",
+    openAgentManagement: "Open",
     authentication: {
       title: "Sign in to {{ agent }}",
       choose: "Choose a sign-in method.",
@@ -513,7 +512,6 @@ export const en = {
     uninstallTitle: "Uninstall {{ name }}?",
     uninstallDescription:
       "This will stop all connections and active tasks for this agent, then delete its installed files. Thread history, working folders, and sign-in information will be kept.",
-    confirmUninstall: "Confirm uninstall",
     email: "Email",
     plan: "Plan",
     logout: "Log out",
@@ -523,7 +521,6 @@ export const en = {
     logoutTitle: "Log out of {{ name }}?",
     logoutDescription:
       "Existing threads and running tasks will remain unchanged until the agent reports otherwise.",
-    confirmLogout: "Confirm logout",
     logoutFailed: "Logout failed. Try again.",
   },
   backend: {

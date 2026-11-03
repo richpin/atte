@@ -247,7 +247,7 @@ export function ThreadPage(props: {
                     class="focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-accent"
                     onClick={props.onManage}
                   >
-                    {t("thread.openAgentManagement")}
+                    {t("thread.manageAgents")}
                   </button>
                 </Show>
                 <Message

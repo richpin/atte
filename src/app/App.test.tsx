@@ -1813,9 +1813,7 @@ it("keeps the saved list accessible without agents and restores on selection onl
   expect(
     (await screen.findByRole("status", { name: "스레드 오류" })).textContent,
   ).toContain("에이전트를 설치한 뒤");
-  await userEvent.click(
-    screen.getByRole("button", { name: "설치·인증 관리 열기" }),
-  );
+  await userEvent.click(screen.getByRole("button", { name: "열기" }));
   await screen.findByRole("heading", { name: "에이전트" });
   expect(
     vi
@@ -4083,7 +4081,7 @@ it("confirms logout, blocks duplicates, preserves failures, and clears only afte
   await userEvent.click(
     await screen.findByRole("button", { name: "Codex 로그아웃" }),
   );
-  await userEvent.click(screen.getByRole("button", { name: "로그아웃 확인" }));
+  await userEvent.click(screen.getByRole("button", { name: "로그아웃" }));
   expect(
     await screen.findByRole("button", { name: "Codex 로그아웃 중" }),
   ).toHaveProperty("disabled", true);
@@ -4096,7 +4094,7 @@ it("confirms logout, blocks duplicates, preserves failures, and clears only afte
   expect(screen.getByText("Pro")).toBeTruthy();
 
   await userEvent.click(screen.getByRole("button", { name: "Codex 로그아웃" }));
-  await userEvent.click(screen.getByRole("button", { name: "로그아웃 확인" }));
+  await userEvent.click(screen.getByRole("button", { name: "로그아웃" }));
   await waitFor(() => {
     expect(screen.queryByText("user@example.com")).toBeNull();
     expect(screen.queryByRole("button", { name: "Codex 로그아웃" })).toBeNull();
@@ -4179,7 +4177,7 @@ it("keeps an existing thread after logout and follows a later authentication-req
   await userEvent.click(
     await screen.findByRole("button", { name: "Codex 로그아웃" }),
   );
-  await userEvent.click(screen.getByRole("button", { name: "로그아웃 확인" }));
+  await userEvent.click(screen.getByRole("button", { name: "로그아웃" }));
   await userEvent.click(
     await screen.findByRole("button", { name: "Existing thread" }),
   );
@@ -4236,7 +4234,7 @@ it("confirms uninstall, supports cancel and retry, and removes the agent from ne
   await userEvent.click(
     await screen.findByRole("button", { name: "New Provider 삭제" }),
   );
-  await userEvent.click(screen.getByRole("button", { name: "삭제 확인" }));
+  await userEvent.click(screen.getByRole("button", { name: "삭제" }));
   expect(await screen.findByRole("alert")).toHaveProperty(
     "textContent",
     "삭제 실패. 다시 시도해주세요.",
@@ -4244,7 +4242,7 @@ it("confirms uninstall, supports cancel and retry, and removes the agent from ne
   await userEvent.click(
     await screen.findByRole("button", { name: "New Provider 삭제" }),
   );
-  await userEvent.click(screen.getByRole("button", { name: "삭제 확인" }));
+  await userEvent.click(screen.getByRole("button", { name: "삭제" }));
   expect(
     await screen.findByRole("button", { name: "New Provider 설치" }),
   ).toBeTruthy();
@@ -4290,9 +4288,7 @@ it("keeps thread content after agent removal and offers setup and explicit retry
       .getByRole("menuitem", { name: "다시 연결" })
       .getAttribute("aria-disabled"),
   ).not.toBe("true");
-  expect(
-    screen.getByRole("button", { name: "설치·인증 관리 열기" }),
-  ).toBeTruthy();
+  expect(screen.getByRole("button", { name: "열기" })).toBeTruthy();
   expect(screen.getByRole("textbox").getAttribute("aria-disabled")).toBe(
     "true",
   );

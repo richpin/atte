@@ -58,7 +58,7 @@ export function CommitDialog(props: {
             disabled={props.disabled || !draftFor(props.root).title.trim()}
             onClick={props.onCommit}
           >
-            {t("git.commitStaged")}
+            {t("git.commit")}
           </Button>
         </DialogFooter>
       </DialogContent>
