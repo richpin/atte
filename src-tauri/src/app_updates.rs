@@ -2,6 +2,8 @@
 use crate::lifecycle::{self, Lifecycle};
 use serde::Serialize;
 use std::time::Duration;
+#[cfg(windows)]
+use tauri::Manager;
 use tauri::{ipc::Channel, AppHandle, State};
 use tauri_plugin_updater::{Update, UpdaterExt};
 use tokio::sync::Mutex;
@@ -13,6 +15,8 @@ pub(crate) struct AppUpdates(Mutex<UpdateState>);
 struct UpdateState {
     pending: Option<Update>,
     installed: bool,
+    #[cfg(windows)]
+    downloaded: Option<Vec<u8>>,
 }
 
 #[derive(Serialize)]
@@ -32,7 +36,7 @@ pub(crate) struct DownloadProgress {
 }
 
 fn configured(app: &AppHandle) -> bool {
-    cfg!(target_os = "macos")
+    cfg!(any(target_os = "macos", windows))
         && !cfg!(debug_assertions)
         && app
             .config()
@@ -97,11 +101,20 @@ pub(crate) async fn install_app_update(
                 )
                 .await
                 .map_err(|error| error.to_string())?;
-            let update = update.clone();
-            tauri::async_runtime::spawn_blocking(move || update.install(bytes))
-                .await
-                .map_err(|error| error.to_string())?
-                .map_err(|error| error.to_string())?;
+            // Windows installation exits the process. Retain verified bytes until
+            // deliberate restart has confirmed dirty files and drained all work.
+            #[cfg(windows)]
+            {
+                state.downloaded = Some(bytes);
+            }
+            #[cfg(not(windows))]
+            {
+                let update = update.clone();
+                tauri::async_runtime::spawn_blocking(move || update.install(bytes))
+                    .await
+                    .map_err(|error| error.to_string())?
+                    .map_err(|error| error.to_string())?;
+            }
             state.installed = true;
             Ok(())
         })
@@ -118,4 +131,23 @@ pub(crate) async fn restart_after_update(
     }
     lifecycle::request_restart(&app);
     Ok(())
+}
+
+/// Called only after lifecycle cleanup; successful Windows installation exits.
+#[cfg(windows)]
+pub(crate) async fn apply_before_restart(app: &AppHandle) -> Result<(), String> {
+    let updates = app.state::<AppUpdates>();
+    let mut state = updates.0.lock().await;
+    let Some(bytes) = state.downloaded.take() else {
+        return Ok(());
+    };
+    let update = state
+        .pending
+        .as_ref()
+        .ok_or("Downloaded update is missing.")?
+        .clone();
+    tauri::async_runtime::spawn_blocking(move || update.install(bytes))
+        .await
+        .map_err(|error| error.to_string())?
+        .map_err(|error| error.to_string())
 }

@@ -20,7 +20,7 @@ pnpm build:windows
 - 앱: `src-tauri/target/x86_64-pc-windows-msvc/release/atte.exe`
 - 설치 파일: `src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/Atte_<version>_x64-setup.exe`
 
-이 명령은 로컬 빌드 전용이다. 코드 서명, updater 서명, 업데이트 manifest 생성과 GitHub Releases 게시는 후속 배포 작업의 범위다.
+이 명령은 로컬 빌드 전용이다. updater 서명·manifest를 포함하는 배포 파일 생성은 [Windows 배포](release-windows.md)의 `pnpm release:windows`를 사용한다. Windows 코드 서명 준비와 GitHub Releases 공개는 별도 수동 절차다.
 
 ## 구현 경계
 
@@ -30,7 +30,7 @@ pnpm build:windows
 
 ## Windows 실제 환경의 후속 검증
 
-이 단계의 산출물은 개발 중인 미서명 빌드다. Windows 인증 터미널, 알림, 외부 앱 연동, WebView2 탐색과 OS 단축키는 구현했으며 동작과 실제 환경 점검 절차는 [Windows 작업 흐름](windows-workflows.md)에 기록한다. 앱 업데이트·배포는 후속 작업에서 다룬다. Windows 앱과 테스트를 실제 실행한 것으로 간주하지 않는다.
+이 단계의 산출물은 개발 중인 미서명 빌드다. Windows 인증 터미널, 알림, 외부 앱 연동, WebView2 탐색과 OS 단축키는 구현했으며 동작과 실제 환경 점검 절차는 [Windows 작업 흐름](windows-workflows.md)에 기록한다. 앱 업데이트·배포 절차는 [Windows 배포](release-windows.md)를 따른다. Windows 앱과 테스트를 실제 실행한 것으로 간주하지 않는다.
 
 실제 환경에서 설치·실행·재시작, Claude/Codex 설치·인증·대화·재개·중지, Job 자손 종료, 공백·한글 Windows 경로, 링크·junction 보호, 파일 이동의 덮어쓰기 거부, Git/worktree와 저장 데이터 유지를 확인한다. macOS에서 Windows 테스트를 실행한 것으로 기록하지 않는다.
 

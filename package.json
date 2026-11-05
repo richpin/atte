@@ -19,7 +19,9 @@
     "check:fix": "biome check --write .",
     "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.node.json",
     "test": "vitest run",
-    "validate": "pnpm check && pnpm check:fsd && pnpm typecheck && pnpm test"
+    "validate": "pnpm check && pnpm check:fsd && pnpm typecheck && pnpm test",
+    "release:windows": "node --experimental-strip-types scripts/release-windows.ts",
+    "release:manifest": "node --experimental-strip-types scripts/release-manifest.ts"
   },
   "license": "MIT",
   "dependencies": {

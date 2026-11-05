@@ -128,7 +128,8 @@ run("tar", ["-czf", archive, "-C", macosDirectory, `${config.productName}.app`],
 run("pnpm", ["tauri", "signer", "sign", "--app-version", version, archive]);
 const updaterSignature = readFileSync(`${archive}.sig`, "utf8").trim();
 const url = `https://github.com/richpin/atte/releases/download/v${version}/${archiveName}`;
-writeFileSync(join(dmgDirectory, "latest.json"), JSON.stringify({
+writeFileSync(join(dmgDirectory, "update-darwin.json"), JSON.stringify({
+  channel: "stable",
   version,
   pub_date: new Date().toISOString(),
   platforms: {
@@ -136,4 +137,4 @@ writeFileSync(join(dmgDirectory, "latest.json"), JSON.stringify({
   },
 }, null, 2) + "\n");
 console.log(`Ready to distribute: ${dmg}`);
-console.log(`Upload ${archive}, ${archive}.sig and ${join(dmgDirectory, "latest.json")} to the same v${version} GitHub Release.`);
+console.log(`macOS fragment: ${join(dmgDirectory, "update-darwin.json")}. Build the matching Windows stable candidate and run pnpm release:manifest to create the combined latest.json. Upload ${archive}, ${archive}.sig and the combined latest.json with both platform artifacts to v${version}.`);

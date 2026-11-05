@@ -122,7 +122,7 @@ export const en = {
     title: "App updates",
     available: "Version {{ version }} is available.",
     latestVersion: "(Latest version: {{ version }})",
-    ready: "Update installed. Restart to use the new version.",
+    ready: "Update ready. Restart to use the new version.",
     check: "Check for updates",
     checking: "Checking…",
     install: "Download and install",

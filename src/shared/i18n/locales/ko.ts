@@ -127,7 +127,7 @@ export const ko = {
     title: "앱 업데이트",
     available: "새 버전 {{ version }}을 사용할 수 있습니다.",
     latestVersion: "(최신 버전: {{ version }})",
-    ready: "업데이트가 설치되었습니다. 재시작하면 적용됩니다.",
+    ready: "업데이트가 준비되었습니다. 재시작하면 적용됩니다.",
     check: "업데이트 확인",
     checking: "확인 중…",
     install: "다운로드 및 설치",

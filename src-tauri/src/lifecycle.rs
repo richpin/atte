@@ -8,7 +8,7 @@ use std::{
     sync::atomic::{AtomicBool, Ordering},
 };
 use tauri::{AppHandle, Emitter, Manager, RunEvent, State};
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", windows))]
 use tauri_plugin_dialog::{DialogExt, MessageDialogKind};
 use tokio_util::{sync::CancellationToken, task::TaskTracker};
 
@@ -144,6 +144,18 @@ fn finish_quit(app: &AppHandle) {
         tokio::join!(lifecycle.operations.wait(), threads.shutdown());
         lifecycle.finished.store(true, Ordering::Release);
         if lifecycle.restart.load(Ordering::Acquire) {
+            #[cfg(windows)]
+            if let Err(error) = crate::app_updates::apply_before_restart(&app).await {
+                // Work has already stopped. Explain the failure before closing;
+                // the original installed app and its saved data remain available.
+                let dialog_app = app.clone();
+                let _ = tauri::async_runtime::spawn_blocking(move || {
+                    dialog_app.dialog().message(format!("업데이트를 설치할 수 없습니다. 앱을 다시 실행한 뒤 재시도하세요: {error}"))
+                        .kind(MessageDialogKind::Error).blocking_show();
+                }).await;
+                app.exit(1);
+                return;
+            }
             app.restart();
         } else {
             app.exit(0);
