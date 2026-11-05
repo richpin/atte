@@ -19,7 +19,6 @@ mod platform;
 mod response_content;
 mod skills;
 pub mod storage;
-#[cfg(target_os = "macos")]
 mod tab_menu;
 pub mod thread;
 mod workspace_files;
@@ -492,7 +491,8 @@ fn unsubscribe_thread(
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let app = tauri::Builder::default();
-    #[cfg(target_os = "macos")]
+    #[cfg(windows)]
+    let app = app.manage(browser::WebTabs::default());
     let app = app
         .menu(tab_menu::menu)
         .on_menu_event(tab_menu::on_menu_event);
@@ -533,6 +533,18 @@ pub fn run() {
                     tokio::time::sleep(std::time::Duration::from_secs(60 * 60)).await;
                 }
             });
+            #[cfg(windows)]
+            if let Some(view) = app.get_webview("main") {
+                let handle = app.handle().clone();
+                view.with_webview(move |platform| {
+                    if let Err(error) =
+                        tab_menu::install_windows_shortcuts(platform, handle.clone())
+                    {
+                        eprintln!("Windows shortcuts unavailable: {error}");
+                        handle.exit(1);
+                    }
+                })?;
+            }
             lifecycle::install(app.handle())?;
             notifications::install(app.handle())?;
             Ok(())
@@ -543,6 +555,11 @@ pub fn run() {
         .manage(workspace_files::WorkspaceFiles::default())
         .manage(lifecycle::Lifecycle::default())
         .on_window_event(|window, event| {
+            #[cfg(windows)]
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                api.prevent_close();
+                lifecycle::request_quit(window.app_handle());
+            }
             #[cfg(target_os = "macos")]
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                 api.prevent_close();

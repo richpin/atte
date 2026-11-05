@@ -55,7 +55,7 @@ export function OpenWorkingFolderMenu(props: { threadId: string | undefined }) {
   }
 
   return (
-    <Show when={/Mac/i.test(navigator.platform)}>
+    <Show when={/Mac|Win/i.test(navigator.platform)}>
       <DropdownMenuSub open={opened()} onOpenChange={setOpened}>
         <DropdownMenuSubTrigger class="gap-2" disabled={!props.threadId}>
           <FolderOpen aria-hidden="true" class="size-4" />

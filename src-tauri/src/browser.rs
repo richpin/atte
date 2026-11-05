@@ -2,6 +2,13 @@
 use serde::{Deserialize, Serialize};
 use tauri::{Emitter, Manager};
 use uuid::Uuid;
+#[cfg(windows)]
+mod windows;
+#[cfg(windows)]
+#[derive(Default)]
+pub(crate) struct WebTabs(
+    std::sync::Mutex<std::collections::HashMap<Uuid, std::sync::Arc<std::sync::atomic::AtomicU64>>>,
+);
 
 fn web_url(value: &str, app_url: Option<&tauri::Url>) -> Result<tauri::Url, String> {
     let url = tauri::Url::parse(value).map_err(|_| "Invalid web address".to_owned())?;
@@ -39,11 +46,19 @@ pub async fn create_web_tab(
     if app.get_webview(&format!("browser-{id}")).is_some() {
         return Err("Web tab already exists".into());
     }
+    #[cfg(windows)]
+    let loading = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
     let navigation_url = dev_url.clone();
     let popup_app = app.clone();
+    // Attach WebView2 handlers before the first real navigation, including fast
+    // localhost/cache hits. The blank child has no application capabilities.
+    #[cfg(windows)]
+    let initial_url = tauri::Url::parse("about:blank").map_err(|error| error.to_string())?;
+    #[cfg(not(windows))]
+    let initial_url = url;
     let builder = tauri::webview::WebviewBuilder::new(
         format!("browser-{id}"),
-        tauri::WebviewUrl::External(url),
+        tauri::WebviewUrl::External(initial_url),
     )
     .on_navigation(move |url| web_url(url.as_str(), navigation_url.as_ref()).is_ok())
     .on_new_window(move |url, _| {
@@ -72,6 +87,32 @@ pub async fn create_web_tab(
     if let Err(error) = view.hide() {
         let _ = view.close();
         return Err(error.to_string());
+    }
+    #[cfg(windows)]
+    {
+        let (send, receive) = tokio::sync::oneshot::channel();
+        let native_loading = loading.clone();
+        let handle = app.clone();
+        view.with_webview(move |platform| {
+            let _ = send.send(windows::install(platform, native_loading, handle));
+        })
+        .map_err(|error| error.to_string())?;
+        if let Err(error) = receive.await.map_err(|_| "Web tab is unavailable")? {
+            let _ = view.close();
+            return Err(error.to_string());
+        }
+        app.state::<WebTabs>()
+            .0
+            .lock()
+            .map_err(|_| "Web tab state unavailable")?
+            .insert(id, loading);
+        if let Err(error) = view.navigate(url) {
+            let _ = view.close();
+            if let Ok(mut tabs) = app.state::<WebTabs>().0.lock() {
+                tabs.remove(&id);
+            }
+            return Err(error.to_string());
+        }
     }
     Ok(())
 }
@@ -103,7 +144,16 @@ pub async fn web_tab_action(
             )?)
             .map_err(|error| error.to_string()),
         "reload" => view.reload().map_err(|error| error.to_string()),
-        "close" => view.close().map_err(|error| error.to_string()),
+        "close" => {
+            view.close().map_err(|error| error.to_string())?;
+            #[cfg(windows)]
+            app.state::<WebTabs>()
+                .0
+                .lock()
+                .map_err(|_| "Web tab state unavailable")?
+                .remove(&id);
+            Ok(())
+        }
         "back" | "forward" => {
             #[cfg(target_os = "macos")]
             {
@@ -121,7 +171,19 @@ pub async fn web_tab_action(
                 })
                 .map_err(|error| error.to_string())
             }
-            #[cfg(not(target_os = "macos"))]
+            #[cfg(windows)]
+            {
+                let (send, receive) = tokio::sync::oneshot::channel();
+                view.with_webview(move |platform| {
+                    let _ = send.send(windows::navigate(platform, &action));
+                })
+                .map_err(|error| error.to_string())?;
+                receive
+                    .await
+                    .map_err(|_| "Web tab is unavailable".to_owned())?
+                    .map_err(|error| error.to_string())
+            }
+            #[cfg(not(any(target_os = "macos", windows)))]
             {
                 Err("Native history navigation currently requires macOS".into())
             }
@@ -130,11 +192,30 @@ pub async fn web_tab_action(
     }
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", windows))]
 #[tauri::command]
 pub async fn web_tab_state(app: tauri::AppHandle, id: Uuid) -> Result<WebTabState, String> {
     let view = tab(&app, id)?;
     let mut state = {
+        #[cfg(windows)]
+        {
+            let (send, receive) = tokio::sync::oneshot::channel();
+            let loading = app
+                .state::<WebTabs>()
+                .0
+                .lock()
+                .map_err(|_| "Web tab state unavailable")?
+                .get(&id)
+                .is_some_and(|value| value.load(std::sync::atomic::Ordering::Acquire) != 0);
+            view.with_webview(move |platform| {
+                let _ = send.send(windows::state(platform, loading));
+            })
+            .map_err(|error| error.to_string())?;
+            receive
+                .await
+                .map_err(|_| "Web tab is unavailable".to_owned())?
+                .map_err(|error| error.to_string())?
+        }
         #[cfg(target_os = "macos")]
         {
             let (send, receive) = tokio::sync::oneshot::channel();
@@ -184,21 +265,21 @@ pub async fn web_tab_state(app: tauri::AppHandle, id: Uuid) -> Result<WebTabStat
     Ok(state)
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(any(target_os = "macos", windows)))]
 #[tauri::command]
 pub async fn web_tab_state(app: tauri::AppHandle, id: Uuid) -> Result<WebTabState, String> {
     tab(&app, id)?;
     Err("Native web tab state is not implemented on this platform".into())
 }
 
-#[cfg(any(target_os = "macos", test))]
+#[cfg(any(target_os = "macos", windows, test))]
 #[derive(Deserialize)]
 struct FaviconMetadata {
     url: String,
     icon: String,
 }
 
-#[cfg(any(target_os = "macos", test))]
+#[cfg(any(target_os = "macos", windows, test))]
 fn favicon_url(value: &str, page_url: &str, app_url: Option<&tauri::Url>) -> Option<String> {
     let metadata: FaviconMetadata = serde_json::from_str(value).ok()?;
     // Discard stale evaluations after navigation and never expose application URLs.

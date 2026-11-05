@@ -7486,3 +7486,31 @@ fn process_alive(pid: u32) -> bool {
     let mut code = 0;
     unsafe { GetExitCodeProcess(handle.as_raw_handle(), &mut code) != 0 && code == 259 }
 }
+
+#[cfg(windows)]
+#[tokio::test]
+async fn windows_terminal_authentication_passes_arguments_and_environment_without_a_shell() {
+    use atte_lib::agent_management::authentication::inspect;
+    let root = tempfile::tempdir().unwrap();
+    let folder = root.path().join("한글 & project");
+    std::fs::create_dir(&folder).unwrap();
+    let login = folder.join("login");
+    let mut agent = mock_agent();
+    agent
+        .env
+        .insert("FIXTURE_MODE".into(), "terminal-auth".into());
+    agent
+        .env
+        .insert("AUTH_FILE".into(), login.to_string_lossy().into_owned());
+    let available = inspect(&agent, &folder, None).await.unwrap();
+    assert!(available.methods[0].supported);
+    assert!(available.methods[0].terminal);
+    let authenticated = inspect(&agent, &folder, Some("terminal-login"))
+        .await
+        .unwrap();
+    assert!(authenticated.authenticated);
+    assert_eq!(
+        std::fs::read_to_string(login).unwrap(),
+        "한글 & % \"quoted\""
+    );
+}

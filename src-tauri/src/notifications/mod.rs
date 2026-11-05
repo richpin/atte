@@ -1,6 +1,12 @@
 //! App-owned desktop notifications; the main webview only reports its current page.
 #[cfg(target_os = "macos")]
 mod macos;
+#[cfg(target_os = "macos")]
+use macos as native;
+#[cfg(windows)]
+mod windows;
+#[cfg(windows)]
+use windows as native;
 mod state;
 
 use crate::thread::Threads;
@@ -66,14 +72,18 @@ pub(crate) fn install(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>>
         }
     };
     app.manage(Notifications {
-        policy: Mutex::new(Policy::new(cfg!(target_os = "macos"), preferences, failure)),
+        policy: Mutex::new(Policy::new(
+            cfg!(any(target_os = "macos", windows)),
+            preferences,
+            failure,
+        )),
         subscribers: Mutex::default(),
-        activity: Arc::new(AtomicBool::new(!cfg!(target_os = "macos"))),
+        activity: Arc::new(AtomicBool::new(!cfg!(any(target_os = "macos", windows)))),
         preference_path: path,
         preference_write: tokio::sync::Mutex::new(()),
     });
-    #[cfg(target_os = "macos")]
-    if let Err(error) = macos::install(app) {
+    #[cfg(any(target_os = "macos", windows))]
+    if let Err(error) = native::install(app) {
         fail(app, Failure::Unavailable, &error);
     }
     let activity = Arc::clone(&app.state::<Notifications>().activity);
@@ -112,7 +122,7 @@ fn update(app: &AppHandle, change: impl FnOnce(&mut Policy) -> Vec<Effect>) {
         }
         effects
     };
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", windows))]
     for effect in effects {
         match effect {
             Effect::Show(notice) => {
@@ -120,15 +130,18 @@ fn update(app: &AppHandle, change: impl FnOnce(&mut Policy) -> Vec<Effect>) {
                     .policy
                     .lock()
                     .is_ok_and(|policy| policy.valid(&notice));
-                if valid && !macos::active(app) {
+                if valid && !native::active(app) {
                     let korean = service.policy.lock().is_ok_and(|policy| policy.korean);
-                    if let Err(error) = macos::show(app, &notice, korean) {
+                    if let Err(error) = native::show(app, &notice, korean) {
                         fail(app, Failure::Delivery, &error);
                     }
                 }
             }
-            Effect::Remove(identifier) => macos::remove(&identifier),
+            Effect::Remove(identifier) => native::remove(&identifier),
             Effect::Badge(count) => {
+                #[cfg(windows)]
+                native::badge(app, count);
+                #[cfg(target_os = "macos")]
                 if let Some(window) = app.get_window("main") {
                     if let Err(error) = window.set_badge_count((count > 0).then_some(count as i64))
                     {
@@ -138,7 +151,7 @@ fn update(app: &AppHandle, change: impl FnOnce(&mut Policy) -> Vec<Effect>) {
             }
         }
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(not(any(target_os = "macos", windows)))]
     let _ = effects;
 }
 
@@ -171,11 +184,11 @@ fn fail(app: &AppHandle, failure: Failure, detail: &str) {
 }
 
 fn current_activity(app: &AppHandle) -> bool {
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", windows))]
     {
-        macos::active(app)
+        native::active(app)
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(not(any(target_os = "macos", windows)))]
     {
         let _ = app;
         true
@@ -202,8 +215,8 @@ pub(crate) async fn shutdown(app: &AppHandle) {
             policy.stop();
             vec![Effect::Badge(0)]
         });
-        #[cfg(target_os = "macos")]
-        macos::clear();
+        #[cfg(any(target_os = "macos", windows))]
+        native::clear();
     })
     .await
     {
@@ -211,7 +224,7 @@ pub(crate) async fn shutdown(app: &AppHandle) {
     }
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", windows))]
 fn clicked(app: &AppHandle, identifier: String) {
     schedule(app, move |app| {
         // A deletion may already be committed while its list event is still queued.
@@ -241,7 +254,7 @@ fn clicked(app: &AppHandle, identifier: String) {
     });
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", windows))]
 fn authorization(app: &AppHandle, status: Authorization) {
     update(app, |policy| {
         policy.snapshot.authorization = status;
@@ -274,11 +287,11 @@ pub(crate) async fn set_notification_context(
             policy.ready = true;
             policy.context(active, thread_id, locale == "ko")
         });
-        #[cfg(target_os = "macos")]
+        #[cfg(any(target_os = "macos", windows))]
         if first || settings_visible {
-            macos::refresh_authorization(app, first);
+            native::refresh_authorization(app, first);
         }
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(not(any(target_os = "macos", windows)))]
         let _ = (first, settings_visible);
     })
     .await
@@ -287,9 +300,9 @@ pub(crate) async fn set_notification_context(
 #[tauri::command]
 pub(crate) async fn request_notification_permission(app: AppHandle) -> Result<(), String> {
     on_main(&app, |app| {
-        #[cfg(target_os = "macos")]
-        macos::refresh_authorization(app, true);
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(any(target_os = "macos", windows))]
+        native::refresh_authorization(app, true);
+        #[cfg(not(any(target_os = "macos", windows)))]
         let _ = app;
     })
     .await
@@ -355,14 +368,14 @@ pub(crate) async fn acknowledge_notification_navigation(
 #[tauri::command]
 pub(crate) async fn open_notification_settings(app: AppHandle) -> Result<(), String> {
     on_main(&app, |app| {
-        #[cfg(target_os = "macos")]
+        #[cfg(any(target_os = "macos", windows))]
         {
-            macos::open_settings(app)
+            native::open_settings(app)
         }
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(not(any(target_os = "macos", windows)))]
         {
             let _ = app;
-            Ok(())
+            Err("Notification settings are unavailable on this platform".into())
         }
     })
     .await?

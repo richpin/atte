@@ -33,6 +33,8 @@ use agent_client_protocol::{
     Agent, ByteStreams, Client, ConnectionTo, ErrorCode,
 };
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
+#[cfg(windows)]
+pub(crate) use process::spawn_console;
 #[cfg(unix)]
 pub(crate) use process::ProcessGroup;
 pub(crate) use process::{spawn as spawn_process, ProcessState};

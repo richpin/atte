@@ -175,7 +175,7 @@ it("opens the first app with the keyboard and reports a missing folder", async (
 });
 
 it("hides the feature on other platforms without querying applications", async () => {
-  vi.spyOn(navigator, "platform", "get").mockReturnValue("Win32");
+  vi.spyOn(navigator, "platform", "get").mockReturnValue("Linux x86_64");
   setup();
   await userEvent.click(screen.getByRole("button", { name: "Thread menu" }));
   expect(screen.queryByRole("menuitem", { name: "Open in" })).toBeNull();
@@ -276,6 +276,32 @@ it("reports an invalid selection from the native picker", async () => {
   await userEvent.click(screen.getByRole("menuitem", { name: "Other…" }));
   expect(await screen.findByRole("alert")).toHaveProperty(
     "textContent",
-    "Choose a valid macOS application (.app).",
+    "Choose a valid application.",
   );
+});
+
+it("opens Windows folders with File Explorer and offers the executable picker", async () => {
+  vi.spyOn(navigator, "platform", "get").mockReturnValue("Win32");
+  invoke.mockImplementation((command: string) =>
+    Promise.resolve(
+      command === "list_working_folder_apps"
+        ? [{ id: "explorer", name: "File Explorer", icon: null }]
+        : undefined,
+    ),
+  );
+  setup();
+  await openSubmenu();
+  await userEvent.click(
+    await screen.findByRole("menuitem", { name: "File Explorer" }),
+  );
+  expect(invoke).toHaveBeenCalledWith("open_working_folder", {
+    threadId: "thread-a",
+    target: "explorer",
+  });
+  await openSubmenu();
+  await userEvent.click(screen.getByRole("menuitem", { name: "Other…" }));
+  expect(invoke).toHaveBeenCalledWith("open_working_folder_with_app_picker", {
+    threadId: "thread-a",
+    dialogTitle: "Choose an application",
+  });
 });

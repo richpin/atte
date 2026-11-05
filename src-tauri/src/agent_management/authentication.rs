@@ -34,7 +34,7 @@ fn supported(method: &AuthMethod, raw: &serde_json::Value) -> bool {
         .map(|value| &value["type"]);
     (matches!(method, AuthMethod::Agent(_))
         && kind.is_some_and(|kind| kind.is_null() || kind.as_str() == Some("agent")))
-        || (cfg!(target_os = "macos")
+        || (cfg!(any(target_os = "macos", windows))
             && matches!(method, AuthMethod::Terminal(_))
             && kind.and_then(serde_json::Value::as_str) == Some("terminal"))
 }
@@ -216,8 +216,9 @@ async fn run(
             ByteStreams::new(stdin.compat_write(), stdout.compat()),
             async |connection: ConnectionTo<Agent>| {
                 let result = async {
-                    let capabilities = ClientCapabilities::new()
-                        .auth(AuthCapabilities::new().terminal(cfg!(target_os = "macos")));
+                    let capabilities = ClientCapabilities::new().auth(
+                        AuthCapabilities::new().terminal(cfg!(any(target_os = "macos", windows))),
+                    );
                     let raw = connection
                         .send_request(InspectInitialize(
                             InitializeRequest::new(ProtocolVersion::V1)
@@ -398,11 +399,46 @@ fn quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\\''"))
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(any(target_os = "macos", windows)))]
 async fn terminal_login(
     _agent: &AgentDefinition,
     _method: &agent_client_protocol::schema::v1::AuthMethodTerminal,
     _folder: &Path,
 ) -> Result<(), ManagementError> {
     Err(ManagementError::Authentication)
+}
+
+#[cfg(windows)]
+async fn terminal_login(
+    agent: &AgentDefinition,
+    method: &agent_client_protocol::schema::v1::AuthMethodTerminal,
+    folder: &Path,
+) -> Result<(), ManagementError> {
+    let launch = super::node_runtime::resolve_launch(agent).await?;
+    let mut command = Command::new(launch.program);
+    command
+        .args(launch.args)
+        .args(&method.args)
+        .envs(&agent.env)
+        .envs(&method.env)
+        .current_dir(folder);
+    if let Some(path) = launch.path {
+        command.env("PATH", path);
+    }
+    // A dedicated console provides interactive input without interpolating agent
+    // arguments into a shell. Its Job guard also owns all login descendants.
+    let (mut child, mut group) = crate::agent_runtime::spawn_console(&mut command)
+        .map_err(|_| ManagementError::Authentication)?;
+    let status = child
+        .wait()
+        .await
+        .map_err(|_| ManagementError::Authentication)?;
+    let cleaned = tokio::task::spawn_blocking(move || group.kill())
+        .await
+        .unwrap_or(false);
+    if status.success() && cleaned {
+        Ok(())
+    } else {
+        Err(ManagementError::Authentication)
+    }
 }

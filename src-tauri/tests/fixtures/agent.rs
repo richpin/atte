@@ -133,6 +133,13 @@ impl Drop for Descendant {
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<_> = env::args().collect();
+    if args.iter().any(|arg| arg == "--terminal-login") {
+        fs::write(
+            env::var_os("AUTH_FILE").ok_or("missing AUTH_FILE")?,
+            env::var("LOGIN_VALUE")?,
+        )?;
+        return Ok(());
+    }
     if args.iter().any(|arg| arg == "--version") {
         println!("v24.21.0");
         return Ok(());
@@ -248,7 +255,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 if env::var_os("EMBEDDED_CONTEXT").is_some() {
                     agent_capabilities["promptCapabilities"]["embeddedContext"] = json!(true);
                 }
-                json!({"protocolVersion": if mode == "wrong-version" { 99 } else { 1 }, "agentCapabilities": agent_capabilities, "authMethods": if mode == "future-auth" { json!([{"id":"future-method","name":"Future auth","type":"future_protocol"}]) } else if mode == "key-auth" { json!([{"id": "api-key", "name": "API Key"}]) } else if env::var_os("AUTH_FILE").is_some() { json!([{ "id": "fixture-login", "name": "Fixture login" }, { "id": "fixture-denied", "name": "Denied login" }]) } else { json!([]) }})
+                json!({"protocolVersion": if mode == "wrong-version" { 99 } else { 1 }, "agentCapabilities": agent_capabilities, "authMethods": if mode == "terminal-auth" { json!([{"id":"terminal-login","name":"Terminal login","type":"terminal","args":["--terminal-login"],"env":{"LOGIN_VALUE":r#"한글 & % "quoted""#}}]) } else if mode == "future-auth" { json!([{"id":"future-method","name":"Future auth","type":"future_protocol"}]) } else if mode == "key-auth" { json!([{"id": "api-key", "name": "API Key"}]) } else if env::var_os("AUTH_FILE").is_some() { json!([{ "id": "fixture-login", "name": "Fixture login" }, { "id": "fixture-denied", "name": "Denied login" }]) } else { json!([]) }})
             }
             "authenticate" => {
                 if request["params"]["methodId"] == "fixture-denied" {

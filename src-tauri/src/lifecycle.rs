@@ -8,6 +8,7 @@ use std::{
     sync::atomic::{AtomicBool, Ordering},
 };
 use tauri::{AppHandle, Emitter, Manager, RunEvent, State};
+#[cfg(target_os = "macos")]
 use tauri_plugin_dialog::{DialogExt, MessageDialogKind};
 use tokio_util::{sync::CancellationToken, task::TaskTracker};
 
@@ -53,9 +54,9 @@ impl Lifecycle {
     }
 }
 
-pub(crate) fn install(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
+pub(crate) fn install(_app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
     #[cfg(target_os = "macos")]
-    macos::install(app)?;
+    macos::install(_app)?;
     Ok(())
 }
 
@@ -84,7 +85,7 @@ pub(crate) fn on_event(app: &AppHandle, event: RunEvent) {
     }
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", windows))]
 pub(crate) fn reopen(app: &AppHandle) -> tauri::Result<()> {
     let window = match app.get_window("main") {
         Some(window) => window,
@@ -109,7 +110,7 @@ pub(crate) fn reopen(app: &AppHandle) -> tauri::Result<()> {
     window.set_focus()
 }
 
-fn request_quit(app: &AppHandle) {
+pub(crate) fn request_quit(app: &AppHandle) {
     let lifecycle = app.state::<Lifecycle>();
     if lifecycle.pending.swap(true, Ordering::AcqRel) {
         return;

@@ -1,18 +1,21 @@
+#[cfg(unix)]
+use atte_lib::agent_management::node_runtime::NodeSource;
 use atte_lib::{
     agent::LaunchKind,
     agent_management::{
         download::{DownloadFuture, Downloader},
         installer::SystemInstaller,
-        node_runtime::{NodeRuntime, NodeSource},
+        node_runtime::NodeRuntime,
         registry::{Binary, Distribution, Registry},
         AgentManagement, ManagementError,
     },
     thread::{ThreadStatus, Threads},
 };
 use sha2::{Digest, Sha256};
+#[cfg(unix)]
+use std::ffi::OsStr;
 use std::{
     collections::HashMap,
-    ffi::OsStr,
     io::Write,
     path::Path,
     sync::{

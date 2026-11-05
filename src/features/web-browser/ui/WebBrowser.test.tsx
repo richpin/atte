@@ -109,12 +109,14 @@ it("uses native history and keeps the webview alive while hidden", async () => {
   );
   setVisible(false);
   await waitFor(() => expect(native.hide).toHaveBeenCalled());
-  expect(native.close).not.toHaveBeenCalled();
+  expect(native.action).not.toHaveBeenCalledWith("tab", "close");
   setVisible(true);
   await waitFor(() => expect(native.show).toHaveBeenCalledTimes(2));
   expect(native.create).toHaveBeenCalledTimes(1);
   unmount();
-  await waitFor(() => expect(native.close).toHaveBeenCalledTimes(1));
+  await waitFor(() =>
+    expect(native.action).toHaveBeenCalledWith("tab", "close"),
+  );
 });
 
 it("hides the native surface while an application dialog is open", async () => {
@@ -138,7 +140,9 @@ it("closes a webview whose creation finishes after its tab is removed", async ()
   const { unmount } = setup("https://example.com/");
   unmount();
   resolve(native);
-  await waitFor(() => expect(native.close).toHaveBeenCalledTimes(1));
+  await waitFor(() =>
+    expect(native.action).toHaveBeenCalledWith("tab", "close"),
+  );
   expect(native.show).not.toHaveBeenCalled();
 });
 

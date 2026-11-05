@@ -122,14 +122,14 @@ it("keeps settings on save failure", async () => {
   expect(model.error()).toBe(true);
 });
 
-it("opens macOS notification settings from the card heading", async () => {
+it("opens system notification settings from the card heading", async () => {
   snapshot.authorization = "denied";
   mount();
   const heading = await screen.findByRole("heading", {
     name: "Desktop notifications",
   });
   const button = screen.getByRole("button", {
-    name: "Open macOS notification settings",
+    name: "Open system notification settings",
   });
   expect(heading.parentElement?.contains(button)).toBe(true);
   expect(screen.queryByRole("status")).toBeNull();
@@ -178,7 +178,7 @@ it("disables system settings while the permission prompt is pending", async () =
   snapshot.authorization = "requesting";
   mount();
   const button = await screen.findByRole("button", {
-    name: "Open macOS notification settings",
+    name: "Open system notification settings",
   });
   expect(button).toHaveProperty("disabled", true);
   expect(screen.queryByRole("status")).toBeNull();

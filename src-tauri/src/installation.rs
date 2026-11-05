@@ -285,15 +285,11 @@ impl Manifest {
             .collect::<Result<Vec<_>, ManagementError>>()?;
         let mut env = self.launch.env;
         if command.starts_with(app_data.join("agents/runtime")) {
-            env.insert(
-                "PATH".into(),
-                format!(
-                    "{}:{}",
-                    command.parent().unwrap_or(Path::new("/usr/bin")).display(),
-                    std::env::var("PATH")
-                        .unwrap_or_else(|_| "/usr/bin:/bin:/usr/sbin:/sbin".into())
-                ),
-            );
+            let inherited_path = std::env::var_os("PATH").unwrap_or_default();
+            let paths = std::iter::once(command.parent().unwrap_or(Path::new(".")).to_path_buf())
+                .chain(std::env::split_paths(&inherited_path));
+            let path = std::env::join_paths(paths).map_err(|_| ManagementError::Install)?;
+            env.insert("PATH".into(), path.to_string_lossy().into_owned());
         }
         Ok(Installation {
             definition: AgentDefinition {
@@ -308,5 +304,38 @@ impl Manifest {
             version: self.installed_version,
             artifact,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn restores_managed_runtime_search_path_using_native_separators() {
+        let root = tempfile::tempdir().unwrap();
+        let app_data = root.path().join("한글 project");
+        let artifact = app_data.join("agents/fixture/installation");
+        std::fs::create_dir_all(&artifact).unwrap();
+        let runtime_directory = app_data.join("agents/runtime/node");
+        let manifest = serde_json::json!({
+            "registryVersion": "1.0.0", "installedVersion": "1.0.0",
+            "sourceIdentity": { "kind": "npm", "package": "@fixture/agent@1.0.0" },
+            "launch": {
+                "name": "Fixture",
+                "command": { "base": "appData", "path": "agents/runtime/node/node.exe" },
+                "args": [], "env": {}
+            }
+        });
+        std::fs::write(artifact.join(MANIFEST_NAME), manifest.to_string()).unwrap();
+        let installation = load(&app_data, &artifact, "fixture").unwrap();
+        let mut expected = vec![runtime_directory];
+        expected.extend(std::env::split_paths(
+            &std::env::var_os("PATH").unwrap_or_default(),
+        ));
+        assert_eq!(
+            std::env::split_paths(&installation.definition.env["PATH"]).collect::<Vec<_>>(),
+            expected
+        );
     }
 }

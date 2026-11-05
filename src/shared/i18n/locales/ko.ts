@@ -118,10 +118,10 @@ export const ko = {
   desktopNotifications: {
     title: "데스크톱 알림",
     description:
-      "앱을 사용하지 않을 때 알립니다. Dock 배지는 알림 설정과 관계없이 유지됩니다.",
+      "앱을 사용하지 않을 때 알립니다. 읽지 않은 알림 표시는 알림 설정과 관계없이 유지됩니다.",
     completion: "응답 완료 알림",
     permission: "승인 및 질문 알림",
-    openSettings: "macOS 알림 설정 열기",
+    openSettings: "시스템 알림 설정 열기",
   },
   appUpdates: {
     title: "앱 업데이트",
@@ -403,7 +403,7 @@ export const ko = {
       label: "다음으로 열기",
       otherApplication: "다른 앱…",
       chooseApplication: "앱 선택",
-      invalidApplication: "유효한 macOS 앱(.app)을 선택해주세요.",
+      invalidApplication: "유효한 앱을 선택해주세요.",
       loading: "앱을 불러오는 중…",
       empty: "이 폴더를 열 수 있는 앱이 없습니다",
       retry: "앱을 불러오지 못했습니다. 다시 시도",

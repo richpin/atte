@@ -187,8 +187,9 @@ pub fn validate(worktree: &Worktree, folder: &Path) -> Result<(), String> {
             worktree.root.display()
         )
     })?;
-    let root = String::from_utf8_lossy(&output);
-    if Path::new(root.trim_end_matches('\n')) != worktree.root
+    let root = crate::platform::git_path(output.strip_suffix(b"\n").unwrap_or(&output))
+        .map_err(|error| error.to_string())?;
+    if std::fs::canonicalize(Path::new(root)).map_err(|error| error.to_string())? != worktree.root
         || !folder.is_dir()
         || !folder.starts_with(&worktree.root)
         || !folder
@@ -266,11 +267,19 @@ pub async fn remove(worktree: &Worktree) -> Result<(), String> {
             )
             .await
             .map_err(|error| error.to_string())?;
-            if listed.split(|byte| *byte == 0).any(|field| {
-                field.strip_prefix(b"worktree ")
-                    == Some(worktree.root.as_os_str().as_encoded_bytes())
-            }) {
-                return Err(error.to_string());
+            for field in listed.split(|byte| *byte == 0) {
+                if let Some(path) = field.strip_prefix(b"worktree ") {
+                    let path = Path::new(
+                        crate::platform::git_path(path).map_err(|error| error.to_string())?,
+                    );
+                    #[cfg(windows)]
+                    let registered = dunce::simplified(path) == dunce::simplified(&worktree.root);
+                    #[cfg(not(windows))]
+                    let registered = path == worktree.root;
+                    if registered {
+                        return Err(error.to_string());
+                    }
+                }
             }
         }
         if worktree

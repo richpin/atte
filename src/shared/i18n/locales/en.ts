@@ -113,10 +113,10 @@ export const en = {
   desktopNotifications: {
     title: "Desktop notifications",
     description:
-      "Notify me while Atte is inactive. Dock badges remain independent of these settings.",
+      "Notify me while Atte is inactive. Unread indicators remain independent of these settings.",
     completion: "Response completion notifications",
     permission: "Approval and question notifications",
-    openSettings: "Open macOS notification settings",
+    openSettings: "Open system notification settings",
   },
   appUpdates: {
     title: "App updates",
@@ -398,7 +398,7 @@ export const en = {
       label: "Open in",
       otherApplication: "Other…",
       chooseApplication: "Choose an application",
-      invalidApplication: "Choose a valid macOS application (.app).",
+      invalidApplication: "Choose a valid application.",
       loading: "Loading applications…",
       empty: "No applications available for this folder",
       retry: "Could not load applications. Retry",

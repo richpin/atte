@@ -106,7 +106,7 @@ export function createWebBrowserModel(
       try {
         const created = await createWebview(props.id, props.threadId, url);
         if (disposed) {
-          await created.close();
+          await webTabAction(props.id, "close");
           return;
         }
         view = created;
@@ -215,7 +215,9 @@ export function createWebBrowserModel(
   onCleanup(() => {
     disposed = true;
     if (frame !== undefined) cancelAnimationFrame(frame);
-    void surfaceWork.then(() => view?.close()).catch(() => undefined);
+    void surfaceWork
+      .then(() => view && webTabAction(props.id, "close"))
+      .catch(() => undefined);
   });
 
   return {

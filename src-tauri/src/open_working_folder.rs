@@ -22,13 +22,14 @@ pub(crate) enum OpenFolderError {
     FolderMissing,
     #[error("The application is no longer available for this folder")]
     AppMissing,
-    #[error("Choose a valid macOS application")]
+    #[error("Choose a valid application")]
     InvalidApplication,
+    #[cfg(target_os = "macos")]
     #[error("Application discovery failed")]
     DiscoveryFailed,
     #[error("The folder could not be opened")]
     OpenFailed,
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(not(any(target_os = "macos", windows)))]
     #[error("This platform is not supported")]
     UnsupportedPlatform,
 }
@@ -44,6 +45,7 @@ fn working_folder(threads: &Threads, id: Uuid) -> Result<PathBuf, OpenFolderErro
     Ok(folder)
 }
 
+#[cfg(any(target_os = "macos", test))]
 fn select_application(applications: Vec<PathBuf>, id: &str) -> Result<PathBuf, OpenFolderError> {
     applications
         .into_iter()
@@ -72,7 +74,17 @@ pub(crate) async fn list_working_folder_apps(
             .await
             .map_err(|_| OpenFolderError::DiscoveryFailed)?
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(windows)]
+    {
+        let _ = app;
+        working_folder(&threads, thread_id)?;
+        Ok(vec![WorkingFolderApp {
+            id: "explorer".into(),
+            name: "File Explorer".into(),
+            icon: None,
+        }])
+    }
+    #[cfg(not(any(target_os = "macos", windows)))]
     {
         let _ = (app, threads, thread_id);
         Err(OpenFolderError::UnsupportedPlatform)
@@ -108,7 +120,21 @@ pub(crate) async fn open_working_folder(
         .await
         .map_err(|_| OpenFolderError::OpenFailed)?
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(windows)]
+    {
+        let _ = app;
+        if target != "explorer" {
+            return Err(OpenFolderError::AppMissing);
+        }
+        let folder = working_folder(&threads, thread_id)?;
+        tauri::async_runtime::spawn_blocking(move || {
+            tauri_plugin_opener::open_path(dunce::simplified(&folder), None::<&str>)
+                .map_err(|_| OpenFolderError::OpenFailed)
+        })
+        .await
+        .map_err(|_| OpenFolderError::OpenFailed)?
+    }
+    #[cfg(not(any(target_os = "macos", windows)))]
     {
         let _ = (app, threads, thread_id, target);
         Err(OpenFolderError::UnsupportedPlatform)
@@ -159,7 +185,46 @@ pub(crate) async fn open_working_folder_with_app_picker(
         .await
         .map_err(|_| OpenFolderError::OpenFailed)?
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(windows)]
+    {
+        use tauri_plugin_dialog::DialogExt;
+        working_folder(&threads, thread_id)?;
+        let selected = tauri::async_runtime::spawn_blocking(move || {
+            app.dialog()
+                .file()
+                .set_title(dialog_title)
+                .add_filter("Applications", &["exe"])
+                .blocking_pick_file()
+        })
+        .await
+        .map_err(|_| OpenFolderError::OpenFailed)?;
+        let Some(selected) = selected else {
+            return Ok(());
+        };
+        let application = selected
+            .into_path()
+            .map_err(|_| OpenFolderError::InvalidApplication)?;
+        if !application.is_file()
+            || !application
+                .extension()
+                .is_some_and(|extension| extension.eq_ignore_ascii_case("exe"))
+        {
+            return Err(OpenFolderError::InvalidApplication);
+        }
+        let folder = working_folder(&threads, thread_id)?;
+        tauri::async_runtime::spawn_blocking(move || {
+            // Only the native picker authorizes executables. The working folder
+            // is a single argument, never interpolated into a shell command.
+            std::process::Command::new(application)
+                .arg(dunce::simplified(&folder))
+                .spawn()
+                .map(|_| ())
+                .map_err(|_| OpenFolderError::OpenFailed)
+        })
+        .await
+        .map_err(|_| OpenFolderError::OpenFailed)?
+    }
+    #[cfg(not(any(target_os = "macos", windows)))]
     {
         let _ = (app, threads, thread_id, dialog_title);
         Err(OpenFolderError::UnsupportedPlatform)

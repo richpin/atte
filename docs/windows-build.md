@@ -30,7 +30,7 @@ pnpm build:windows
 
 ## Windows 실제 환경의 후속 검증
 
-이 단계의 산출물은 개발 중인 미서명 빌드다. Windows 인증 터미널, 알림, 외부 앱 연동, WebView2 탐색 연동, OS 단축키, 업데이트·배포는 후속 작업에서 다룬다. 미지원 API는 오류 또는 미지원 상태를 반환하며 성공으로 처리하지 않는다.
+이 단계의 산출물은 개발 중인 미서명 빌드다. Windows 인증 터미널, 알림, 외부 앱 연동, WebView2 탐색과 OS 단축키는 구현했으며 동작과 실제 환경 점검 절차는 [Windows 작업 흐름](windows-workflows.md)에 기록한다. 앱 업데이트·배포는 후속 작업에서 다룬다. Windows 앱과 테스트를 실제 실행한 것으로 간주하지 않는다.
 
 실제 환경에서 설치·실행·재시작, Claude/Codex 설치·인증·대화·재개·중지, Job 자손 종료, 공백·한글 Windows 경로, 링크·junction 보호, 파일 이동의 덮어쓰기 거부, Git/worktree와 저장 데이터 유지를 확인한다. macOS에서 Windows 테스트를 실행한 것으로 기록하지 않는다.
 
@@ -39,3 +39,17 @@ pnpm build:windows
 2026-11-05 macOS Apple Silicon에서 cargo-xwin 0.23.1, LLVM/LLD 23.1.5, NSIS 3.13으로 Windows x64 실행 파일과 NSIS 설치 파일을 생성했다. bundled SQLite와 TLS 암호화 네이티브 의존성도 실제 컴파일했다. macOS ARM64 앱 번들 빌드도 통과했다.
 
 `pnpm validate`는 63개 파일의 516개 테스트를 통과했다. `scripts/validate-rust.sh`의 포맷·전체 대상 타입 검사·Clippy·전체 Rust 테스트는 372개 통과, 기존 제외 8개였다. `cargo xwin check --target x86_64-pc-windows-msvc --all-targets --locked`로 Windows 앱과 테스트 코드를 컴파일했으며, Windows용 테스트 실행과 앱 실행은 검증하지 않았다.
+
+## 핵심 작업 흐름 구현 후 재검증 (2026-11-05)
+
+Windows 인증 콘솔·알림·외부 앱·WebView2·단축키와 worktree/복원 경로를 구현한 뒤 다음을 검증했다.
+
+- `pnpm validate`: 정적 검사·FSD·TypeScript와 63개 파일의 518개 테스트 통과.
+- `scripts/validate-rust.sh`: 포맷·전체 대상 타입 검사·Clippy 통과, Rust 테스트 373개 통과와 기존 제외 8개.
+- `cargo xwin check --target x86_64-pc-windows-msvc --all-targets --locked` 및 `cargo xwin clippy --target x86_64-pc-windows-msvc --all-targets --all-features --locked -- -D warnings` 통과. Windows 전용 콘솔 인증·단축키 테스트도 컴파일했으나 실행하지 않았다.
+- 최종 Windows release 실행 파일 생성과 NSIS 설치 파일 재생성, macOS ARM64 `Atte.app` 번들 생성 통과. NSIS helper 다운로드의 일시 DNS 실패 뒤 `pnpm tauri bundle --target x86_64-pc-windows-msvc --bundles nsis`로 포장 단계를 재시도했다. 실행 파일의 NSIS bundle marker가 보존되어 있음을 확인했다. Windows CRT PDB가 없는 교차 링크 경고는 남으며 Windows 실행 결과를 뜻하지 않는다.
+- 두 축 코드 리뷰의 지적을 수정한 뒤 Standards 0건, Spec 0건으로 재검토했다.
+
+설치 파일은 `src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/Atte_0.1.0_x64-setup.exe` (7.91 MiB, 미서명)다. SHA-256: `3c2003ada1fe62aac1fbeb0c451dadce47558016da67b45c0caf98062d1e60c0`.
+
+Windows 앱·테스트의 실제 실행은 아직 하지 않았다. [실환경 점검표](windows-workflows.md)의 모든 항목과 두 버전 간 앱 업데이트·코드 서명 준비는 후속 작업이다.

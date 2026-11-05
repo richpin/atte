@@ -2544,6 +2544,11 @@ async fn stop_windows_runtime(runtime: &mut Runtime) -> bool {
     verified && (pid == 0 || !process_exists(pid))
 }
 
+#[cfg(windows)]
+fn process_exists(pid: u32) -> bool {
+    crate::platform::process_exists(pid)
+}
+
 #[cfg(unix)]
 fn process_exists(pid: u32) -> bool {
     i32::try_from(pid)
@@ -4461,9 +4466,4 @@ mod title_tests {
         assert_eq!(errors.len(), 1);
         assert_eq!(threads.get(draft.id).unwrap().status, draft.status);
     }
-}
-
-#[cfg(windows)]
-fn process_exists(pid: u32) -> bool {
-    crate::platform::process_exists(pid)
 }

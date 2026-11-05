@@ -300,6 +300,7 @@ dependencies = [
  "base64 0.22.1",
  "block2",
  "bzip2",
+ "dunce",
  "flate2",
  "futures-util",
  "gray_matter",
@@ -332,6 +333,8 @@ dependencies = [
  "tokio-util",
  "trash",
  "uuid",
+ "webview2-com",
+ "windows 0.62.2",
  "windows-sys 0.61.2",
  "zip 4.6.1",
 ]

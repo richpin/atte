@@ -10,7 +10,10 @@ export type TabShortcut =
 export function shortcutFromKey(event: KeyboardEvent): TabShortcut | undefined {
   if (event.altKey || event.isComposing) return;
   const key = event.key.toLowerCase();
-  if (event.metaKey && !event.ctrlKey && !event.shiftKey) {
+  if (
+    ((event.metaKey && !event.ctrlKey) || (event.ctrlKey && !event.metaKey)) &&
+    !event.shiftKey
+  ) {
     if (key === "t") return "new";
     if (key === "w") return "close";
     if (/^[1-9]$/.test(key)) return `tab:${key}` as TabShortcut;

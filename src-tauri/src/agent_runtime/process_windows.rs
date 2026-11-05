@@ -18,7 +18,8 @@ use windows_sys::Win32::{
             JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
         },
         Threading::{
-            OpenThread, ResumeThread, CREATE_NO_WINDOW, CREATE_SUSPENDED, THREAD_SUSPEND_RESUME,
+            OpenThread, ResumeThread, CREATE_NEW_CONSOLE, CREATE_NO_WINDOW, CREATE_SUSPENDED,
+            THREAD_SUSPEND_RESUME,
         },
     },
 };
@@ -79,6 +80,14 @@ fn owned(handle: HANDLE) -> io::Result<OwnedHandle> {
 }
 
 pub(crate) fn spawn(command: &mut Command) -> io::Result<(Child, ProcessGroup)> {
+    spawn_with_console(command, false)
+}
+
+pub(crate) fn spawn_console(command: &mut Command) -> io::Result<(Child, ProcessGroup)> {
+    spawn_with_console(command, true)
+}
+
+fn spawn_with_console(command: &mut Command, console: bool) -> io::Result<(Child, ProcessGroup)> {
     // SAFETY: null security/name pointers request an unnamed, non-inheritable Job.
     let job = owned(unsafe { CreateJobObjectW(std::ptr::null(), std::ptr::null()) })?;
     let mut limits = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
@@ -96,7 +105,14 @@ pub(crate) fn spawn(command: &mut Command) -> io::Result<(Child, ProcessGroup)> 
         return Err(io::Error::last_os_error());
     }
     command
-        .creation_flags(CREATE_SUSPENDED | CREATE_NO_WINDOW)
+        .creation_flags(
+            CREATE_SUSPENDED
+                | if console {
+                    CREATE_NEW_CONSOLE
+                } else {
+                    CREATE_NO_WINDOW
+                },
+        )
         .kill_on_drop(true);
     let mut child = command.spawn()?;
     let result = (|| {

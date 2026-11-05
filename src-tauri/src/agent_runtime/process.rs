@@ -128,7 +128,7 @@ pub(crate) fn spawn(
 #[path = "process_windows.rs"]
 mod windows;
 #[cfg(windows)]
-pub(crate) use windows::{spawn, ProcessGroup};
+pub(crate) use windows::{spawn, spawn_console, ProcessGroup};
 
 /// Shared process ownership outlives the runtime task so failed cleanup can retry.
 #[derive(Default)]

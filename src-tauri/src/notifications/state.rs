@@ -24,7 +24,9 @@ impl Default for Preferences {
 pub(crate) enum Authorization {
     #[default]
     Unknown,
+    #[cfg(target_os = "macos")]
     NotDetermined,
+    #[cfg(target_os = "macos")]
     Requesting,
     Granted,
     Denied,

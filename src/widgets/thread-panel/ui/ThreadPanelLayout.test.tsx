@@ -533,3 +533,19 @@ it("preserves tab content through full-width mode, folding and window resizing",
   expect(model.panel("one")?.width).toBe(700);
   expect(screen.getByRole("main")).toBeTruthy();
 });
+
+it("uses Windows Ctrl shortcuts to create, select, cycle and close tabs", async () => {
+  const { model } = setup();
+  fireEvent.keyDown(window, { key: "t", ctrlKey: true });
+  fireEvent.keyDown(window, { key: "t", ctrlKey: true });
+  expect(model.panel("one")?.tabs).toHaveLength(2);
+  const first = model.panel("one")?.tabs[0]?.id;
+  fireEvent.keyDown(window, { key: "1", ctrlKey: true });
+  expect(model.panel("one")?.selectedTabId).toBe(first);
+  fireEvent.keyDown(window, { key: "Tab", ctrlKey: true });
+  expect(model.panel("one")?.selectedTabId).not.toBe(first);
+  fireEvent.keyDown(window, { key: "Tab", ctrlKey: true, shiftKey: true });
+  expect(model.panel("one")?.selectedTabId).toBe(first);
+  fireEvent.keyDown(window, { key: "w", ctrlKey: true });
+  await waitFor(() => expect(model.panel("one")?.tabs).toHaveLength(1));
+});
