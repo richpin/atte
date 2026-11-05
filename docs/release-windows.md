@@ -72,3 +72,5 @@ macOS Apple Silicon에서 `pnpm release:windows`를 실제 실행해 `.scratch/r
 `pnpm validate`는 63개 파일·518개 테스트와 정적 검사·FSD·TypeScript 검사를 통과했다. `sh scripts/validate-rust.sh`는 포맷·전체 대상 검사·Clippy와 373개 테스트를 통과했고 기존 8개는 제외됐다. Windows 전체 대상·전체 feature의 cargo-xwin Clippy(`-D warnings`)도 통과했다. Standards·Spec 코드 리뷰 모두 지적이 없었다.
 
 교차 링크 시 Windows CRT PDB 누락 경고와 Tauri의 교차 코드 서명 생략 안내는 남는다. Setup.exe는 Authenticode 미서명이다. 업로드·공개, Apple notarization 재실행, Windows 앱·테스트 실행과 두 버전 간 실제 업데이트는 수행하지 않았다. 앞의 실환경 절차와 후속 Windows 검증 작업에서 확인한다.
+
+테스트 경계를 확인한 뒤 manifest 병합 공개 함수의 회귀 테스트 10개와 앱 종료 이벤트의 편집 취소·재확인 및 저장 완료 대기 테스트 2개를 추가했다. 릴리스 스크립트 테스트도 기본 `pnpm test`와 정적 검사에 포함한다. 최종 `pnpm validate`는 65개 파일·530개 테스트를 통과했고 기존 Rust 종료·자식 프로세스 정리 경계의 테스트 9개도 별도로 통과했다. 이 추가 작업은 테스트·검증 설정만 변경하며 위 설치 파일의 앱 코드는 그대로다.
