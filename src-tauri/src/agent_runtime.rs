@@ -33,15 +33,15 @@ use agent_client_protocol::{
     Agent, ByteStreams, Client, ConnectionTo, ErrorCode,
 };
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
-pub(crate) use process::spawn as spawn_process;
 #[cfg(unix)]
 pub(crate) use process::ProcessGroup;
+pub(crate) use process::{spawn as spawn_process, ProcessState};
 use std::{
     collections::{HashMap, VecDeque},
     path::PathBuf,
     process::Stdio,
     sync::{
-        atomic::{AtomicBool, AtomicU32, Ordering},
+        atomic::{AtomicBool, Ordering},
         Arc, Mutex,
     },
     time::Duration,
@@ -92,7 +92,7 @@ pub(crate) async fn run(
     folder: PathBuf,
     mut commands: mpsc::UnboundedReceiver<RuntimeCommand>,
     mut stop: oneshot::Receiver<()>,
-    pid: Arc<AtomicU32>,
+    process: Arc<ProcessState>,
     authentication: Arc<Mutex<HashMap<String, crate::thread::AuthenticationStatus>>>,
     authentication_observations: Arc<Mutex<HashMap<String, AuthenticationObservation>>>,
 ) -> bool {
@@ -144,8 +144,15 @@ pub(crate) async fn run(
             return true;
         }
     };
+    #[cfg(windows)]
+    {
+        *process
+            .group
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(group.clone());
+    }
     if let Some(id) = child.id() {
-        pid.store(id, Ordering::Release);
+        process.pid.store(id, Ordering::Release);
     }
     let Some(stdin) = child.stdin.take() else {
         return false;

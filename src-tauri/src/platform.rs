@@ -142,3 +142,15 @@ pub(crate) fn valid_component(name: &OsStr) -> bool {
         })
     }
 }
+
+pub(crate) fn protected_git_component(name: &OsStr) -> bool {
+    if cfg!(windows) {
+        let name = name.to_string_lossy().to_ascii_lowercase();
+        name == ".git"
+            || name.strip_prefix("git~").is_some_and(|suffix| {
+                !suffix.is_empty() && suffix.bytes().all(|c| c.is_ascii_digit())
+            })
+    } else {
+        name == ".git"
+    }
+}

@@ -707,7 +707,7 @@ fn safe_item(root: &Path, raw: &[u8]) -> Result<PathBuf, Error> {
     if raw.is_empty()
         || relative
             .components()
-            .any(|part| !matches!(part, Component::Normal(name) if name != ".git" && !(cfg!(windows) && name.to_string_lossy().eq_ignore_ascii_case(".git")) && crate::platform::valid_component(name)))
+            .any(|part| !matches!(part, Component::Normal(name) if !crate::platform::protected_git_component(name) && crate::platform::valid_component(name)))
     {
         return Err(Error::Invalid);
     }

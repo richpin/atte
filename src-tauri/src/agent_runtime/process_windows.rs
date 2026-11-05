@@ -23,7 +23,8 @@ use windows_sys::Win32::{
     },
 };
 
-pub(crate) struct ProcessGroup(Option<OwnedHandle>);
+#[derive(Clone)]
+pub(crate) struct ProcessGroup(Option<std::sync::Arc<OwnedHandle>>);
 
 impl ProcessGroup {
     pub(crate) fn kill(&mut self) -> bool {
@@ -116,7 +117,7 @@ pub(crate) fn spawn(command: &mut Command) -> io::Result<(Child, ProcessGroup)> 
         let _ = child.start_kill();
         return Err(error);
     }
-    Ok((child, ProcessGroup(Some(job))))
+    Ok((child, ProcessGroup(Some(std::sync::Arc::new(job)))))
 }
 
 fn resume(pid: u32) -> io::Result<()> {

@@ -43,10 +43,9 @@ fn target(root: &Path, relative: &str) -> Result<std::path::PathBuf, ThreadError
         || path.components().any(
             |c| !matches!(c, Component::Normal(name) if crate::platform::valid_component(name)),
         )
-        || path.components().any(|c| {
-            c.as_os_str() == ".git"
-                || (cfg!(windows) && c.as_os_str().to_string_lossy().eq_ignore_ascii_case(".git"))
-        })
+        || path
+            .components()
+            .any(|c| crate::platform::protected_git_component(c.as_os_str()))
     {
         return Err(invalid());
     }
@@ -54,10 +53,15 @@ fn target(root: &Path, relative: &str) -> Result<std::path::PathBuf, ThreadError
     for part in path.components() {
         resolved.push(part);
         if let Ok(metadata) = std::fs::symlink_metadata(&resolved) {
-            if metadata.file_type().is_symlink() {
+            if metadata.file_type().is_symlink() || cfg!(windows) {
+                // Normalize NTFS short names as well as links before checking protection.
                 resolved = resolved.canonicalize().map_err(|_| invalid())?;
             }
-            if !resolved.starts_with(root) {
+            let relative = resolved.strip_prefix(root).map_err(|_| invalid())?;
+            if relative
+                .components()
+                .any(|part| crate::platform::protected_git_component(part.as_os_str()))
+            {
                 return Err(invalid());
             }
         }
@@ -193,6 +197,31 @@ mod tests {
         let outside = tempfile::tempdir().unwrap();
         std::os::unix::fs::symlink(outside.path(), root.path().join("outside")).unwrap();
         assert!(target(root.path(), "outside/missing.txt").is_err());
+    }
+    #[test]
+    fn rejects_protected_metadata_before_snapshotting() {
+        let folder = tempfile::tempdir().unwrap();
+        let root = folder.path().canonicalize().unwrap();
+        std::fs::create_dir(root.join(".git")).unwrap();
+        std::fs::write(root.join(".git/config"), "private").unwrap();
+        assert!(target(&root, ".git/config").is_err());
+        #[cfg(windows)]
+        for path in [
+            ".GIT/config",
+            "git~1/config",
+            "git~2/missing",
+            "file:stream",
+            "NUL",
+            "folder. /file",
+        ] {
+            assert!(target(&root, path).is_err(), "{path}");
+        }
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(root.join(".git"), root.join("alias")).unwrap();
+            assert!(target(&root, "alias/config").is_err());
+            assert!(target(&root, "alias/missing").is_err());
+        }
     }
     #[test]
     fn reads_text_and_binary_with_exact_size_boundary() {

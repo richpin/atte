@@ -17,7 +17,7 @@ use std::{
     collections::{HashMap, HashSet},
     path::{Path, PathBuf},
     sync::{
-        atomic::{AtomicU32, AtomicU64, Ordering},
+        atomic::{AtomicU64, Ordering},
         Arc, Mutex,
     },
 };
@@ -631,7 +631,7 @@ struct Runtime {
     commands: mpsc::UnboundedSender<crate::agent_runtime::RuntimeCommand>,
     stop: Option<oneshot::Sender<()>>,
     task: Option<tokio::task::JoinHandle<bool>>,
-    pid: Arc<AtomicU32>,
+    process: Arc<crate::agent_runtime::ProcessState>,
 }
 
 impl Drop for Runtime {
@@ -663,13 +663,13 @@ fn runtime_for(
     }
     let (commands, receiver) = mpsc::unbounded_channel();
     let (stop, stopped) = oneshot::channel();
-    let pid = Arc::new(AtomicU32::new(0));
+    let process = Arc::new(crate::agent_runtime::ProcessState::default());
     let task = handle.spawn(crate::agent_runtime::run(
         agent.clone(),
         folder.clone(),
         receiver,
         stopped,
-        pid.clone(),
+        process.clone(),
         authentication,
         authentication_observations,
     ));
@@ -679,7 +679,7 @@ fn runtime_for(
         commands: commands.clone(),
         stop: Some(stop),
         task: Some(task),
-        pid,
+        process,
     });
     commands
 }
@@ -2467,38 +2467,39 @@ async fn stop_runtimes(runtimes: Vec<Runtime>) -> Result<(), Vec<Runtime>> {
                 Err(_) => {}
             }
         }
-        let pid = runtime.pid.load(Ordering::Acquire);
-        if pid == 0 {
-            if runtime.task.is_some() {
-                failed.push(runtime);
-            }
-            continue;
+        #[cfg(windows)]
+        if !stop_windows_runtime(&mut runtime).await {
+            failed.push(runtime);
         }
-        if process_exists(pid) {
-            #[cfg(unix)]
-            let _ = tokio::task::spawn_blocking(move || {
-                let mut group = crate::agent_runtime::ProcessGroup::new(Some(pid));
-                let killed = group.kill();
-                group.disarm();
-                killed
-            })
-            .await;
-            #[cfg(windows)]
-            if let Some(task) = runtime.task.as_ref() {
-                // Cancelling drops the Job guard, which kills the entire tree.
-                task.abort();
-            }
-            if let Some(task) = runtime.task.as_mut() {
-                if tokio::time::timeout(std::time::Duration::from_secs(1), task)
-                    .await
-                    .is_ok_and(|result| result.is_ok_and(|reaped| reaped))
-                {
-                    runtime.task = None;
-                    continue;
+        #[cfg(unix)]
+        {
+            let pid = runtime.process.pid.load(Ordering::Acquire);
+            if pid == 0 {
+                if runtime.task.is_some() {
+                    failed.push(runtime);
                 }
+                continue;
             }
             if process_exists(pid) {
-                failed.push(runtime);
+                let _ = tokio::task::spawn_blocking(move || {
+                    let mut group = crate::agent_runtime::ProcessGroup::new(Some(pid));
+                    let killed = group.kill();
+                    group.disarm();
+                    killed
+                })
+                .await;
+                if let Some(task) = runtime.task.as_mut() {
+                    if tokio::time::timeout(std::time::Duration::from_secs(1), task)
+                        .await
+                        .is_ok_and(|result| result.is_ok_and(|reaped| reaped))
+                    {
+                        runtime.task = None;
+                        continue;
+                    }
+                }
+                if process_exists(pid) {
+                    failed.push(runtime);
+                }
             }
         }
     }
@@ -2507,6 +2508,40 @@ async fn stop_runtimes(runtimes: Vec<Runtime>) -> Result<(), Vec<Runtime>> {
     } else {
         Err(failed)
     }
+}
+
+#[cfg(windows)]
+async fn stop_windows_runtime(runtime: &mut Runtime) -> bool {
+    if let Some(task) = runtime.task.as_mut() {
+        task.abort();
+        // Await cancellation so no spawn can publish a Job after our snapshot.
+        if tokio::time::timeout(std::time::Duration::from_secs(2), task)
+            .await
+            .is_err()
+        {
+            return false;
+        }
+        runtime.task = None;
+    }
+    let pid = runtime.process.pid.load(Ordering::Acquire);
+    let group = runtime
+        .process
+        .group
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .clone();
+    let verified = match group {
+        Some(mut group) => tokio::task::spawn_blocking(move || {
+            let killed = group.kill();
+            // Keep the manager's copy even on failure, so a later stop can retry.
+            group.disarm();
+            killed
+        })
+        .await
+        .unwrap_or(false),
+        None => pid == 0,
+    };
+    verified && (pid == 0 || !process_exists(pid))
 }
 
 #[cfg(unix)]

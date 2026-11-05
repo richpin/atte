@@ -129,3 +129,11 @@ pub(crate) fn spawn(
 mod windows;
 #[cfg(windows)]
 pub(crate) use windows::{spawn, ProcessGroup};
+
+/// Shared process ownership outlives the runtime task so failed cleanup can retry.
+#[derive(Default)]
+pub(crate) struct ProcessState {
+    pub(crate) pid: std::sync::atomic::AtomicU32,
+    #[cfg(windows)]
+    pub(crate) group: std::sync::Mutex<Option<ProcessGroup>>,
+}

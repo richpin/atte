@@ -37,12 +37,10 @@ pub(crate) fn supported_url(url: &str) -> bool {
 }
 
 pub(crate) fn enclosed(root: &Path, relative: &Path) -> Result<PathBuf, ManagementError> {
-    if relative.as_os_str().is_empty()
-        || relative.is_absolute()
-        || relative
-            .components()
-            .any(|part| matches!(part, Component::ParentDir | Component::Prefix(_)) || matches!(part, Component::Normal(name) if !crate::platform::valid_component(name)))
-    {
+    if relative.as_os_str().is_empty() || relative.has_root() || relative.components().any(|part| {
+        matches!(part, Component::ParentDir | Component::Prefix(_))
+            || matches!(part, Component::Normal(name) if !crate::platform::valid_component(name))
+    }) {
         return Err(ManagementError::Integrity);
     }
     Ok(root.join(relative))
@@ -186,4 +184,32 @@ pub(crate) fn executable_mode(path: &Path, mode: u32) -> Result<(), ManagementEr
 #[cfg(windows)]
 pub(crate) fn executable_mode(_path: &Path, _mode: u32) -> Result<(), ManagementError> {
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn extraction_paths_stay_inside_the_installation() {
+        let root = tempfile::tempdir().unwrap();
+        for path in ["../escape", "/escape", ""] {
+            assert!(enclosed(root.path(), Path::new(path)).is_err(), "{path}");
+        }
+        assert_eq!(
+            enclosed(root.path(), Path::new("./bin/agent")).unwrap(),
+            root.path().join("./bin/agent")
+        );
+        #[cfg(windows)]
+        for path in [
+            r"\outside\agent.exe",
+            r"C:agent.exe",
+            r"C:\outside\agent.exe",
+            "file:stream",
+            "NUL",
+            "folder. /agent",
+        ] {
+            assert!(enclosed(root.path(), Path::new(path)).is_err(), "{path}");
+        }
+    }
 }
