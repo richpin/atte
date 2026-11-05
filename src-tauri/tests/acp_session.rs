@@ -4223,10 +4223,8 @@ async fn process_exit_after_session_creation_is_observable() {
     threads.shutdown().await;
 }
 
-#[cfg(unix)]
 #[tokio::test]
 async fn shutdown_reaps_the_adapter_and_stops_its_descendants() {
-    use nix::{sys::signal::kill, unistd::Pid};
     let folder = tempfile::tempdir().unwrap();
     let mut agent = mock_agent();
     let pid_file = folder.path().join("pid");
@@ -4246,13 +4244,11 @@ async fn shutdown_reaps_the_adapter_and_stops_its_descendants() {
         settle(&threads, draft.id).await.status,
         ThreadStatus::SessionReady
     );
-    let pid = Pid::from_raw(std::fs::read_to_string(pid_file).unwrap().parse().unwrap());
-    let child_pid = Pid::from_raw(
-        std::fs::read_to_string(child_pid_file)
-            .unwrap()
-            .parse()
-            .unwrap(),
-    );
+    let pid = std::fs::read_to_string(pid_file).unwrap().parse().unwrap();
+    let child_pid = std::fs::read_to_string(child_pid_file)
+        .unwrap()
+        .parse()
+        .unwrap();
     threads.shutdown().await;
     assert_eq!(
         threads.get(draft.id).unwrap().status,
@@ -4260,7 +4256,7 @@ async fn shutdown_reaps_the_adapter_and_stops_its_descendants() {
     );
     assert!(threads.connect(draft.id).is_err());
     tokio::time::timeout(Duration::from_secs(5), async {
-        while kill(pid, None).is_ok() || kill(child_pid, None).is_ok() {
+        while process_alive(pid) || process_alive(child_pid) {
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
     })
@@ -4324,8 +4320,11 @@ async fn failed_setup_reaps_the_agent_before_retry_is_available() {
         settle(&threads, draft.id).await.status,
         ThreadStatus::Failed
     );
-    let pid = std::fs::read_to_string(pid_file).unwrap().parse().unwrap();
-    assert!(nix::sys::signal::kill(nix::unistd::Pid::from_raw(pid), None).is_err());
+    let pid = std::fs::read_to_string(pid_file)
+        .unwrap()
+        .parse::<u32>()
+        .unwrap();
+    assert!(!process_alive(pid));
     threads.shutdown().await;
 }
 
@@ -4721,6 +4720,7 @@ async fn permission_preserves_agent_choices_and_answers_exactly_once() {
     }
 }
 
+#[cfg(unix)]
 #[tokio::test]
 async fn process_exit_during_approval_clears_permissions_and_preserves_the_queue() {
     use atte_lib::thread::ConnectionFailure;
@@ -5403,7 +5403,6 @@ async fn a_new_connection_cannot_start_on_the_old_definition_during_promotion() 
 
 #[tokio::test]
 async fn draining_forces_only_the_owned_group_after_graceful_shutdown_times_out() {
-    use nix::{sys::signal::kill, unistd::Pid};
     let folder = tempfile::tempdir().unwrap();
     let pid_file = folder.path().join("pid");
     let mut agent = mock_agent();
@@ -5417,7 +5416,7 @@ async fn draining_forces_only_the_owned_group_after_graceful_shutdown_times_out(
     settle(&threads, draft.id).await;
     let pid = std::fs::read_to_string(pid_file)
         .unwrap()
-        .parse::<i32>()
+        .parse::<u32>()
         .unwrap();
     let started = std::time::Instant::now();
 
@@ -5428,7 +5427,7 @@ async fn draining_forces_only_the_owned_group_after_graceful_shutdown_times_out(
 
     assert_eq!(
         (
-            kill(Pid::from_raw(pid), None).is_err(),
+            !process_alive(pid),
             started.elapsed() >= Duration::from_millis(900),
             started.elapsed() < Duration::from_secs(3),
         ),
@@ -7077,7 +7076,7 @@ async fn worktree_sessions_use_the_selected_checkout_subdirectory_as_process_and
     threads.delete(draft.id).await.unwrap();
     assert!(!worktree.root.exists());
     assert!(threads.get(draft.id).is_err());
-    assert!(nix::sys::signal::kill(nix::unistd::Pid::from_raw(pid), None).is_err());
+    assert!(!process_alive(pid as u32));
     assert!(repo.path().join("app/file").exists());
     threads.shutdown().await;
 }
@@ -7465,4 +7464,25 @@ async fn restores_queued_resource_snapshots_and_uses_links_if_reconnected_withou
         assert!(!snapshot.exists());
         restored.shutdown().await;
     }
+}
+
+#[cfg(unix)]
+fn process_alive(pid: u32) -> bool {
+    nix::sys::signal::kill(nix::unistd::Pid::from_raw(pid as i32), None).is_ok()
+}
+
+#[cfg(windows)]
+fn process_alive(pid: u32) -> bool {
+    use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
+    use windows_sys::Win32::System::Threading::{
+        GetExitCodeProcess, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
+    };
+    // SAFETY: query-only access to a fixture process; the owned handle closes on return.
+    let handle = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid) };
+    if handle.is_null() {
+        return false;
+    }
+    let handle = unsafe { OwnedHandle::from_raw_handle(handle) };
+    let mut code = 0;
+    unsafe { GetExitCodeProcess(handle.as_raw_handle(), &mut code) != 0 && code == 259 }
 }

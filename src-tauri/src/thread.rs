@@ -2475,6 +2475,7 @@ async fn stop_runtimes(runtimes: Vec<Runtime>) -> Result<(), Vec<Runtime>> {
             continue;
         }
         if process_exists(pid) {
+            #[cfg(unix)]
             let _ = tokio::task::spawn_blocking(move || {
                 let mut group = crate::agent_runtime::ProcessGroup::new(Some(pid));
                 let killed = group.kill();
@@ -2482,6 +2483,11 @@ async fn stop_runtimes(runtimes: Vec<Runtime>) -> Result<(), Vec<Runtime>> {
                 killed
             })
             .await;
+            #[cfg(windows)]
+            if let Some(task) = runtime.task.as_ref() {
+                // Cancelling drops the Job guard, which kills the entire tree.
+                task.abort();
+            }
             if let Some(task) = runtime.task.as_mut() {
                 if tokio::time::timeout(std::time::Duration::from_secs(1), task)
                     .await
@@ -2503,6 +2509,7 @@ async fn stop_runtimes(runtimes: Vec<Runtime>) -> Result<(), Vec<Runtime>> {
     }
 }
 
+#[cfg(unix)]
 fn process_exists(pid: u32) -> bool {
     i32::try_from(pid)
         .is_ok_and(|pid| nix::sys::signal::kill(nix::unistd::Pid::from_raw(pid), None).is_ok())
@@ -4419,4 +4426,9 @@ mod title_tests {
         assert_eq!(errors.len(), 1);
         assert_eq!(threads.get(draft.id).unwrap().status, draft.status);
     }
+}
+
+#[cfg(windows)]
+fn process_exists(pid: u32) -> bool {
+    crate::platform::process_exists(pid)
 }

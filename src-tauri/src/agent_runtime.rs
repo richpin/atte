@@ -33,6 +33,8 @@ use agent_client_protocol::{
     Agent, ByteStreams, Client, ConnectionTo, ErrorCode,
 };
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
+pub(crate) use process::spawn as spawn_process;
+#[cfg(unix)]
 pub(crate) use process::ProcessGroup;
 use std::{
     collections::{HashMap, VecDeque},
@@ -121,9 +123,7 @@ pub(crate) async fn run(
     if let Some(path) = launch.path {
         command.env("PATH", path);
     }
-    #[cfg(unix)]
-    command.process_group(0);
-    let mut child = match command.spawn() {
+    let (mut child, mut group) = match spawn_process(&mut command) {
         Ok(child) => child,
         Err(error) => {
             commands.close();
@@ -144,7 +144,6 @@ pub(crate) async fn run(
             return true;
         }
     };
-    let mut group = ProcessGroup::new(child.id());
     if let Some(id) = child.id() {
         pid.store(id, Ordering::Release);
     }
@@ -456,7 +455,7 @@ pub(crate) async fn run(
         && tokio::time::timeout(Duration::from_secs(1), child.wait())
             .await
             .is_ok_and(|result| result.is_ok());
-    let reaped = if reaped_gracefully {
+    let reaped = if reaped_gracefully && cfg!(unix) {
         group.disarm();
         true
     } else {

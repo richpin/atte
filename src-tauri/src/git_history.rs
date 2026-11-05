@@ -627,7 +627,6 @@ pub(crate) async fn read_git_commit_file(
     patch(&root, &oid, index).await
 }
 async fn patch(root: &Path, oid: &str, index: usize) -> Result<FilePatch, HistoryError> {
-    use std::os::unix::ffi::OsStrExt;
     let details = details(root, oid).await?;
     let file = details
         .files
@@ -681,7 +680,11 @@ async fn patch(root: &Path, oid: &str, index: usize) -> Result<FilePatch, Histor
             literal
         })
         .collect();
-    args.extend(paths.iter().map(|path| OsStr::from_bytes(path)));
+    let names = paths
+        .iter()
+        .map(|path| crate::platform::git_path(path).map_err(|_| HistoryError::InvalidRequest))
+        .collect::<Result<Vec<_>, _>>()?;
+    args.extend(names);
     let mut child = git::spawn(root, &args)?;
     drop(child.stdin.take());
     let mut output = child.stdout.take().ok_or(HistoryError::Unavailable)?;

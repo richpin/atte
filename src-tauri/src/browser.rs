@@ -130,6 +130,7 @@ pub async fn web_tab_action(
     }
 }
 
+#[cfg(target_os = "macos")]
 #[tauri::command]
 pub async fn web_tab_state(app: tauri::AppHandle, id: Uuid) -> Result<WebTabState, String> {
     let view = tab(&app, id)?;
@@ -165,17 +166,6 @@ pub async fn web_tab_state(app: tauri::AppHandle, id: Uuid) -> Result<WebTabStat
                 .await
                 .map_err(|_| "Web tab is unavailable".to_owned())?
         }
-        #[cfg(not(target_os = "macos"))]
-        {
-            WebTabState {
-                url: view.url().map_err(|error| error.to_string())?.to_string(),
-                title: String::new(),
-                favicon_url: None,
-                loading: false,
-                can_go_back: false,
-                can_go_forward: false,
-            }
-        }
     };
     let (send, mut receive) = tokio::sync::mpsc::channel(1);
     if view
@@ -194,12 +184,21 @@ pub async fn web_tab_state(app: tauri::AppHandle, id: Uuid) -> Result<WebTabStat
     Ok(state)
 }
 
+#[cfg(not(target_os = "macos"))]
+#[tauri::command]
+pub async fn web_tab_state(app: tauri::AppHandle, id: Uuid) -> Result<WebTabState, String> {
+    tab(&app, id)?;
+    Err("Native web tab state is not implemented on this platform".into())
+}
+
+#[cfg(any(target_os = "macos", test))]
 #[derive(Deserialize)]
 struct FaviconMetadata {
     url: String,
     icon: String,
 }
 
+#[cfg(any(target_os = "macos", test))]
 fn favicon_url(value: &str, page_url: &str, app_url: Option<&tauri::Url>) -> Option<String> {
     let metadata: FaviconMetadata = serde_json::from_str(value).ok()?;
     // Discard stale evaluations after navigation and never expose application URLs.

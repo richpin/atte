@@ -45,15 +45,19 @@ impl Default for NodeRuntime {
         } else {
             "x64"
         };
-        let directory = format!("node-v24.21.0-darwin-{arch}");
-        let checksum = if arch == "arm64" {
+        let os = if cfg!(windows) { "win" } else { "darwin" };
+        let extension = if cfg!(windows) { "zip" } else { "tar.gz" };
+        let directory = format!("node-v24.21.0-{os}-{arch}");
+        let checksum = if cfg!(all(windows, target_arch = "x86_64")) {
+            "158f7685b44de51f6c0df1d153526cbcd3e1bc739a8dfc607721cef75de9e541"
+        } else if arch == "arm64" {
             "bed7eea5325e1108f32ce5228ddd6a5f0f08a499ee42aa7442aea583702f6057"
         } else {
             "1462cb3b3046b815cf8ea436d3da450ec1a9f11dac7e5a46b0ada5305d7e8097"
         };
         Self::new(
             Binary {
-                archive: format!("https://nodejs.org/dist/v24.21.0/{directory}.tar.gz"),
+                archive: format!("https://nodejs.org/dist/v24.21.0/{directory}.{extension}"),
                 cmd: String::new(),
                 args: vec![],
                 env: Default::default(),
@@ -221,7 +225,7 @@ impl NodeRuntime {
         progress: &(dyn Fn(&str) + Send + Sync),
     ) -> Result<PreparedNode, ManagementError> {
         let _preparation = PREPARATION.lock().await;
-        if !cfg!(target_os = "macos") {
+        if !cfg!(target_os = "macos") && !cfg!(all(windows, target_arch = "x86_64")) {
             return Err(ManagementError::Unsupported);
         }
         std::fs::create_dir_all(root).map_err(|_| ManagementError::NodeMissing)?;
@@ -261,6 +265,9 @@ impl NodeRuntime {
 }
 
 async fn login_shell_path(shell: Option<&PathBuf>) -> Option<OsString> {
+    if cfg!(windows) {
+        return None;
+    }
     let shell = shell
         .cloned()
         .or_else(|| std::env::var_os("SHELL").map(PathBuf::from))
@@ -282,8 +289,12 @@ async fn login_shell_path(shell: Option<&PathBuf>) -> Option<OsString> {
 }
 
 async fn system_runtime(path: &OsStr) -> Option<PreparedNode> {
-    let node = find_in_path(path, "node")?;
-    let npm = find_in_path(path, "npm")?;
+    let node = find_in_path(path, if cfg!(windows) { "node.exe" } else { "node" })?;
+    let npm = if cfg!(windows) {
+        node.parent()?.join("node_modules/npm/bin/npm-cli.js")
+    } else {
+        find_in_path(path, "npm")?
+    };
     let prepared = PreparedNode {
         node,
         npm,
@@ -309,11 +320,19 @@ fn managed_runtime(root: &Path, runtime_root: &Path) -> Result<PreparedNode, Man
             std::fs::write(path, []).map_err(|_| ManagementError::NodeMissing)?;
         }
     }
-    let node = root.join("bin/node");
+    let node = root.join(if cfg!(windows) {
+        "node.exe"
+    } else {
+        "bin/node"
+    });
     Ok(PreparedNode {
         path: node_path(&node),
         node,
-        npm: root.join("lib/node_modules/npm/bin/npm-cli.js"),
+        npm: root.join(if cfg!(windows) {
+            "node_modules/npm/bin/npm-cli.js"
+        } else {
+            "lib/node_modules/npm/bin/npm-cli.js"
+        }),
         source: NodeSource::Managed,
         npm_home: Some(npm_home),
     })
@@ -363,7 +382,7 @@ impl PreparedNode {
     /// Builds an npm command with user configuration for system npm and isolated
     /// configuration/cache paths for managed npm.
     pub fn npm_command(&self) -> Command {
-        let mut command = if self.source == NodeSource::Managed {
+        let mut command = if self.source == NodeSource::Managed || cfg!(windows) {
             let mut command = Command::new(&self.node);
             command.arg(&self.npm);
             command

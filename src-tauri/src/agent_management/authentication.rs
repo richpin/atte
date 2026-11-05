@@ -1,5 +1,5 @@
 use super::ManagementError;
-use crate::{agent::AgentDefinition, agent_runtime::ProcessGroup};
+use crate::agent::AgentDefinition;
 use agent_client_protocol::{
     schema::{
         v1::{
@@ -198,10 +198,8 @@ async fn run(
     if let Some(path) = launch.path {
         command.env("PATH", path);
     }
-    #[cfg(unix)]
-    command.process_group(0);
-    let mut child = command.spawn().map_err(|_| ManagementError::Connection)?;
-    let mut group = ProcessGroup::new(child.id());
+    let (mut child, mut group) = crate::agent_runtime::spawn_process(&mut command)
+        .map_err(|_| ManagementError::Connection)?;
     let stdin = child.stdin.take().ok_or(ManagementError::Connection)?;
     let stdout = child.stdout.take().ok_or(ManagementError::Connection)?;
     let (auth_status_sender, mut auth_status) = tokio::sync::watch::channel(None::<AuthStatus>);
@@ -343,14 +341,12 @@ async fn run(
     }
 }
 
+#[cfg(target_os = "macos")]
 async fn terminal_login(
     agent: &AgentDefinition,
     method: &agent_client_protocol::schema::v1::AuthMethodTerminal,
     folder: &Path,
 ) -> Result<(), ManagementError> {
-    if !cfg!(target_os = "macos") {
-        return Err(ManagementError::Authentication);
-    }
     use std::os::unix::fs::PermissionsExt;
     let directory = tempfile::tempdir().map_err(|_| ManagementError::Authentication)?;
     let status = directory.path().join("status");
@@ -397,6 +393,16 @@ async fn terminal_login(
     }
 }
 
+#[cfg(target_os = "macos")]
 fn quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\\''"))
+}
+
+#[cfg(not(target_os = "macos"))]
+async fn terminal_login(
+    _agent: &AgentDefinition,
+    _method: &agent_client_protocol::schema::v1::AuthMethodTerminal,
+    _folder: &Path,
+) -> Result<(), ManagementError> {
+    Err(ManagementError::Authentication)
 }

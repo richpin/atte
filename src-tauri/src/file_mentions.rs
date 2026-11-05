@@ -3,9 +3,7 @@ use crate::thread::{Attachment, ThreadError, Threads, UserInput};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
-    fs::OpenOptions,
     io::Read,
-    os::unix::fs::OpenOptionsExt,
     path::{Component, Path},
 };
 use uuid::Uuid;
@@ -42,10 +40,13 @@ fn invalid() -> ThreadError {
 fn target(root: &Path, relative: &str) -> Result<std::path::PathBuf, ThreadError> {
     let path = Path::new(relative);
     if relative.is_empty()
-        || path
-            .components()
-            .any(|c| !matches!(c, Component::Normal(_)))
-        || path.components().any(|c| c.as_os_str() == ".git")
+        || path.components().any(
+            |c| !matches!(c, Component::Normal(name) if crate::platform::valid_component(name)),
+        )
+        || path.components().any(|c| {
+            c.as_os_str() == ".git"
+                || (cfg!(windows) && c.as_os_str().to_string_lossy().eq_ignore_ascii_case(".git"))
+        })
     {
         return Err(invalid());
     }
@@ -65,11 +66,7 @@ fn target(root: &Path, relative: &str) -> Result<std::path::PathBuf, ThreadError
 }
 
 fn bytes(path: &Path, remaining: u64) -> Option<Vec<u8>> {
-    let file = OpenOptions::new()
-        .read(true)
-        .custom_flags(nix::libc::O_NOFOLLOW | nix::libc::O_NONBLOCK)
-        .open(path)
-        .ok()?;
+    let file = crate::platform::open_no_follow(path).ok()?;
     let metadata = file.metadata().ok()?;
     let limit = FILE_LIMIT.min(remaining);
     if !metadata.is_file() || metadata.len() > limit {
@@ -186,6 +183,7 @@ fn prepare_files(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(unix)]
     #[test]
     fn rejects_escape_and_git_but_allows_missing_files() {
         let root = tempfile::tempdir().unwrap();

@@ -7,6 +7,7 @@
     "start": "vite",
     "dev": "vite",
     "build": "vite build",
+    "build:windows": "tauri build --runner cargo-xwin --target x86_64-pc-windows-msvc --bundles nsis",
     "serve": "vite preview",
     "tauri": "tauri",
     "release:macos": "node --experimental-strip-types scripts/release-macos.ts",

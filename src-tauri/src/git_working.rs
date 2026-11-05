@@ -2,14 +2,12 @@
 use crate::{git, thread::Threads, workspace_files::trash_item};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
+#[cfg(unix)]
+use std::os::unix::fs::MetadataExt;
 use std::{
     collections::{HashMap, HashSet},
-    ffi::{OsStr, OsString},
+    ffi::OsStr,
     io::Read,
-    os::unix::{
-        ffi::{OsStrExt, OsStringExt},
-        fs::MetadataExt,
-    },
     path::{Component, Path, PathBuf},
     sync::OnceLock,
 };
@@ -92,6 +90,10 @@ pub(crate) enum Patch {
     Submodule,
 }
 
+fn git_path(bytes: &[u8]) -> Result<&OsStr, Error> {
+    crate::platform::git_path(bytes).map_err(|_| Error::Invalid)
+}
+
 fn encode(bytes: &[u8]) -> String {
     bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
@@ -126,9 +128,10 @@ async fn root(threads: &Threads, thread_id: Uuid) -> Result<PathBuf, Error> {
     )
     .await
     {
-        Ok(bytes) => Ok(PathBuf::from(OsString::from_vec(
-            bytes.trim_ascii_end().to_vec(),
-        ))),
+        Ok(bytes) => Ok(PathBuf::from(
+            crate::platform::git_os_string(bytes.trim_ascii_end().to_vec())
+                .map_err(|_| Error::Invalid)?,
+        )),
         Err(Error::Git(_)) => Err(Error::NotRepository),
         Err(error) => Err(error),
     }
@@ -180,7 +183,10 @@ async fn operation(root: &Path) -> Result<Option<String>, Error> {
         &[OsStr::new("rev-parse"), OsStr::new("--absolute-git-dir")],
     )
     .await?;
-    let dir = PathBuf::from(OsString::from_vec(git_dir.trim_ascii_end().to_vec()));
+    let dir = PathBuf::from(
+        crate::platform::git_os_string(git_dir.trim_ascii_end().to_vec())
+            .map_err(|_| Error::Invalid)?,
+    );
     for (name, label) in [
         ("MERGE_HEAD", "merge"),
         ("CHERRY_PICK_HEAD", "cherry-pick"),
@@ -314,6 +320,7 @@ fn digest(parts: &[&[u8]]) -> String {
     format!("{:x}", hash.finalize())
 }
 
+#[cfg(unix)]
 fn file_metadata_revision(path: &Path) -> String {
     match std::fs::symlink_metadata(path) {
         Ok(meta) => format!(
@@ -324,6 +331,21 @@ fn file_metadata_revision(path: &Path) -> String {
             meta.mtime_nsec(),
             meta.ctime(),
             meta.ctime_nsec()
+        ),
+        Err(_) => "missing".into(),
+    }
+}
+
+#[cfg(windows)]
+fn file_metadata_revision(path: &Path) -> String {
+    use std::os::windows::fs::MetadataExt;
+    match std::fs::symlink_metadata(path) {
+        Ok(meta) => format!(
+            "{}:{}:{}:{}",
+            meta.file_attributes(),
+            meta.file_size(),
+            meta.last_write_time(),
+            meta.creation_time()
         ),
         Err(_) => "missing".into(),
     }
@@ -363,7 +385,7 @@ async fn status_files(root: &Path) -> Result<(Vec<File>, Vec<u8>, Vec<u8>), Erro
     for file in &mut files {
         let raw = decode(&file.id)?;
         file.submodule = submodules.contains(&raw);
-        file.exists = std::fs::symlink_metadata(root.join(OsStr::from_bytes(&raw))).is_ok();
+        file.exists = std::fs::symlink_metadata(root.join(git_path(&raw)?)).is_ok();
     }
     Ok((files, status, index))
 }
@@ -452,14 +474,14 @@ async fn snapshot(root: &Path) -> Result<Snapshot, Error> {
         if file.unstaged {
             let stats = unstaged_stats.get(&raw);
             let (additions, deletions) = if file.status == "??" {
-                untracked_stats(&root.join(OsStr::from_bytes(&raw)))?
+                untracked_stats(&root.join(git_path(&raw)?))?
             } else {
                 (
                     stats.and_then(|stats| stats.1),
                     stats.and_then(|stats| stats.2),
                 )
             };
-            let metadata = file_metadata_revision(&root.join(OsStr::from_bytes(&raw)));
+            let metadata = file_metadata_revision(&root.join(git_path(&raw)?));
             file.unstaged_change = Some(SideChange {
                 old_path: stats.and_then(|stats| stats.0.as_deref()).map(display),
                 additions,
@@ -543,7 +565,7 @@ pub(crate) async fn read_git_working_file(
         return Ok(Patch::Submodule);
     }
     let path = decode(&file_id)?;
-    let path = OsStr::from_bytes(&path);
+    let path = git_path(&path)?;
     let patch = if file.status == "??" {
         // --no-index returns 1 when files differ. Its output is still the expected patch.
         let full_path = root.join(path);
@@ -575,10 +597,10 @@ pub(crate) async fn read_git_working_file(
             args.push(OsStr::new("--cached"));
         }
         let literal = literal_path(&file_id)?;
-        args.extend([OsStr::new("--"), OsStr::from_bytes(&literal)]);
+        args.extend([OsStr::new("--"), git_path(&literal)?]);
         let old_literal = file.old_id.as_deref().map(literal_path).transpose()?;
         if let Some(old_literal) = &old_literal {
-            args.push(OsStr::from_bytes(old_literal));
+            args.push(git_path(old_literal)?);
         }
         read_patch(&root, &args, false).await?
     };
@@ -649,7 +671,10 @@ async fn change_files_at(
         if let Some(old_id) = &file.old_id {
             paths.push(literal_path(old_id)?);
         }
-        let names: Vec<_> = paths.iter().map(|path| OsStr::from_bytes(path)).collect();
+        let names: Vec<_> = paths
+            .iter()
+            .map(|path| git_path(path))
+            .collect::<Result<_, _>>()?;
         if stage {
             let mut args = vec![OsStr::new("add"), OsStr::new("-A"), OsStr::new("--")];
             args.extend(names.iter().copied());
@@ -678,11 +703,11 @@ async fn change_files_at(
 }
 
 fn safe_item(root: &Path, raw: &[u8]) -> Result<PathBuf, Error> {
-    let relative = Path::new(OsStr::from_bytes(raw));
+    let relative = Path::new(git_path(raw)?);
     if raw.is_empty()
         || relative
             .components()
-            .any(|part| !matches!(part, Component::Normal(name) if name != ".git"))
+            .any(|part| !matches!(part, Component::Normal(name) if name != ".git" && !(cfg!(windows) && name.to_string_lossy().eq_ignore_ascii_case(".git")) && crate::platform::valid_component(name)))
     {
         return Err(Error::Invalid);
     }
@@ -788,7 +813,7 @@ async fn restore_or_trash_at(
                     OsStr::new("-f"),
                     OsStr::new("--ignore-unmatch"),
                     OsStr::new("--"),
-                    OsStr::from_bytes(&literal),
+                    git_path(&literal)?,
                 ],
             )
             .await?;
@@ -805,7 +830,7 @@ async fn restore_or_trash_at(
                     OsStr::new("-f"),
                     OsStr::new("--ignore-unmatch"),
                     OsStr::new("--"),
-                    OsStr::from_bytes(&current_path),
+                    git_path(&current_path)?,
                 ],
             )
             .await?;
@@ -817,7 +842,7 @@ async fn restore_or_trash_at(
                     OsStr::new("--staged"),
                     OsStr::new("--worktree"),
                     OsStr::new("--"),
-                    OsStr::from_bytes(&previous_path),
+                    git_path(&previous_path)?,
                 ],
             )
             .await?;
@@ -831,7 +856,7 @@ async fn restore_or_trash_at(
                     OsStr::new("--staged"),
                     OsStr::new("--worktree"),
                     OsStr::new("--"),
-                    OsStr::from_bytes(&literal),
+                    git_path(&literal)?,
                 ],
             )
             .await?;
@@ -1113,6 +1138,7 @@ mod tests {
         assert!(!reset.files.iter().any(|file| file.staged));
         assert!(root.join("after").exists());
     }
+    #[cfg(unix)]
     #[tokio::test]
     async fn failed_hook_keeps_index_and_message_uncommitted() {
         use std::os::unix::fs::PermissionsExt;
@@ -1160,10 +1186,10 @@ mod tests {
     async fn literal_pathspec_names_remain_exact() {
         let dir = repo().await;
         let root = dir.path();
-        let unusual = OsStr::from_bytes(b"[abc]*");
+        let unusual = git_path(b"[abc]*").unwrap();
         std::fs::write(root.join(unusual), "content\n").unwrap();
         let state = snapshot(root).await.unwrap();
-        assert_eq!(decode(&state.files[0].id).unwrap(), unusual.as_bytes());
+        assert_eq!(decode(&state.files[0].id).unwrap(), b"[abc]*");
         let staged = change_files_at(root, vec![state.files[0].id.clone()], false, true)
             .await
             .unwrap();
@@ -1207,7 +1233,7 @@ mod tests {
     async fn side_statistics_follow_partial_staging_and_unusual_paths() {
         let dir = repo().await;
         let root = dir.path();
-        let unusual = OsStr::from_bytes(b"odd\nname");
+        let unusual = git_path(b"odd\nname").unwrap();
         std::fs::write(root.join(unusual), "first\n").unwrap();
         git(root, &["add", "-A"]).await;
         git(root, &["commit", "-qm", "feat: base"]).await;

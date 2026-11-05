@@ -137,6 +137,7 @@ async fn merge_diff_uses_first_parent_and_root_commit_compares_to_empty_tree() {
     );
 }
 
+#[cfg(unix)]
 #[tokio::test]
 async fn preserves_renames_unusual_paths_binary_and_mode_only_changes() {
     use std::os::unix::fs::PermissionsExt;

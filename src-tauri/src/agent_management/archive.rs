@@ -41,7 +41,7 @@ pub(crate) fn enclosed(root: &Path, relative: &Path) -> Result<PathBuf, Manageme
         || relative.is_absolute()
         || relative
             .components()
-            .any(|part| matches!(part, Component::ParentDir | Component::Prefix(_)))
+            .any(|part| matches!(part, Component::ParentDir | Component::Prefix(_)) || matches!(part, Component::Normal(name) if !crate::platform::valid_component(name)))
     {
         return Err(ManagementError::Integrity);
     }
@@ -176,8 +176,14 @@ fn write_entry(
     Ok(())
 }
 
+#[cfg(unix)]
 pub(crate) fn executable_mode(path: &Path, mode: u32) -> Result<(), ManagementError> {
     use std::os::unix::fs::PermissionsExt;
     std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode))
         .map_err(|_| ManagementError::Install)
+}
+
+#[cfg(windows)]
+pub(crate) fn executable_mode(_path: &Path, _mode: u32) -> Result<(), ManagementError> {
+    Ok(())
 }

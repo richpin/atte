@@ -15,6 +15,7 @@ mod installation_files;
 mod lifecycle;
 mod notifications;
 mod open_working_folder;
+mod platform;
 mod response_content;
 mod skills;
 pub mod storage;

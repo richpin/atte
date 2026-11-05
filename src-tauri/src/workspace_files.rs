@@ -7,7 +7,6 @@ use std::{
     collections::{BTreeMap, BTreeSet, HashMap},
     fs::{self, OpenOptions},
     io::{Read, Write},
-    os::unix::fs::OpenOptionsExt,
     path::{Component, Path, PathBuf},
     sync::{
         atomic::{AtomicBool, Ordering},
@@ -163,7 +162,7 @@ fn resolve(root: &Path, relative: &str) -> Result<PathBuf, FileError> {
     if relative.is_empty()
         || path
             .components()
-            .any(|part| !matches!(part, Component::Normal(_)))
+            .any(|part| !matches!(part, Component::Normal(name) if crate::platform::valid_component(name)))
     {
         return Err(FileError::InvalidPath);
     }
@@ -176,10 +175,7 @@ fn resolve(root: &Path, relative: &str) -> Result<PathBuf, FileError> {
     Ok(parent.join(path.file_name().ok_or(FileError::InvalidPath)?))
 }
 fn regular_bytes(path: &Path, limit: u64) -> Result<(Vec<u8>, fs::Metadata), FileError> {
-    let file = OpenOptions::new()
-        .read(true)
-        .custom_flags(nix::libc::O_NOFOLLOW | nix::libc::O_NONBLOCK)
-        .open(path)?;
+    let file = crate::platform::open_no_follow(path)?;
     let metadata = file.metadata()?;
     if !metadata.is_file() {
         return Err(FileError::Unsupported);
@@ -362,14 +358,7 @@ fn operate(root: &Path, operation: FileOperation) -> Result<(), FileError> {
             if to.starts_with(&from) {
                 return Err(FileError::InvalidPath);
             }
-            rustix::fs::renameat_with(
-                rustix::fs::CWD,
-                &from,
-                rustix::fs::CWD,
-                &to,
-                rustix::fs::RenameFlags::NOREPLACE,
-            )
-            .map_err(|error| FileError::from(std::io::Error::from(error)))?;
+            crate::platform::rename_no_replace(&from, &to)?;
         }
         FileOperation::Trash { path } => {
             trash_item(&resolve(root, &path)?).map_err(|error| FileError::Io(error.to_string()))?;
@@ -938,6 +927,7 @@ mod tests {
         assert!(entries.contains_key("keep.secret"));
     }
 
+    #[cfg(unix)]
     #[test]
     fn includes_hidden_ignored_files_and_empty_folders_without_following_links() {
         let folder = fixture();
@@ -1068,6 +1058,7 @@ mod tests {
         ));
         assert!(existing_workspace_file(root, "/etc/passwd").is_err());
     }
+    #[cfg(unix)]
     #[test]
     fn rejects_parent_links_outside_root_and_reads_internal_file_links_only() {
         let folder = fixture();
@@ -1079,6 +1070,7 @@ mod tests {
         std::os::unix::fs::symlink(folder.path().join("file"), folder.path().join("link")).unwrap();
         assert!(text_file(folder.path(), "link").unwrap().read_only);
     }
+    #[cfg(unix)]
     #[test]
     fn saves_preserve_bom_crlf_permissions_and_reject_stale_versions() {
         use std::os::unix::fs::PermissionsExt;
@@ -1165,6 +1157,7 @@ mod tests {
             Err(FileError::ImageTooLarge)
         ));
     }
+    #[cfg(unix)]
     #[test]
     fn image_reads_reject_escapes_and_non_regular_files() {
         use std::os::unix::fs::symlink;
@@ -1278,6 +1271,7 @@ mod tests {
         assert!(root.join("b/new").is_file());
     }
     #[cfg(target_os = "macos")]
+    #[cfg(unix)]
     #[test]
     #[ignore = "moves an owned temporary fixture to the macOS Trash"]
     fn native_trash_preserves_a_symlinks_target() {

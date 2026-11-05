@@ -244,10 +244,8 @@ pub(crate) async fn run_command(
     mut command: Command,
     timeout: Duration,
 ) -> Result<(), ManagementError> {
-    #[cfg(unix)]
-    command.process_group(0);
-    let mut child = command.spawn().map_err(|_| ManagementError::Install)?;
-    let mut group = crate::agent_runtime::ProcessGroup::new(child.id());
+    let (mut child, mut group) =
+        crate::agent_runtime::spawn_process(&mut command).map_err(|_| ManagementError::Install)?;
     match tokio::time::timeout(timeout, child.wait()).await {
         Ok(Ok(status)) if status.success() => {
             group.disarm();

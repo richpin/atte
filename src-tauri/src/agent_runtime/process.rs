@@ -1,11 +1,14 @@
 //! Cleanup is restricted to a process group we created and its live descendants.
+#[cfg(unix)]
 use nix::{
     sys::signal::{killpg, Signal},
     unistd::Pid,
 };
 
+#[cfg(unix)]
 pub(crate) struct ProcessGroup(Option<Pid>);
 
+#[cfg(unix)]
 impl ProcessGroup {
     pub(crate) fn new(id: Option<u32>) -> Self {
         Self(id.and_then(|id| i32::try_from(id).ok()).map(Pid::from_raw))
@@ -77,6 +80,7 @@ fn kill_descendants(root: Pid) -> bool {
     signalled
 }
 
+#[cfg(unix)]
 fn signal_succeeded(result: nix::Result<()>) -> bool {
     matches!(result, Ok(()) | Err(nix::errno::Errno::ESRCH))
 }
@@ -110,3 +114,18 @@ fn wait_until_stopped(pid: Pid, deadline: std::time::Instant) {
     // An unresponsive process must not make Drop hang; retain group termination
     // and the descendant snapshot as the bounded fallback.
 }
+
+#[cfg(unix)]
+pub(crate) fn spawn(
+    command: &mut tokio::process::Command,
+) -> std::io::Result<(tokio::process::Child, ProcessGroup)> {
+    command.process_group(0);
+    let child = command.spawn()?;
+    let group = ProcessGroup::new(child.id());
+    Ok((child, group))
+}
+#[cfg(windows)]
+#[path = "process_windows.rs"]
+mod windows;
+#[cfg(windows)]
+pub(crate) use windows::{spawn, ProcessGroup};

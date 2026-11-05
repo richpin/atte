@@ -1,5 +1,5 @@
 //! Installed skill management through the pinned `skills` CLI.
-use crate::{agent_management::node_runtime::NodeRuntime, agent_runtime::ProcessGroup};
+use crate::{agent_management::node_runtime::NodeRuntime, agent_runtime::spawn_process};
 use gray_matter::{engine::YAML, Matter};
 use serde::{Deserialize, Serialize};
 use std::{
@@ -350,10 +350,7 @@ async fn run(mut command: Command, timeout: Duration) -> Result<String, String> 
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .kill_on_drop(true);
-    #[cfg(unix)]
-    command.process_group(0);
-    let child = command.spawn().map_err(|error| error.to_string())?;
-    let mut group = ProcessGroup::new(child.id());
+    let (child, mut group) = spawn_process(&mut command).map_err(|error| error.to_string())?;
     let result = tokio::time::timeout(timeout, child.wait_with_output()).await;
     match result {
         Ok(Ok(output)) => {
