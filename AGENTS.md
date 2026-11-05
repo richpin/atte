@@ -1,6 +1,7 @@
 Atte is a desktop app that provides a consistent UI across coding agents, built with Tauri 2, SolidJS, and Rust, targeting macOS first.
 
 Use pnpm for SolidJS/TypeScript and Cargo for Rust.
+Perform all development work on the `develop` branch; leave merging `develop` into `main` for a new version to the user.
 Prefix commit messages with the appropriate Conventional Commit type (for example, `feat:`, `fix:`, `docs:`, or `chore:`).
 Create or update README.md only when explicitly requested.
 Keep code and documentation in sync.
