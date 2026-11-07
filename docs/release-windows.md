@@ -2,6 +2,8 @@
 
 Windows 11 x64 미리보기를 macOS에서 생성한다. GitHub 업로드·공개는 사용자가 직접 수행한다. Windows 실행 검증 전에는 배포 안내에 **Windows 실행 미검증**을 표시한다. macOS 교차 빌드 성공은 Windows 정식 지원 검증을 대신하지 않는다.
 
+배포 본문에 사용할 안내문과 검증 결과 양식은 [Windows 미리보기 검증](windows-validation.md)에 있다. 현재는 실제 Windows 검증과 코드 서명 수단 확보를 기다리는 상태다.
+
 ## 준비
 
 [로컬 빌드 준비](windows-build.md)의 NSIS, LLVM/LLD, cargo-xwin, Rust target과 pnpm 의존성을 설치한다. LLVM의 `clang-cl`과 LLD의 `lld-link`가 PATH에 있어야 한다.
