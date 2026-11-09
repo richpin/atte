@@ -3700,7 +3700,7 @@ it("keeps project setup after installation until an agent is explicitly selected
   await userEvent.click(
     await screen.findByRole("button", { name: "New Provider 설치" }),
   );
-  await screen.findByText("설치됨");
+  await screen.findByText("설치됨", { selector: "article span" });
   expect(invoke).not.toHaveBeenCalledWith("create_thread", expect.anything());
   await userEvent.click(
     screen.getByRole("button", { name: "original에 새 스레드" }),
@@ -3829,7 +3829,9 @@ it("retries a failed install and offers the installed agent without restarting",
     await screen.findByRole("button", { name: "New Provider 설치 중" }),
   ).toHaveProperty("disabled", true);
   finishInstall?.();
-  expect(await screen.findByText("설치됨")).toBeTruthy();
+  expect(
+    await screen.findByText("설치됨", { selector: "article span" }),
+  ).toBeTruthy();
   await userEvent.click(getNewThreadButton());
   expect(
     screen.getByRole("button", { name: /^새 스레드 에이전트/ }).textContent,
@@ -3894,7 +3896,7 @@ it("shows simplified agent cards while keeping cached installations on automatic
     "textContent",
     "Registry 갱신 실패",
   );
-  expect(screen.getByText("설치됨")).toBeTruthy();
+  expect(screen.getByText("설치됨", { selector: "article span" })).toBeTruthy();
   expect(
     screen.getByRole("button", { name: "Removed Provider 삭제" }),
   ).toBeTruthy();

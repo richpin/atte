@@ -1,7 +1,7 @@
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { Dot, ExternalLink, Search } from "lucide-solid";
 import { useI18n } from "shared/i18n";
-import { AgentIcon } from "shared/ui";
+import { AgentIcon, Button } from "shared/ui";
 import { createResource, createSignal, For, Show } from "solid-js";
 import { createStore, reconcile } from "solid-js/store";
 import {
@@ -34,6 +34,9 @@ export function AgentManagementPage(props: {
   const { t, message } = useI18n();
   const [error, setError] = createSignal<string>();
   const [search, setSearch] = createSignal("");
+  const [installationFilter, setInstallationFilter] = createSignal<
+    "all" | "installed" | "notInstalled"
+  >("all");
   const [work, setWork] = createStore<
     Record<string, { busy: boolean; operation: "install" | "uninstall" }>
   >({});
@@ -72,11 +75,12 @@ export function AgentManagementPage(props: {
   );
   const filteredAgents = () => {
     const query = search().trim().toLowerCase();
-    return query
-      ? (agents.latest ?? []).filter((agent) =>
-          agent.name.toLowerCase().includes(query),
-        )
-      : (agents.latest ?? []);
+    return (agents.latest ?? []).filter(
+      (agent) =>
+        (installationFilter() === "all" ||
+          agent.installed === (installationFilter() === "installed")) &&
+        agent.name.toLowerCase().includes(query),
+    );
   };
 
   async function run(id: string, operation: "install" | "uninstall") {
@@ -140,20 +144,42 @@ export function AgentManagementPage(props: {
   return (
     <main class="h-full min-h-0 overflow-y-auto bg-canvas text-ink">
       <section class="mx-auto max-w-3xl space-y-5 px-6 py-8">
-        <label class="relative block">
-          <span class="sr-only">{t("agents.search")}</span>
-          <Search
-            aria-hidden="true"
-            class="pointer-events-none absolute top-1/2 left-4 size-4 -translate-y-1/2 text-muted"
-          />
-          <input
-            type="search"
-            value={search()}
-            placeholder={t("agents.search")}
-            class="w-full rounded-lg border border-line bg-input-surface py-2.5 pr-4 pl-11 text-sm placeholder:text-muted focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
-            onInput={(event) => setSearch(event.currentTarget.value)}
-          />
-        </label>
+        <div class="flex flex-wrap items-center gap-3">
+          <label class="relative block min-w-48 flex-1">
+            <span class="sr-only">{t("agents.search")}</span>
+            <Search
+              aria-hidden="true"
+              class="pointer-events-none absolute top-1/2 left-4 size-4 -translate-y-1/2 text-muted"
+            />
+            <input
+              type="search"
+              value={search()}
+              placeholder={t("agents.search")}
+              class="w-full rounded-lg border border-line bg-input-surface py-2.5 pr-4 pl-11 text-sm placeholder:text-muted focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
+              onInput={(event) => setSearch(event.currentTarget.value)}
+            />
+          </label>
+          <fieldset
+            aria-label={t("agents.installationFilter")}
+            class="flex shrink-0 rounded-lg border border-line bg-input-surface"
+          >
+            <For each={["all", "installed", "notInstalled"] as const}>
+              {(filter) => (
+                <Button
+                  type="button"
+                  variant={
+                    installationFilter() === filter ? "secondary" : "ghost"
+                  }
+                  aria-pressed={installationFilter() === filter}
+                  class="rounded-none border-l border-line px-3 first:rounded-l-[inherit] first:border-l-0 last:rounded-r-[inherit] focus-visible:ring-inset focus-visible:ring-offset-0"
+                  onClick={() => setInstallationFilter(filter)}
+                >
+                  {t(`agents.${filter}`)}
+                </Button>
+              )}
+            </For>
+          </fieldset>
+        </div>
         <Show when={error()}>
           <p role="alert">{error()}</p>
         </Show>
