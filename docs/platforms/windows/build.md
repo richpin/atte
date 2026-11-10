@@ -20,17 +20,17 @@ pnpm build:windows
 - 앱: `src-tauri/target/x86_64-pc-windows-msvc/release/atte.exe`
 - 설치 파일: `src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/Atte_<version>_x64-setup.exe`
 
-이 명령은 로컬 빌드 전용이다. updater 서명·manifest를 포함하는 배포 파일 생성은 [Windows 배포](release-windows.md)의 `pnpm release:windows`를 사용한다. Windows 코드 서명 준비와 GitHub Releases 공개는 별도 수동 절차다.
+이 명령은 로컬 빌드 전용이다. updater 서명·manifest를 포함하는 배포 파일 생성은 [Windows 배포](../../releases/windows.md)의 `pnpm release:windows`를 사용한다. Windows 코드 서명 준비와 GitHub Releases 공개는 별도 수동 절차다.
 
 ## 구현 경계
 
-- Registry의 `windows-x86_64` 바이너리와 npm 배포를 선택한다. Windows에서는 시스템 `node.exe`와 같은 디렉터리의 npm JS entrypoint를 Node.js로 직접 실행해 `.cmd` 셸 해석을 피한다. 호환 런타임이 없으면 공식 Node.js v24.21.0 win-x64 ZIP을 SHA-256 검증 후 배치한다.
+- Registry의 `windows-x86_64` 바이너리와 npm 배포를 선택한다. npm 자체는 시스템 `node.exe`와 같은 디렉터리의 npm JS entrypoint를 Node.js로 실행한다. 설치된 에이전트는 npm이 만든 `.bin/<명령>.cmd`를 Rust 표준 프로세스 실행기로 실행하고 호환 Node를 PATH에 제공한다. 네이티브·래퍼 구분은 [에이전트 실행 규칙](../../features/agent-execution.md)을 따른다. 호환 런타임이 없으면 공식 Node.js v24.21.0 win-x64 ZIP을 SHA-256 검증 후 배치한다.
 - 에이전트, 인증 프로브, 설치 명령과 Skills CLI를 일시 중단 상태로 Windows Job Object에 넣은 뒤 실행한다. Job에서 breakaway를 허용하지 않으며, 강제 중지와 guard 소멸 시 자손도 종료한다. 런타임 관리자도 Job 핸들을 보존하며, task 취소 뒤에도 Job 전체 종료를 확인하고 확인 실패 시 기존 설치본을 유지해 재시도한다. macOS의 process group·libproc 자손 정리는 유지한다.
 - 파일 읽기는 말단 링크·reparse point를 거부하는 핸들을 사용하고, 파일 이동은 기존 대상을 원자적으로 거부한다. Git for Windows의 UTF-8 경로를 검증하며 변환할 수 없는 출력을 다른 경로로 대체하지 않는다.
 
 ## Windows 실제 환경의 후속 검증
 
-이 단계의 산출물은 개발 중인 미서명 빌드다. Windows 인증 터미널, 알림, 외부 앱 연동, WebView2 탐색과 OS 단축키는 구현했으며 동작과 실제 환경 점검 절차는 [Windows 작업 흐름](windows-workflows.md)에 기록한다. 앱 업데이트·배포 절차는 [Windows 배포](release-windows.md)를 따른다. Windows 앱과 테스트를 실제 실행한 것으로 간주하지 않는다.
+이 단계의 산출물은 개발 중인 미서명 빌드다. Windows 인증 터미널, 알림, 외부 앱 연동, WebView2 탐색과 OS 단축키는 구현했으며 동작과 실제 환경 점검 절차는 [Windows 작업 흐름](workflows.md)에 기록한다. 앱 업데이트·배포 절차는 [Windows 배포](../../releases/windows.md)를 따른다. Windows 앱과 테스트를 실제 실행한 것으로 간주하지 않는다.
 
 실제 환경에서 설치·실행·재시작, Claude/Codex 설치·인증·대화·재개·중지, Job 자손 종료, 공백·한글 Windows 경로, 링크·junction 보호, 파일 이동의 덮어쓰기 거부, Git/worktree와 저장 데이터 유지를 확인한다. macOS에서 Windows 테스트를 실행한 것으로 기록하지 않는다.
 
@@ -52,4 +52,4 @@ Windows 인증 콘솔·알림·외부 앱·WebView2·단축키와 worktree/복�
 
 설치 파일은 `src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/Atte_0.1.0_x64-setup.exe` (7.91 MiB, 미서명)다. SHA-256: `3c2003ada1fe62aac1fbeb0c451dadce47558016da67b45c0caf98062d1e60c0`.
 
-Windows 앱·테스트의 실제 실행은 아직 하지 않았다. [실환경 점검표](windows-workflows.md)의 모든 항목과 두 버전 간 앱 업데이트·코드 서명 준비는 후속 작업이다.
+Windows 앱·테스트의 실제 실행은 아직 하지 않았다. [실환경 점검표](workflows.md)의 모든 항목과 두 버전 간 앱 업데이트·코드 서명 준비는 후속 작업이다.

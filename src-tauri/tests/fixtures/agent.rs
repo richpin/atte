@@ -151,16 +151,46 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .ok_or("missing prefix")?;
         let package = std::path::Path::new(&args[prefix + 1]).join("node_modules/@fixture/agent");
         fs::create_dir_all(&package)?;
+        // npm can replace its JS entrypoint with native code during postinstall.
+        let target = if cfg!(windows) {
+            "agent.exe"
+        } else {
+            "agent.js"
+        };
+        fs::copy(env::current_exe()?, package.join(target))?;
         fs::write(
             package.join("package.json"),
-            r#"{"name":"@fixture/agent","version":"3.2.1","bin":{"agent":"agent.js"}}"#,
+            serde_json::to_vec(&json!({
+                "name":"@fixture/agent", "version":"3.2.1", "bin":{"agent":target}
+            }))?,
         )?;
-        fs::write(package.join("agent.js"), "fixture script")?;
+        let bin = std::path::Path::new(&args[prefix + 1]).join("node_modules/.bin");
+        fs::create_dir_all(&bin)?;
+        #[cfg(unix)]
+        std::os::unix::fs::symlink("../@fixture/agent/agent.js", bin.join("agent"))?;
+        #[cfg(windows)]
+        fs::write(
+            bin.join("agent.cmd"),
+            "@echo off\r\n\"%~dp0..\\@fixture\\agent\\agent.exe\" %*\r\n",
+        )?;
         return Ok(());
     }
     if env::args().nth(1).as_deref() == Some("--descendant") {
         thread::sleep(Duration::from_secs(60));
         return Ok(());
+    }
+    if let Ok(expected) = env::var("EXPECTED_ARGS") {
+        let expected: Vec<String> = serde_json::from_str(&expected)?;
+        if args[1..] != expected {
+            return Err(format!("unexpected arguments: {:?}", &args[1..]).into());
+        }
+    }
+    if let Some(expected) = env::var_os("EXPECTED_CWD") {
+        if env::current_dir()?.canonicalize()?
+            != std::path::PathBuf::from(expected).canonicalize()?
+        {
+            return Err("unexpected working folder".into());
+        }
     }
     let mode = env::var("FIXTURE_MODE").unwrap_or_else(|_| "ready".into());
     let supports_configuration = env::var_os("CONFIGURATION").is_some();

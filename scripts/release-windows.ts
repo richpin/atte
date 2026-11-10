@@ -8,7 +8,7 @@ function fail(message: string): never { throw new Error(message); }
 function run(command: string, args: string[], quiet = false): string {
   const result = spawnSync(command, args, { cwd: root, env: process.env, encoding: "utf8", stdio: quiet ? "pipe" : "inherit" });
   // Captured signing output is deliberately never included in errors.
-  if (result.error || result.status !== 0) fail(`${command} failed. Check the required tools and updater key configuration in docs/release-windows.md.`);
+  if (result.error || result.status !== 0) fail(`${command} failed. Check the required tools and updater key configuration in docs/releases/windows.md.`);
   return result.stdout ?? "";
 }
 if (process.platform !== "darwin") fail("Run this cross-build release command on macOS.");
@@ -60,4 +60,4 @@ const metadataName = stable ? "update-windows.json" : "preview.json";
 writeFileSync(join(destination, metadataName), `${JSON.stringify({ channel: stable ? "stable" : "preview", version, pub_date: new Date().toISOString(), platforms: { "windows-x86_64": { url: `https://github.com/richpin/atte/releases/download/${tag}/${name}`, signature } } }, null, 2)}\n`);
 const sha256 = createHash("sha256").update(readFileSync(installer)).digest("hex");
 writeFileSync(join(destination, "SHA256SUMS"), `${sha256}  ${name}\n`);
-console.log(`Local release files: ${destination}\nSHA-256: ${sha256}\nManual publication only. Follow docs/release-windows.md; Windows execution remains unverified.`);
+console.log(`Local release files: ${destination}\nSHA-256: ${sha256}\nManual publication only. Follow docs/releases/windows.md; Windows execution remains unverified.`);

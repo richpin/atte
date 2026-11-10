@@ -22,8 +22,8 @@ Use Feature-Sliced Design (FSD) for frontend organization and follow Cargo's sta
 ## Implementation references
 
 - When implementing or reviewing Rust(backend) code, invoke the `rust-best-practices` skill.
-- When implementing or reviewing SolidJS(frontend) code, refer to `docs/solid.md`.
-- When implementing or reviewing Tauri-specific code, refer to `docs/tauri.md`.
+- When implementing or reviewing SolidJS(frontend) code, refer to `docs/reference/solid.md`.
+- When implementing or reviewing Tauri-specific code, refer to `docs/reference/tauri.md`.
 
 ## Agent skills
 

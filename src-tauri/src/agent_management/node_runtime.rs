@@ -177,7 +177,7 @@ impl NodeRuntime {
         Ok(())
     }
 
-    async fn resolve_for_launch(&self) -> Result<PreparedNode, ManagementError> {
+    pub(crate) async fn resolve_for_launch(&self) -> Result<PreparedNode, ManagementError> {
         let root = self
             .managed_root
             .lock()
@@ -436,36 +436,6 @@ fn is_isolated_npm_setting(key: &OsStr) -> bool {
             | "KEY"
             | "STRICT_SSL"
     )
-}
-
-pub(crate) struct ResolvedLaunch {
-    pub program: PathBuf,
-    pub args: Vec<String>,
-    pub path: Option<OsString>,
-}
-
-pub(crate) async fn resolve_launch(
-    agent: &crate::agent::AgentDefinition,
-) -> Result<ResolvedLaunch, ManagementError> {
-    if agent.launch_kind == crate::agent::LaunchKind::Direct {
-        return Ok(ResolvedLaunch {
-            program: agent.command.clone(),
-            args: agent.args.clone(),
-            path: None,
-        });
-    }
-    let runtime = agent
-        .node_runtime
-        .as_ref()
-        .ok_or(ManagementError::NodeMissing)?;
-    let prepared = runtime.resolve_for_launch().await?;
-    let mut args = vec![agent.command.to_string_lossy().into_owned()];
-    args.extend(agent.args.clone());
-    Ok(ResolvedLaunch {
-        program: prepared.node,
-        args,
-        path: Some(prepared.path),
-    })
 }
 
 pub(crate) fn node_path(node: &Path) -> OsString {

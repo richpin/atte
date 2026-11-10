@@ -11,6 +11,14 @@ pub enum LaunchKind {
     Direct,
     /// Resolve a compatible Node.js runtime and pass it the installed entrypoint.
     Node,
+    /// Execute npm's installed bin launcher with a compatible Node.js on PATH.
+    Npm,
+}
+
+impl LaunchKind {
+    pub(crate) fn needs_node(self) -> bool {
+        matches!(self, Self::Node | Self::Npm)
+    }
 }
 
 /// Trusted backend configuration, never accepted as a frontend command argument.
@@ -18,14 +26,14 @@ pub enum LaunchKind {
 pub struct AgentDefinition {
     pub id: String,
     pub name: String,
-    /// Whether `command` is a direct executable or a Node.js entrypoint.
+    /// The execution contract of the installed entrypoint, independent of distribution.
     #[serde(default)]
     pub launch_kind: LaunchKind,
     /// Installed executable or entrypoint path; never a resolved system Node path.
     pub command: PathBuf,
     pub args: Vec<String>,
     pub env: HashMap<String, String>,
-    /// App-scoped runtime policy attached when a Node definition is activated.
+    /// App-scoped runtime policy attached when Node or npm definitions are activated.
     #[serde(skip)]
     pub node_runtime: Option<crate::agent_management::node_runtime::NodeRuntime>,
 }

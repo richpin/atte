@@ -1,9 +1,12 @@
 mod archive;
 pub mod download;
+pub(crate) mod launch;
 pub mod node_runtime;
 // Agent setup application boundary, independent of Tauri and thread lifetimes.
 pub mod authentication;
 pub mod installer;
+#[cfg(test)]
+mod live_registry_tests;
 pub mod registry;
 mod removal;
 
@@ -136,7 +139,7 @@ impl AgentManagement {
     pub fn restore(&self, threads: &Threads) -> Result<(), ManagementError> {
         for mut installation in self.store.installations()? {
             if crate::installation::has_launch_files(&installation) {
-                if installation.definition.launch_kind == crate::agent::LaunchKind::Node {
+                if installation.definition.launch_kind.needs_node() {
                     installation.definition.node_runtime = Some(self.runtime.clone());
                 }
                 threads
@@ -293,13 +296,17 @@ impl AgentManagement {
             .into_iter()
             .find(|agent| agent.id == id)
             .ok_or(ManagementError::Registry)?;
-        if let Some(existing) = stored
+        if let Some(mut existing) = stored
             .installation
             .as_ref()
             .filter(|item| crate::installation::has_launch_files(item))
+            .cloned()
         {
+            if existing.definition.launch_kind.needs_node() {
+                existing.definition.node_runtime = Some(self.runtime.clone());
+            }
             threads
-                .register_agent(existing.definition.clone())
+                .register_agent(existing.definition)
                 .map_err(|_| ManagementError::Install)?;
             progress("기존 설치 사용");
             return Ok(());
@@ -471,7 +478,7 @@ impl AgentManagement {
                         })?;
                     previous_active = previous.map(|item| item.artifact);
                     let mut definition = pending.definition;
-                    if definition.launch_kind == crate::agent::LaunchKind::Node {
+                    if definition.launch_kind.needs_node() {
                         definition.node_runtime = Some(self.runtime.clone());
                     }
                     Ok(definition)

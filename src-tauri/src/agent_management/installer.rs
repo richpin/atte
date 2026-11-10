@@ -137,34 +137,10 @@ impl<D: Downloader> SystemInstaller<D> {
                 if resolved_version > maximum {
                     return Err(ManagementError::Install);
                 }
-                let bin = metadata["bin"]
-                    .as_str()
-                    .or_else(|| {
-                        metadata["bin"]
-                            .as_object()
-                            .and_then(|bins| {
-                                bins.get(package.rsplit('/').next().unwrap_or(package))
-                                    .or_else(|| {
-                                        if bins.len() == 1 {
-                                            bins.values().next()
-                                        } else {
-                                            None
-                                        }
-                                    })
-                            })
-                            .and_then(|bin| bin.as_str())
-                    })
-                    .ok_or(ManagementError::Install)?;
-                let executable = enclosed(&package_root, Path::new(bin))?;
-                let executable = executable
-                    .canonicalize()
-                    .map_err(|_| ManagementError::Install)?;
-                if !executable.starts_with(artifact) || !executable.is_file() {
-                    return Err(ManagementError::Install);
-                }
+                let executable = super::launch::npm_command(artifact, package)?;
                 let env: std::collections::HashMap<_, _> = npm.env.clone().into_iter().collect();
                 (
-                    LaunchKind::Node,
+                    LaunchKind::Npm,
                     executable,
                     npm.args.clone(),
                     env,
@@ -232,7 +208,7 @@ impl<D: Downloader> SystemInstaller<D> {
                 command,
                 args,
                 env,
-                node_runtime: (launch_kind == LaunchKind::Node).then(|| self.runtime.clone()),
+                node_runtime: launch_kind.needs_node().then(|| self.runtime.clone()),
             },
             version,
             artifact: artifact.into(),

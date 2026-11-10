@@ -89,6 +89,31 @@ struct ControlledInstaller {
     fail: bool,
 }
 
+fn npm_fixture(artifact: &Path, distribution: &Distribution) {
+    let Distribution::Npm(npm) = distribution else {
+        return;
+    };
+    let package = npm.package.rsplit_once('@').unwrap().0;
+    let package_root = artifact.join("node_modules").join(package);
+    std::fs::create_dir_all(&package_root).unwrap();
+    std::fs::copy(artifact.join("fixture"), package_root.join("fixture")).unwrap();
+    std::fs::write(
+        package_root.join("package.json"),
+        r#"{"bin":{"agent":"fixture"}}"#,
+    )
+    .unwrap();
+    let bin = artifact.join("node_modules/.bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(
+        Path::new("..").join(package).join("fixture"),
+        bin.join("agent"),
+    )
+    .unwrap();
+    #[cfg(windows)]
+    std::fs::write(bin.join("agent.cmd"), "fixture shim").unwrap();
+}
+
 struct CountingInstaller {
     count: AtomicUsize,
 }
@@ -105,7 +130,7 @@ impl Installer for ConcurrentInstaller {
         &'a self,
         id: &'a str,
         entry: &'a RegistryAgent,
-        _: &'a Distribution,
+        distribution: &'a Distribution,
         root: &'a Path,
         _: &'a (dyn Fn(&str) + Send + Sync),
     ) -> InstallFuture<'a> {
@@ -121,6 +146,7 @@ impl Installer for ConcurrentInstaller {
                 .join(format!(".staging-fixture-{}", uuid::Uuid::new_v4()));
             std::fs::create_dir_all(&artifact).unwrap();
             std::fs::write(artifact.join("fixture"), "installation").unwrap();
+            npm_fixture(&artifact, distribution);
             Ok(Installation {
                 definition: AgentDefinition {
                     id: id.into(),
@@ -142,7 +168,7 @@ impl Installer for ControlledInstaller {
         &'a self,
         id: &'a str,
         entry: &'a RegistryAgent,
-        _distribution: &'a Distribution,
+        distribution: &'a Distribution,
         root: &'a Path,
         progress: &'a (dyn Fn(&str) + Send + Sync),
     ) -> InstallFuture<'a> {
@@ -156,6 +182,7 @@ impl Installer for ControlledInstaller {
                 .join(format!(".staging-fixture-{}", uuid::Uuid::new_v4()));
             std::fs::create_dir_all(&artifact).unwrap();
             std::fs::write(artifact.join("fixture"), "installation").unwrap();
+            npm_fixture(&artifact, distribution);
             Ok(Installation {
                 definition: AgentDefinition {
                     id: id.into(),
@@ -178,7 +205,7 @@ impl Installer for CountingInstaller {
         &'a self,
         id: &'a str,
         entry: &'a RegistryAgent,
-        _: &'a Distribution,
+        distribution: &'a Distribution,
         root: &'a Path,
         _: &'a (dyn Fn(&str) + Send + Sync),
     ) -> InstallFuture<'a> {
@@ -189,6 +216,7 @@ impl Installer for CountingInstaller {
                 .join(format!(".staging-fixture-{}", uuid::Uuid::new_v4()));
             std::fs::create_dir_all(&artifact).unwrap();
             std::fs::write(artifact.join("fixture"), "installation").unwrap();
+            npm_fixture(&artifact, distribution);
             Ok(Installation {
                 definition: AgentDefinition {
                     id: id.into(),
@@ -727,7 +755,12 @@ async fn failed_repair_preserves_the_selected_installation() {
         .find(|agent| agent.id == "codex-acp")
         .unwrap();
     let artifact = selected.artifact.unwrap();
-    std::fs::remove_file(artifact.join("fixture")).unwrap();
+    std::fs::remove_file(artifact.join("node_modules/.bin").join(if cfg!(windows) {
+        "agent.cmd"
+    } else {
+        "agent"
+    }))
+    .unwrap();
 
     assert!(manager
         .install(
@@ -782,6 +815,11 @@ async fn reopening_promotes_pending_and_cleans_staging_orphans_but_keeps_runtime
     let mut manifest: serde_json::Value =
         serde_json::from_slice(&std::fs::read(active.join("installation.json")).unwrap()).unwrap();
     manifest["installedVersion"] = "2.0.0".into();
+    manifest["launch"]["kind"] = "node".into();
+    npm_fixture(
+        &pending,
+        &serde_json::from_value(manifest["sourceIdentity"].clone()).unwrap(),
+    );
     std::fs::write(
         pending.join("installation.json"),
         serde_json::to_vec_pretty(&manifest).unwrap(),

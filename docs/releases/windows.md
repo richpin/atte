@@ -2,17 +2,17 @@
 
 Windows 11 x64 미리보기를 macOS에서 생성한다. GitHub 업로드·공개는 사용자가 직접 수행한다. Windows 실행 검증 전에는 배포 안내에 **Windows 실행 미검증**을 표시한다. macOS 교차 빌드 성공은 Windows 정식 지원 검증을 대신하지 않는다.
 
-배포 본문에 사용할 안내문과 검증 결과 양식은 [Windows 미리보기 검증](windows-validation.md)에 있다. 현재는 실제 Windows 검증과 코드 서명 수단 확보를 기다리는 상태다.
+배포 본문에 사용할 안내문과 검증 결과 양식은 [Windows 미리보기 검증](../platforms/windows/validation.md)에 있다. 현재는 실제 Windows 검증과 코드 서명 수단 확보를 기다리는 상태다.
 
 ## 준비
 
-[로컬 빌드 준비](windows-build.md)의 NSIS, LLVM/LLD, cargo-xwin, Rust target과 pnpm 의존성을 설치한다. LLVM의 `clang-cl`과 LLD의 `lld-link`가 PATH에 있어야 한다.
+[로컬 빌드 준비](../platforms/windows/build.md)의 NSIS, LLVM/LLD, cargo-xwin, Rust target과 pnpm 의존성을 설치한다. LLVM의 `clang-cl`과 LLD의 `lld-link`가 PATH에 있어야 한다.
 
 ```sh
 export PATH="$(brew --prefix llvm)/bin:$(brew --prefix lld)/bin:$PATH"
 ```
 
-`.env.release.example`을 참고해 Git에서 제외되는 `.env.release.local`에 `ATTE_UPDATER_PUBLIC_KEY_PATH`, `TAURI_SIGNING_PRIVATE_KEY`, 필요한 경우 `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`를 지정한다. macOS와 Windows는 같은 updater 키를 사용한다. Windows 빌드에는 Apple 인증서와 notary profile이 필요하지 않다. 키 생성·백업은 [macOS 최초 설정](release-macos.md)을 따른다. 개인키·비밀번호·토큰을 커밋하거나 릴리스에 업로드하지 않는다.
+`.env.release.example`을 참고해 Git에서 제외되는 `.env.release.local`에 `ATTE_UPDATER_PUBLIC_KEY_PATH`, `TAURI_SIGNING_PRIVATE_KEY`, 필요한 경우 `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`를 지정한다. macOS와 Windows는 같은 updater 키를 사용한다. Windows 빌드에는 Apple 인증서와 notary profile이 필요하지 않다. 키 생성·백업은 [macOS 최초 설정](macos.md)을 따른다. 개인키·비밀번호·토큰을 커밋하거나 릴리스에 업로드하지 않는다.
 
 `package.json`, `src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json`과 Cargo.lock의 버전을 맞춘다. 앱 버전은 `0.1.0` 같은 숫자 SemVer를 사용하며 미리보기 여부는 GitHub prerelease와 업데이트 endpoint로 구분한다. 배포한 버전을 덮어쓰지 않고 다음 검증에는 버전을 증가시킨다.
 
@@ -31,7 +31,7 @@ pnpm release:windows
 
 ## 정식 배포
 
-[실환경 점검](windows-workflows.md), 아래 두 버전 업데이트, Windows 코드 서명 준비를 마친 후 사용한다. `--stable`은 정식 endpoint를 주입하지만 현재 자동 코드 서명을 제공하지 않는다. 이 플래그만으로 정식 Windows 지원이 준비되었다고 간주하지 않는다.
+[실환경 점검](../platforms/windows/workflows.md), 아래 두 버전 업데이트, Windows 코드 서명 준비를 마친 후 사용한다. `--stable`은 정식 endpoint를 주입하지만 현재 자동 코드 서명을 제공하지 않는다. 이 플래그만으로 정식 Windows 지원이 준비되었다고 간주하지 않는다.
 
 ```sh
 pnpm release:macos
@@ -41,7 +41,7 @@ pnpm release:manifest /tmp/latest.json \
   .scratch/releases/windows/stable/<version>/update-windows.json
 ```
 
-macOS 명령은 [Developer ID·notarization 준비](release-macos.md)를 먼저 완료한다. 각 빌드는 플랫폼별 fragment만 만들며 정식 `latest.json`은 합치기 명령만 생성한다. 버전이 다르거나 플랫폼이 빠지거나 중복되면 합치기를 거부하므로 어느 플랫폼도 실수로 누락하지 않는다. 플랫폼별 이전 버전 URL을 새 전역 버전 아래에 복사하지 않는다. Tauri의 `requireSignedVersion` 검증과 충돌하기 때문이다. 한 플랫폼만 수정했어도 두 플랫폼을 같은 버전으로 빌드한다.
+macOS 명령은 [Developer ID·notarization 준비](macos.md)를 먼저 완료한다. 각 빌드는 플랫폼별 fragment만 만들며 정식 `latest.json`은 합치기 명령만 생성한다. 버전이 다르거나 플랫폼이 빠지거나 중복되면 합치기를 거부하므로 어느 플랫폼도 실수로 누락하지 않는다. 플랫폼별 이전 버전 URL을 새 전역 버전 아래에 복사하지 않는다. Tauri의 `requireSignedVersion` 검증과 충돌하기 때문이다. 한 플랫폼만 수정했어도 두 플랫폼을 같은 버전으로 빌드한다.
 
 `v<version>` draft Release 하나에 macOS DMG, updater `.app.tar.gz`와 `.sig`, Windows Setup.exe와 `.sig`, 합친 `latest.json`을 모두 업로드한다. 필요하면 manifest에 `notes`를 수동 추가한다. URL·버전·두 플랫폼 서명을 확인한 뒤 정식 공개하고 latest로 지정한다. 각 fragment는 업로드할 필요 없다. 기존 macOS asset·manifest를 덮어쓰지 않으며 모든 후속 정식 Release에도 두 플랫폼을 포함한다. 자동 업로드와 CI는 없다.
 

@@ -100,7 +100,7 @@ pub(crate) async fn run(
 ) -> bool {
     let launch = tokio::select! {
         _ = &mut stop => return true,
-        launch = crate::agent_management::node_runtime::resolve_launch(&agent) => launch,
+        launch = crate::agent_management::launch::resolve(&agent) => launch,
     };
     let Ok(launch) = launch else {
         commands.close();

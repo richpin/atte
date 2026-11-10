@@ -189,6 +189,24 @@ fn cleanup_orphans(app_data: &Path, store: &crate::storage::Store) -> Result<(),
 }
 
 pub(crate) fn has_launch_files(installation: &Installation) -> bool {
+    // A present but invalid manifest must never fall back to the cached legacy launch.
+    if installation.artifact.join(MANIFEST_NAME).exists() {
+        let Some(app_data) = installation.artifact.ancestors().nth(3) else {
+            return false;
+        };
+        let Ok(restored) = load(
+            app_data,
+            &installation.artifact,
+            &installation.definition.id,
+        ) else {
+            return false;
+        };
+        if restored.definition.command != installation.definition.command
+            || restored.definition.launch_kind != installation.definition.launch_kind
+        {
+            return false;
+        }
+    }
     installation.artifact.is_dir()
         && installation.definition.command.is_file()
         && installation
@@ -271,8 +289,8 @@ impl Manifest {
         artifact: PathBuf,
         id: &str,
     ) -> Result<Installation, ManagementError> {
-        let command = self.launch.command.resolve(app_data, &artifact)?;
-        let args = self
+        let mut command = self.launch.command.resolve(app_data, &artifact)?;
+        let mut args = self
             .launch
             .args
             .into_iter()
@@ -283,6 +301,22 @@ impl Manifest {
                 StoredArgument::Literal(value) => Ok(value),
             })
             .collect::<Result<Vec<_>, ManagementError>>()?;
+        let mut kind = self.launch.kind;
+        if let Distribution::Npm(npm) = &self.source_identity {
+            let (package, _) = npm
+                .package
+                .rsplit_once('@')
+                .ok_or(ManagementError::Registry)?;
+            // Old manifests could store Node itself plus the entrypoint as the first arg.
+            if kind == LaunchKind::Direct
+                && command.starts_with(app_data.join("agents/runtime"))
+                && !args.is_empty()
+            {
+                args.remove(0);
+            }
+            command = crate::agent_management::launch::npm_command(&artifact, package)?;
+            kind = LaunchKind::Npm;
+        }
         let mut env = self.launch.env;
         if command.starts_with(app_data.join("agents/runtime")) {
             let inherited_path = std::env::var_os("PATH").unwrap_or_default();
@@ -295,7 +329,7 @@ impl Manifest {
             definition: AgentDefinition {
                 id: id.into(),
                 name: self.launch.name,
-                launch_kind: self.launch.kind,
+                launch_kind: kind,
                 command,
                 args,
                 env,
@@ -320,7 +354,7 @@ mod tests {
         let runtime_directory = app_data.join("agents/runtime/node");
         let manifest = serde_json::json!({
             "registryVersion": "1.0.0", "installedVersion": "1.0.0",
-            "sourceIdentity": { "kind": "npm", "package": "@fixture/agent@1.0.0" },
+            "sourceIdentity": { "kind": "binary", "archive": "https://fixture/agent.zip", "cmd": "node", "args": ["agent.js"] },
             "launch": {
                 "name": "Fixture",
                 "command": { "base": "appData", "path": "agents/runtime/node/node.exe" },

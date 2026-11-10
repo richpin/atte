@@ -185,7 +185,7 @@ async fn run(
     action: AuthenticationAction<'_>,
     cancellation: CancellationToken,
 ) -> Result<Authentication, ManagementError> {
-    let launch = super::node_runtime::resolve_launch(agent).await?;
+    let launch = super::launch::resolve(agent).await?;
     let mut command = Command::new(launch.program);
     command
         .args(launch.args)
@@ -354,7 +354,7 @@ async fn terminal_login(
     let script = directory.path().join("Atte-login.command");
     let mut env = agent.env.clone();
     env.extend(method.env.clone());
-    let launch = super::node_runtime::resolve_launch(agent).await?;
+    let launch = super::launch::resolve(agent).await?;
     if let Some(path) = launch.path {
         env.insert("PATH".into(), path.to_string_lossy().into_owned());
     }
@@ -414,7 +414,7 @@ async fn terminal_login(
     method: &agent_client_protocol::schema::v1::AuthMethodTerminal,
     folder: &Path,
 ) -> Result<(), ManagementError> {
-    let launch = super::node_runtime::resolve_launch(agent).await?;
+    let launch = super::launch::resolve(agent).await?;
     let mut command = Command::new(launch.program);
     command
         .args(launch.args)

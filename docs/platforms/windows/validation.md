@@ -4,7 +4,7 @@
 
 ## 배포 안내문
 
-사용자가 [배포 절차](release-windows.md)에 따라 prerelease 본문에 아래 안내를 복사하고 버전·커밋·다운로드 링크·SHA-256을 실제 산출물 값으로 채운다. 설치 파일 공개는 사용자가 직접 한다.
+사용자가 [배포 절차](../../releases/windows.md)에 따라 prerelease 본문에 아래 안내를 복사하고 버전·커밋·다운로드 링크·SHA-256을 실제 산출물 값으로 채운다. 설치 파일 공개는 사용자가 직접 한다.
 
 > Windows 11 x64용 미서명 미리보기입니다. Windows 실제 실행은 아직 검증하지 않았습니다. WSL·ARM64는 검증 대상이 아닙니다. Git for Windows와 인터넷 연결이 필요합니다. 설치 파일에는 Authenticode 게시자 서명이 없으며 SmartScreen 또는 조직 정책으로 차단될 수 있습니다. Tauri updater 서명은 업데이트 파일 무결성을 확인하는 별도 서명입니다. 보안 정책을 해제하지 말고 차단 메시지를 결과로 알려주세요. 중요한 원본 대신 별도 테스트 저장소에서 검증하세요.
 >
@@ -35,11 +35,11 @@ PowerShell에서 `Get-FileHash .\Atte_<version>_x64-setup.exe -Algorithm SHA256`
 | W09 외부 앱 | Explorer, Other…의 exe 선택·취소, 특수문자 폴더가 단일 인수로 열리는지 확인. 사라진 폴더는 오류를 표시해야 한다. |
 | W10 종료·복원 | 응답·인증 중 종료, 미저장 파일 종료 취소·저장, 설치/제거 중 종료 대기. 작업 관리자에서 해당 에이전트·인증 콘솔·자손 PID 소멸 확인. 재실행 후 메시지·첨부·설정·인증·worktree·관리 Node 설치본 재개 확인. |
 
-세부 동작의 기준은 [Windows 작업 흐름](windows-workflows.md), [알림](notifications.md), [파일](files.md), [worktree](worktrees.md)를 따른다.
+세부 동작의 기준은 [Windows 작업 흐름](workflows.md), [알림](../../features/notifications.md), [파일](../../features/files.md), [worktree](../../features/worktrees.md)를 따른다.
 
 ## 두 버전 업데이트
 
-같은 updater 키의 N과 더 높은 N+1을 [릴리스 절차](release-windows.md)로 만든다. 버전별 URL은 보존하고, 실패 실험은 공개 채널 대신 별도 테스트 저장소의 prerelease endpoint를 주입한 테스트 빌드에서 한다. 정상 N+1 manifest와 파일을 보관하고 각 실험 후 복구한다.
+같은 updater 키의 N과 더 높은 N+1을 [릴리스 절차](../../releases/windows.md)로 만든다. 버전별 URL은 보존하고, 실패 실험은 공개 채널 대신 별도 테스트 저장소의 prerelease endpoint를 주입한 테스트 빌드에서 한다. 정상 N+1 manifest와 파일을 보관하고 각 실험 후 복구한다.
 
 | ID | 절차와 통과 조건 |
 | --- | --- |

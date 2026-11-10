@@ -304,14 +304,20 @@ async fn failed_or_timed_out_login_shell_lookup_continues_to_process_path() {
 #[cfg(unix)]
 #[tokio::test]
 async fn system_npm_uses_a_version_upper_bound_and_allows_lifecycle_scripts() {
-    let root = tempfile::tempdir().unwrap();
+    let root = tempfile::Builder::new()
+        .prefix("한글 project & (test)")
+        .tempdir()
+        .unwrap();
     let system_bin = root.path().join("system-bin");
     let program = fixture();
-    executable(&system_bin.join("node"), &program);
+    executable(
+        &system_bin.join("node"),
+        b"#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then echo v24.21.0; exit 0; fi\nexit 71\n",
+    );
     let arguments = root.path().join("npm-arguments");
     let lifecycle = root.path().join("lifecycle-ran");
     let npm = format!(
-        "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then echo 10.0.0; exit 0; fi\nprintf '%s\\n' \"$@\" > '{}'\nprefix=\nwhile [ $# -gt 0 ]; do\n  if [ \"$1\" = \"--prefix\" ]; then shift; prefix=$1; fi\n  shift\ndone\npackage=\"$prefix/node_modules/@fixture/agent\"\nmkdir -p \"$package\"\ncp '{}' \"$package/agent.js\"\nprintf '%s' '{{\"name\":\"@fixture/agent\",\"version\":\"3.1.0\",\"bin\":{{\"agent\":\"agent.js\"}}}}' > \"$package/package.json\"\ntouch '{}'\n",
+        "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then echo 10.0.0; exit 0; fi\nprintf '%s\\n' \"$@\" > '{}'\nprefix=\nwhile [ $# -gt 0 ]; do\n  if [ \"$1\" = \"--prefix\" ]; then shift; prefix=$1; fi\n  shift\ndone\npackage=\"$prefix/node_modules/@fixture/agent\"\nmkdir -p \"$package\"\ncp '{}' \"$package/agent.js\"\nprintf '%s' '{{\"name\":\"@fixture/agent\",\"version\":\"3.1.0\",\"bin\":{{\"agent\":\"agent.js\"}}}}' > \"$package/package.json\"\nmkdir -p \"$prefix/node_modules/.bin\"\nln -s ../@fixture/agent/agent.js \"$prefix/node_modules/.bin/agent\"\ntouch '{}'\n",
         arguments.display(),
         root.path().join("fixture-agent").display(),
         lifecycle.display(),
@@ -359,12 +365,12 @@ async fn system_npm_uses_a_version_upper_bound_and_allows_lifecycle_scripts() {
     assert!(!arguments.contains("--ignore-scripts"));
     assert!(lifecycle.exists());
     assert_eq!(count.load(Ordering::SeqCst), 0);
-    let installation = atte_lib::storage::Store::open(&root.path().join("atte.sqlite"))
+    let mut installation = atte_lib::storage::Store::open(&root.path().join("atte.sqlite"))
         .unwrap()
         .installations()
         .unwrap()
         .remove(0);
-    assert_eq!(installation.definition.launch_kind, LaunchKind::Node);
+    assert_eq!(installation.definition.launch_kind, LaunchKind::Npm);
     let manifest =
         std::fs::read_to_string(installation.artifact.join("installation.json")).unwrap();
     assert!(!manifest.contains(&system_bin.to_string_lossy().to_string()));
@@ -379,6 +385,22 @@ async fn system_npm_uses_a_version_upper_bound_and_allows_lifecycle_scripts() {
     drop(threads);
     drop(manager);
 
+    // Replay a pre-fix active installation without rewriting its immutable manifest.
+    let manifest_path = installation.artifact.join("installation.json");
+    let mut legacy: serde_json::Value = serde_json::from_str(&manifest).unwrap();
+    legacy["launch"]["kind"] = "node".into();
+    legacy["launch"]["command"]["path"] = "node_modules/@fixture/agent/agent.js".into();
+    let legacy = serde_json::to_vec_pretty(&legacy).unwrap();
+    std::fs::write(&manifest_path, &legacy).unwrap();
+    installation.definition.launch_kind = LaunchKind::Node;
+    installation.definition.command = installation
+        .artifact
+        .join("node_modules/@fixture/agent/agent.js");
+    atte_lib::storage::Store::open(&root.path().join("atte.sqlite"))
+        .unwrap()
+        .save_installation(&installation)
+        .unwrap();
+
     let manager = AgentManagement::open_with_runtime(root.path(), runtime).unwrap();
     let restored = Threads::new(vec![]);
     manager.restore(&restored).unwrap();
@@ -387,12 +409,15 @@ async fn system_npm_uses_a_version_upper_bound_and_allows_lifecycle_scripts() {
         .unwrap();
     restored.connect(thread.id).unwrap();
     wait_ready(&restored, thread.id).await;
+    restored.reconnect(thread.id).unwrap();
+    wait_ready(&restored, thread.id).await;
     restored.send_message(thread.id, "system".into()).unwrap();
     wait_ready(&restored, thread.id).await;
     assert_eq!(
         restored.get(thread.id).unwrap().turns[0].response_text(),
         "Hello world"
     );
+    assert_eq!(std::fs::read(manifest_path).unwrap(), legacy);
     restored.shutdown().await;
 }
 
@@ -751,6 +776,137 @@ async fn wait_ready(threads: &Threads, id: uuid::Uuid) {
     })
     .await
     .unwrap();
+}
+
+#[tokio::test]
+async fn npm_wrapper_preserves_shebang_arguments_environment_and_working_folder() {
+    use atte_lib::agent::AgentDefinition;
+    let root = tempfile::tempdir().unwrap();
+    let artifact = root.path().join("한글 artifact & (test) 'quote'");
+    let folder = root.path().join("working folder & (test)");
+    std::fs::create_dir_all(&folder).unwrap();
+    let bin = artifact.join("node_modules/.bin");
+    let package = artifact.join("node_modules/agent");
+    std::fs::create_dir_all(&bin).unwrap();
+    std::fs::create_dir_all(&package).unwrap();
+    let node_bin = root.path().join("node-bin");
+    std::fs::create_dir_all(&node_bin).unwrap();
+    let program = fixture();
+    let node = node_bin.join(if cfg!(windows) { "node.exe" } else { "node" });
+    let npm = node_bin.join(if cfg!(windows) {
+        "node_modules/npm/bin/npm-cli.js"
+    } else {
+        "npm"
+    });
+    std::fs::create_dir_all(npm.parent().unwrap()).unwrap();
+    std::fs::write(&node, &program).unwrap();
+    std::fs::write(&npm, &program).unwrap();
+    #[cfg(unix)]
+    {
+        executable(&node, &program);
+        executable(&npm, &program);
+    }
+    let runtime = NodeRuntime::controlled(
+        binary("https://fixture/unused.tgz", "", b"unused"),
+        "unused".into(),
+        None,
+        Some(node_bin.as_os_str().to_owned()),
+    );
+    runtime
+        .resolve(
+            &root.path().join("runtime"),
+            &Downloads {
+                files: HashMap::new(),
+                count: Arc::default(),
+            },
+            &|_| {},
+        )
+        .await
+        .unwrap();
+    let target = package.join("cli");
+    std::fs::write(&target, "#!/usr/bin/env -S node --fixture-node-flag\n").unwrap();
+    let launcher = bin.join(if cfg!(windows) { "agent.cmd" } else { "agent" });
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::{symlink, PermissionsExt};
+        std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o755)).unwrap();
+        symlink("../agent/cli", &launcher).unwrap();
+    }
+    #[cfg(windows)]
+    std::fs::write(
+        &launcher,
+        "@echo off\r\nnode --fixture-node-flag \"%~dp0..\\agent\\cli\" %*\r\n",
+    )
+    .unwrap();
+    // Unix shebang execution receives the lexical launcher path; npm's Windows shim
+    // supplies the package entrypoint instead.
+    let entrypoint = if cfg!(windows) {
+        bin.join("../agent/cli")
+    } else {
+        launcher.clone()
+    };
+    let args = vec!["--acp".to_owned(), "한글 & (literal) $value".into()];
+    let expected: Vec<_> = [
+        "--fixture-node-flag".to_owned(),
+        entrypoint.to_string_lossy().into_owned(),
+    ]
+    .into_iter()
+    .chain(args.clone())
+    .collect();
+    let threads = Threads::new(vec![AgentDefinition {
+        id: "wrapper".into(),
+        name: "Wrapper".into(),
+        launch_kind: LaunchKind::Npm,
+        command: launcher,
+        args,
+        env: HashMap::from([
+            (
+                "EXPECTED_ARGS".into(),
+                serde_json::to_string(&expected).unwrap(),
+            ),
+            ("EXPECTED_CWD".into(), folder.to_string_lossy().into_owned()),
+        ]),
+        node_runtime: Some(runtime),
+    }]);
+    let thread = threads.create_for_agent(&folder, "wrapper").unwrap();
+    threads.connect(thread.id).unwrap();
+    wait_ready(&threads, thread.id).await;
+    threads.send_message(thread.id, "hello".into()).unwrap();
+    wait_ready(&threads, thread.id).await;
+    assert_eq!(
+        threads.get(thread.id).unwrap().turns[0].response_text(),
+        "Hello world"
+    );
+    threads.shutdown().await;
+}
+
+#[cfg(windows)]
+#[tokio::test]
+async fn windows_batch_agent_uses_standard_process_and_job_cleanup() {
+    use atte_lib::agent::AgentDefinition;
+    let root = tempfile::tempdir().unwrap();
+    let folder = root.path().join("한글 folder & (test)");
+    std::fs::create_dir_all(&folder).unwrap();
+    std::fs::write(folder.join("agent.exe"), fixture()).unwrap();
+    let launcher = folder.join("agent.cmd");
+    std::fs::write(&launcher, "@echo off\r\n\"%~dp0agent.exe\" %*\r\n").unwrap();
+    let args = vec!["한글 & (literal)".to_owned()];
+    let threads = Threads::new(vec![AgentDefinition {
+        id: "batch".into(),
+        name: "Batch".into(),
+        launch_kind: LaunchKind::Direct,
+        command: launcher,
+        args: args.clone(),
+        env: HashMap::from([(
+            "EXPECTED_ARGS".into(),
+            serde_json::to_string(&args).unwrap(),
+        )]),
+        node_runtime: None,
+    }]);
+    let thread = threads.create_for_agent(&folder, "batch").unwrap();
+    threads.connect(thread.id).unwrap();
+    wait_ready(&threads, thread.id).await;
+    threads.shutdown().await;
 }
 
 #[tokio::test]

@@ -14,7 +14,7 @@
 1. `package.json`, `src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json`의 버전을 같은 안정 SemVer로 맞추고 Cargo lock 파일도 갱신한다. 예: `0.1.0`. 이 명령은 stable 배포용이며 prerelease 버전은 거부한다.
 2. 프로젝트 루트에서 `pnpm release:macos`를 실행한다. 배포 명령은 공개키를 Tauri 설정에 주입한다. 일반 개발 빌드에는 키와 updater artifact가 필요하지 않다.
 3. 모든 검증이 성공하면 `src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/`에서 이번 실행이 출력한 DMG, `Atte_<version>_aarch64.app.tar.gz`, 그 `.sig`, `update-darwin.json`을 가져온다.
-4. 같은 버전의 Windows stable candidate를 생성하고 [정식 manifest 병합](release-windows.md)의 `pnpm release:manifest`로 두 플랫폼을 포함한 `latest.json`을 만든다. 플랫폼 fragment를 정식 manifest로 게시하지 않는다. `v<version>` 태그의 GitHub Release를 draft로 만들고 DMG, macOS updater archive와 서명, Windows Setup.exe와 서명, 합친 `latest.json`을 모두 업로드한다. 태그는 빌드한 코드와 일치해야 한다. 같은 버전의 파일을 나중에 덮어쓰지 않는다. 최초 릴리스 이후에도 모든 stable Release에는 `latest.json`과 updater 파일을 포함한다.
+4. 같은 버전의 Windows stable candidate를 생성하고 [정식 manifest 병합](windows.md)의 `pnpm release:manifest`로 두 플랫폼을 포함한 `latest.json`을 만든다. 플랫폼 fragment를 정식 manifest로 게시하지 않는다. `v<version>` 태그의 GitHub Release를 draft로 만들고 DMG, macOS updater archive와 서명, Windows Setup.exe와 서명, 합친 `latest.json`을 모두 업로드한다. 태그는 빌드한 코드와 일치해야 한다. 같은 버전의 파일을 나중에 덮어쓰지 않는다. 최초 릴리스 이후에도 모든 stable Release에는 `latest.json`과 updater 파일을 포함한다.
 5. asset이 모두 준비되면 Release를 공개하고 latest로 지정한다. `latest.json`에는 같은 버전의 `darwin-aarch64`와 `windows-x86_64` 항목을 함께 포함한다. 이전 버전의 다른 플랫폼 파일을 새 버전으로 광고하지 않는다. 다운로드 URL은 정확한 버전 태그에 고정된다. 변경 내용은 GitHub Release 본문에 작성하고, 앱에서도 표시하려면 게시 전 `latest.json`에 선택 필드 `notes`를 넣는다.
 
 ## 앱의 동작

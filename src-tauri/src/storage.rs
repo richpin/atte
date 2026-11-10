@@ -232,7 +232,7 @@ impl Store {
         })?;
         rows.map(|row| {
             let (id, metadata, version, artifact, definition, pending_artifact) = row?;
-            let installation = match (version, artifact, definition) {
+            let mut installation = match (version, artifact, definition) {
                 (Some(version), Some(artifact), Some(definition)) => Some(Installation {
                     version,
                     artifact: artifact.into(),
@@ -240,6 +240,14 @@ impl Store {
                 }),
                 _ => None,
             };
+            // Manifests retain the source identity needed to normalize legacy npm launches.
+            // Keep an invalid installation selected for repair/removal, but never launch it.
+            if let Some(current) = installation.as_mut() {
+                if let Ok(restored) = crate::installation::load(&self.root, &current.artifact, &id)
+                {
+                    *current = restored;
+                }
+            }
             // Registry metadata is replaceable; bad cached metadata must not prevent
             // restoring a separately persisted, valid installation.
             let registry = metadata.and_then(|json| serde_json::from_str(&json).ok());
