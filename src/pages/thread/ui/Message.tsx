@@ -3,24 +3,21 @@ import type { PreparedFileChange } from "shared/diff";
 import { type TranslationKey, useI18n } from "shared/i18n";
 import { AgentIcon, Markdown } from "shared/ui";
 import {
+  type Accessor,
   createSignal,
   For,
   Index,
-  Match,
   onCleanup,
   onMount,
   Show,
-  Switch,
 } from "solid-js";
 import { attachmentMentions, mentionFileName } from "../model/file-mentions";
-import type { Attachment, ResponsePart, Turn } from "../model/types";
+import { groupResponseParts } from "../model/response-groups";
+import type { Attachment, Turn } from "../model/types";
 import { AttachmentChip } from "./AttachmentChip";
-import { Plan } from "./Plan";
-import { PlanContent } from "./PlanContent";
-import { ResponseContentView } from "./ResponseContent";
-import { Thought } from "./Thought";
-import { ToolCall } from "./ToolCall";
+import { ResponseParts } from "./ResponseParts";
 import { TurnChangesSummary } from "./TurnChangesSummary";
+import { WorkLog } from "./WorkLog";
 
 const collapsedLines = 20;
 
@@ -144,125 +141,52 @@ export function Message(props: {
     <ol aria-label={t("thread.messages")} class="flex flex-col gap-8">
       <Index each={props.turns}>
         {(turn) => (
-          <li class="flex min-w-0 flex-col gap-5 [&>:is([data-tool-call],[data-thought])+:is([data-tool-call],[data-thought])]:-mt-4">
+          <li class="flex min-w-0 flex-col gap-5">
             <UserMessage
               message={turn().message}
               attachments={turn().attachments ?? []}
             />
-            <Index each={turn().responseParts}>
-              {(part, index) => (
-                <Switch>
-                  <Match
-                    when={
-                      part().kind === "content" &&
-                      (part() as Extract<ResponsePart, { kind: "content" }>)
-                    }
-                  >
-                    {(content) => (
-                      <div
-                        data-message-participant="agent"
-                        data-thread-search-root=""
-                      >
-                        <ResponseContentView
-                          content={content().content}
-                          threadId={props.threadId}
-                          visible={props.visible}
-                          onOpenFile={props.onOpenFile}
-                        />
-                      </div>
-                    )}
-                  </Match>
-                  <Match
-                    when={
-                      part().kind === "thought" &&
-                      (part() as Extract<ResponsePart, { kind: "thought" }>)
-                    }
-                  >
-                    {(thought) => (
-                      <Thought
-                        part={thought()}
-                        active={
-                          turn().id === props.thinkingTurnId &&
-                          index === turn().responseParts.length - 1
-                        }
-                      />
-                    )}
-                  </Match>
-                  <Match
-                    when={
-                      part().kind === "plan" &&
-                      (part() as Extract<ResponsePart, { kind: "plan" }>)
-                    }
-                  >
-                    {(plan) => (
-                      <Plan
-                        plan={plan().plan}
-                        active={turn().id === props.streamingTurnId}
-                      />
-                    )}
-                  </Match>
-                  <Match
-                    when={
-                      part().kind === "planContent" &&
-                      (part() as Extract<ResponsePart, { kind: "planContent" }>)
-                    }
-                  >
-                    {(plan) => (
-                      <PlanContent
-                        part={plan()}
-                        active={turn().id === props.streamingTurnId}
-                      />
-                    )}
-                  </Match>
-                  <Match
-                    when={
-                      part().kind === "tool" &&
-                      (part() as Extract<ResponsePart, { kind: "tool" }>)
-                    }
-                  >
-                    {(tool) => (
-                      <ToolCall
-                        tool={tool().tool}
+            <Index each={groupResponseParts(turn().responseParts)}>
+              {(group) => (
+                <Show when={group().id} keyed>
+                  {(_id) => {
+                    const parts = (visible: Accessor<boolean> = () => true) => (
+                      <ResponseParts
+                        parts={group().parts}
+                        startIndex={group().startIndex}
+                        turn={turn()}
+                        streaming={turn().id === props.streamingTurnId}
+                        thinking={turn().id === props.thinkingTurnId}
                         threadId={props.threadId}
-                        visible={props.visible}
+                        visible={props.visible !== false && visible()}
                         onOpenFile={props.onOpenFile}
-                        active={turn().id === props.streamingTurnId}
+                        permissionToolIds={props.permissionToolIds}
                         interrupted={
                           turn().stopReason === "cancelled" ||
                           (turn().id === props.turns.at(-1)?.id &&
                             props.interrupted)
                         }
-                        approvalPending={
-                          props.permissionToolIds?.includes(tool().id) ?? false
-                        }
                       />
-                    )}
-                  </Match>
-                  <Match
-                    when={
-                      part().kind === "text" &&
-                      (part() as Extract<ResponsePart, { kind: "text" }>)
-                    }
-                  >
-                    {(text) => (
-                      <div
-                        data-message-participant="agent"
-                        data-thread-search-root=""
-                        class="w-full min-w-0 text-left text-sm"
-                      >
-                        <Markdown
-                          source={text().text}
-                          variant="agent"
-                          streaming={
-                            turn().id === props.streamingTurnId &&
-                            index === turn().responseParts.length - 1
+                    );
+                    return (
+                      <Show when={group().workLog} fallback={parts()}>
+                        <WorkLog
+                          count={group().parts.length}
+                          collecting={
+                            (turn().id === props.streamingTurnId &&
+                              group().startIndex + group().parts.length ===
+                                turn().responseParts.length) ||
+                            group().parts.some((part) =>
+                              props.permissionToolIds?.includes(part.id),
+                            )
                           }
-                          generation={text().id}
-                        />
-                      </div>
-                    )}
-                  </Match>
-                </Switch>
+                        >
+                          {(visible) => parts(visible)}
+                        </WorkLog>
+                      </Show>
+                    );
+                  }}
+                </Show>
               )}
             </Index>
             <TurnChangesSummary

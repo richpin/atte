@@ -391,6 +391,7 @@ it("keeps the response indicator with thoughts and stops thinking at the next re
         turns={turns}
         respondingTurnId="turn-1"
         thinkingTurnId={thinking()}
+        streamingTurnId={thinking()}
       />
     </I18nProvider>
   ));
@@ -406,6 +407,7 @@ it("keeps the response indicator with thoughts and stops thinking at the next re
     id: "answer",
     text: "Answer",
   });
+  fireEvent.click(screen.getByRole("button", { name: "Work log · 1 item" }));
   expect(
     screen
       .getByRole("button", { name: "Thinking" })
@@ -424,7 +426,10 @@ it("keeps the response indicator with thoughts and stops thinking at the next re
   ).toBe("false");
   setThinking(undefined);
   expect(document.querySelector("[data-thought] l-tailspin")).toBeNull();
-  expect(screen.getAllByRole("button", { name: "Thinking" })).toHaveLength(2);
+  expect(screen.getAllByRole("button", { name: "Thinking" })).toHaveLength(1);
+  expect(
+    screen.getAllByRole("button", { name: "Work log · 1 item" }),
+  ).toHaveLength(2);
 });
 
 it("renders plan documents in a persistent card without reclassifying ordinary text", () => {
@@ -519,4 +524,141 @@ it("shows item plans and file references without loading or linking files", () =
   expect(screen.getByText("1/1 completed")).toBeTruthy();
   expect(screen.getByText("file:///tmp/plan.md").tagName).toBe("P");
   expect(container.querySelector("a")).toBeNull();
+});
+
+it("folds a growing work log at a content boundary and preserves nested expansion across snapshots", () => {
+  const [turns, setTurns] = createStore<Turn[]>([turn("Inspect")]);
+  render(() => (
+    <I18nProvider>
+      <Message turns={turns} streamingTurnId="turn-1" thinkingTurnId="turn-1" />
+    </I18nProvider>
+  ));
+  setTurns(0, "responseParts", [
+    { kind: "thought", id: "thought", text: "Inspect carefully" },
+  ]);
+  const thought = screen.getByRole("button", { name: "Thinking" });
+  fireEvent.click(thought);
+  setTurns(0, "responseParts", 1, {
+    kind: "tool",
+    id: "read",
+    tool: {
+      title: "Read file",
+      status: "in_progress",
+      rawInput: "src/main.ts",
+    },
+  });
+  const tool = screen.getByRole("button", { name: /Read file/ });
+  fireEvent.click(tool);
+  expect(screen.queryByRole("button", { name: /Work log/ })).toBeNull();
+  expect(screen.getByText("Inspect carefully")).toBeTruthy();
+  setTurns(0, "responseParts", 2, {
+    kind: "text",
+    id: "answer",
+    text: "Answer",
+  });
+  const log = screen.getByRole("button", { name: "Work log · 2 items" });
+  expect(log.getAttribute("aria-expanded")).toBe("false");
+  expect(screen.queryByRole("button", { name: "Thinking" })).toBeNull();
+  expect(screen.queryByRole("button", { name: /Read file/ })).toBeNull();
+  fireEvent.click(log);
+  expect(screen.getByRole("button", { name: "Thinking" })).toBe(thought);
+  expect(screen.getByRole("button", { name: /Read file/ })).toBe(tool);
+  expect(thought.getAttribute("aria-expanded")).toBe("true");
+  expect(tool.getAttribute("aria-expanded")).toBe("true");
+  setTurns(0, "responseParts", 1, (part) =>
+    part.kind === "tool"
+      ? { ...part, tool: { ...part.tool, status: "completed" as const } }
+      : part,
+  );
+  // A replacement snapshot with the same IDs must retain both levels of state.
+  setTurns(0, {
+    ...turns[0],
+    responseParts: JSON.parse(JSON.stringify(turns[0].responseParts)),
+  });
+  expect(screen.getByRole("button", { name: "Work log · 2 items" })).toBe(log);
+  expect(log.getAttribute("aria-expanded")).toBe("true");
+  expect(screen.getByRole("button", { name: "Thinking" })).toBe(thought);
+  expect(screen.getByRole("button", { name: /Read file/ })).toBe(tool);
+  expect(screen.getByText("src/main.ts")).toBeTruthy();
+  expect(screen.getByText("Completed")).toBeTruthy();
+  fireEvent.click(log);
+  expect(log.getAttribute("aria-expanded")).toBe("false");
+  fireEvent.click(log);
+  expect(thought.getAttribute("aria-expanded")).toBe("true");
+});
+
+it("folds the final run on completion and uses the same label for failed and interrupted tools", () => {
+  const [active, setActive] = createSignal<string | undefined>("turn-1");
+  const current = turn("Run");
+  current.responseParts = [
+    {
+      kind: "tool",
+      id: "run",
+      tool: { title: "Run command", status: "failed" },
+    },
+  ];
+  render(() => (
+    <I18nProvider>
+      <Message turns={[current]} streamingTurnId={active()} interrupted />
+    </I18nProvider>
+  ));
+  expect(screen.getByRole("button", { name: /Run command/ })).toBeTruthy();
+  setActive(undefined);
+  expect(
+    screen
+      .getByRole("button", { name: "Work log · 1 item" })
+      .getAttribute("aria-expanded"),
+  ).toBe("false");
+  expect(screen.queryByRole("button", { name: /Run command/ })).toBeNull();
+});
+
+it("keeps a closed run exposed while its tool needs input and folds it when the request resolves", () => {
+  const [pending, setPending] = createSignal<string[]>([]);
+  const current = turn("Inspect");
+  current.responseParts = [
+    {
+      kind: "tool",
+      id: "read",
+      tool: { title: "Read file", status: "pending" },
+    },
+    { kind: "text", id: "text", text: "Waiting" },
+  ];
+  render(() => (
+    <I18nProvider>
+      <Message
+        turns={[current]}
+        streamingTurnId="turn-1"
+        permissionToolIds={pending()}
+      />
+    </I18nProvider>
+  ));
+  const log = screen.getByRole("button", { name: "Work log · 1 item" });
+  fireEvent.click(log);
+  setPending(["read"]);
+  expect(screen.queryByRole("button", { name: /Work log/ })).toBeNull();
+  expect(screen.getByRole("button", { name: /Read file/ })).toBeTruthy();
+  expect(screen.getByText("Response needed")).toBeTruthy();
+  setPending([]);
+  expect(
+    screen
+      .getByRole("button", { name: "Work log · 1 item" })
+      .getAttribute("aria-expanded"),
+  ).toBe("false");
+  expect(screen.queryByRole("button", { name: /Read file/ })).toBeNull();
+});
+
+it("starts historical runs collapsed and never merges work across turns", () => {
+  const first = turn("First");
+  first.responseParts = [{ kind: "thought", id: "first", text: "One" }];
+  const second = { ...turn("Second"), id: "turn-2" };
+  second.responseParts = [{ kind: "thought", id: "second", text: "Two" }];
+  render(() => (
+    <I18nProvider>
+      <Message turns={[first, second]} />
+    </I18nProvider>
+  ));
+  expect(
+    screen.getAllByRole("button", { name: "Work log · 1 item" }),
+  ).toHaveLength(2);
+  expect(screen.queryByRole("button", { name: "Thinking" })).toBeNull();
 });

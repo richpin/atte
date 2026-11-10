@@ -277,6 +277,11 @@ export const en = {
     context: "Context",
     contextUsageUnavailable: "Usage unavailable",
     contextUsageExact: "{{used}} / {{size}} tokens",
+    workLog: {
+      title: "Work log",
+      item: "1 item",
+      items: "{{count}} items",
+    },
     thought: {
       title: "Thinking",
     },

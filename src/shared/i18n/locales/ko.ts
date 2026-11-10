@@ -281,6 +281,11 @@ export const ko = {
     context: "Context",
     contextUsageUnavailable: "사용량 정보 없음",
     contextUsageExact: "{{used}} / {{size}} 토큰",
+    workLog: {
+      title: "작업 과정",
+      item: "1개",
+      items: "{{count}}개",
+    },
     thought: {
       title: "생각 중",
     },

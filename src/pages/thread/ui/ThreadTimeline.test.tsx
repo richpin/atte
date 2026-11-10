@@ -2,6 +2,7 @@ import { cleanup, fireEvent, render, screen } from "@solidjs/testing-library";
 import { createSignal } from "solid-js";
 import { afterEach, expect, it, vi } from "vitest";
 import { ThreadTimeline } from "./ThreadTimeline";
+import { WorkLog } from "./WorkLog";
 
 afterEach(() => {
   cleanup();
@@ -250,4 +251,61 @@ it("follows growth, preserves reading position, and resumes from the latest butt
   expect(latest()).toBeNull();
   cleanup();
   expect(disconnect).toHaveBeenCalledOnce();
+});
+
+it("keeps following after a work log folds and preserves a detached reading position", () => {
+  let resize!: () => void;
+  vi.stubGlobal(
+    "ResizeObserver",
+    class {
+      constructor(callback: () => void) {
+        resize = callback;
+      }
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    },
+  );
+  const [collecting, setCollecting] = createSignal(true);
+  render(() => (
+    <ThreadTimeline followKey="turn-1">
+      <WorkLog count={8} collecting={collecting()}>
+        {() => <p>Work items</p>}
+      </WorkLog>
+    </ThreadTimeline>
+  ));
+  const viewport = screen.getByRole("region", { name: "스레드 타임라인" });
+  let height = 1600;
+  let top = 0;
+  Object.defineProperties(viewport, {
+    scrollHeight: { get: () => height },
+    clientHeight: { get: () => 400 },
+    scrollTop: {
+      get: () => Math.min(top, height - 400),
+      set: (value: number) => {
+        top = Math.max(0, Math.min(value, height - 400));
+      },
+    },
+  });
+  resize();
+  fireEvent.scroll(viewport);
+  expect(viewport.scrollTop).toBe(1200);
+  setCollecting(false);
+  height = 800;
+  resize();
+  fireEvent.scroll(viewport);
+  expect(viewport.scrollTop).toBe(400);
+  height = 1000;
+  resize();
+  expect(viewport.scrollTop).toBe(600);
+
+  viewport.scrollTop = 100;
+  fireEvent.scroll(viewport);
+  setCollecting(true);
+  height = 1600;
+  resize();
+  setCollecting(false);
+  height = 800;
+  resize();
+  expect(viewport.scrollTop).toBe(100);
 });
