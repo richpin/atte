@@ -82,16 +82,20 @@ export function ToolCall(props: {
           : Circle;
   const hasContent = () =>
     (props.tool.content ?? []).some((item) => item.type === "content");
-  const hasVisibleResults = () =>
-    (props.tool.content ?? []).some(
-      (item) => item.type === "content" && item.content.type !== "text",
-    );
+  const isPreview = (item: ToolContent) =>
+    item.type === "content" &&
+    !["text", "resource_link"].includes(item.content.type);
+  const hasVisibleResults = () => (props.tool.content ?? []).some(isPreview);
   const placeholder = (item: ToolContent) =>
     item.type === "diff"
       ? `${t("thread.tool.diff")}: ${item.path}`
       : t("thread.tool.terminal");
-  const results = () => (
-    <For each={props.tool.content ?? []}>
+  const results = (preview: boolean) => (
+    <For
+      each={(props.tool.content ?? []).filter(
+        (item) => isPreview(item) === preview,
+      )}
+    >
       {(item) => (
         <Show
           when={item.type === "content" && item}
@@ -185,7 +189,7 @@ export function ToolCall(props: {
             </details>
           </Show>
         </Show>
-        <Show when={!hasVisibleResults() && expanded()}>{results()}</Show>
+        <Show when={expanded()}>{results(false)}</Show>
         <For each={props.tool.locations ?? []}>
           {(location) => (
             <p class="break-all font-mono text-xs text-muted">
@@ -200,7 +204,7 @@ export function ToolCall(props: {
           data-thread-search-root=""
           class="flex min-w-0 flex-col gap-3 border-t border-line px-3 py-3"
         >
-          {results()}
+          {results(true)}
         </div>
       </Show>
     </Collapsible>

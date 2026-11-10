@@ -251,7 +251,7 @@ it("renders compact hyperlinks and opens web and local links through their exist
   expect(screen.getByText("mcp://server/resource")).toBeTruthy();
 });
 
-it("keeps mixed tool results visible in order while execution details are collapsed", async () => {
+it("keeps previews visible while text and resource links follow the tool details toggle", async () => {
   const view = render(() => (
     <I18nProvider>
       <ToolCall
@@ -261,6 +261,15 @@ it("keeps mixed tool results visible in order while execution details are collap
           rawOutput: { execution: "done" },
           content: [
             { type: "content", content: { type: "text", text: "First" } },
+            {
+              type: "content",
+              content: {
+                type: "resource_link",
+                name: "Result file",
+                uri: "file:///project/result.png",
+                mimeType: "image/png",
+              },
+            },
             {
               type: "content",
               content: {
@@ -297,11 +306,18 @@ it("keeps mixed tool results visible in order while execution details are collap
         ? node.textContent
         : node.getAttribute("data-response-content"),
     ),
-  ).toEqual(["First", "image", "Last"]);
+  ).toEqual(["image"]);
+  expect(screen.queryByText("Result file")).toBeNull();
   fireEvent.click(screen.getByRole("button", { name: /Results/ }));
   expect(screen.getByText(/Generate an image/)).toBeTruthy();
+  expect(screen.getByText("First")).toBeTruthy();
+  expect(screen.getByText("Last")).toBeTruthy();
+  expect(screen.getByText("Result file")).toBeTruthy();
   expect(screen.getAllByAltText("Between.png")).toHaveLength(1);
   fireEvent.click(screen.getByRole("button", { name: /Results/ }));
+  expect(screen.queryByText("Result file")).toBeNull();
+  expect(screen.queryByText("First")).toBeNull();
+  expect(screen.queryByText("Last")).toBeNull();
   expect(screen.getByAltText("Between.png")).toBeTruthy();
   expect(revokeUrl).not.toHaveBeenCalled();
 });

@@ -8,6 +8,44 @@ import { ToolCall } from "./ToolCall";
 beforeEach(() => localStorage.setItem("atte.locale", "en"));
 afterEach(cleanup);
 
+it("shows resource-link-only results inside expanded details", () => {
+  const view = render(() => (
+    <I18nProvider>
+      <ToolCall
+        tool={{
+          title: "View Image /project/result.png",
+          status: "completed",
+          content: [
+            {
+              type: "content",
+              content: {
+                type: "resource_link",
+                name: "Result file",
+                uri: "file:///project/result.png",
+                mimeType: "image/png",
+              },
+            },
+          ],
+        }}
+        active={false}
+        approvalPending={false}
+      />
+    </I18nProvider>
+  ));
+  expect(screen.queryByText("Result file")).toBeNull();
+  expect(view.container.querySelector("[data-thread-search-root]")).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: /View Image/ }));
+  expect(screen.getByText("Result file")).toBeTruthy();
+  expect(
+    screen
+      .getByText("Result file")
+      .closest("[data-thread-search-hidden]")
+      ?.getAttribute("data-thread-search-hidden"),
+  ).toBe("false");
+  fireEvent.click(screen.getByRole("button", { name: /View Image/ }));
+  expect(screen.queryByText("Result file")).toBeNull();
+});
+
 it("keeps details expanded as a tool finishes and displays output literally", async () => {
   const [tool, setTool] = createSignal<ToolData>({
     title: "Run tests",
