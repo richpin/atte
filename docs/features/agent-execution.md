@@ -2,6 +2,14 @@
 
 Registry의 배포 방식과 설치된 파일의 실행 방식은 구분한다. `npx` 배포는 npm으로 파일을 준비한다는 의미이며, 그 실행 파일이 JavaScript라는 보장은 없다. Grok Build와 Factory Droid는 Unix에서 설치 스크립트가 npm 진입점을 네이티브 바이너리로 교체한다.
 
+## Registry 지원 정책
+
+Harn(`harn`), Agoragentic(`agoragentic-acp`), Crow(`crow-cli`)는 확인된 ACP 호환성·배포 문제로 지원 대상에서 제외한다. [검증 결과](../testing/acp-agents-2026-11-10.md)의 실행 증거에 근거한 명시적 제외이며, Registry 새로고침·캐시·배포 버전 변경만으로 해제하지 않는다. 공통 Registry 정책에서 설치 가능한 배포를 반환하지 않으므로 미설치 항목은 카탈로그에 나타나지 않고 자동 업데이트에서도 제외된다.
+
+기존 설치 파일과 스레드 기록은 보존한다. 기존 설치 항목에는 제외 사유를 표시하고 설정에서 삭제할 수 있지만, 실행 가능한 에이전트로 복원하지 않고 기존 설치 재사용·인증·ACP 실행도 차단한다. Registry 메타데이터가 없어도 같은 정책을 적용한다.
+
+Goose와 Pi ACP는 지원을 유지한다. Goose는 제공자·모델·인증 설정이 필요하고, Pi ACP는 별도 `pi` CLI와 제공자 설정이 필요하다. 기존 CLI 설정을 앱에서도 읽을 수 있어야 하며 `pi`는 Atte 프로세스의 PATH에서도 검색되어야 한다. 설정을 마친 뒤의 실제 연결·메시지 성공은 별도 검증 대상이다.
+
 ## 실행 규칙
 
 | 실행 방식 | 진입점과 환경 |
@@ -13,6 +21,8 @@ Registry의 배포 방식과 설치된 파일의 실행 방식은 구분한다. 
 npm 명령 선택은 npm의 규칙을 따른다. 단일 bin 또는 같은 대상을 가리키는 별칭만 있으면 그 명령을 사용하고, 여러 대상이면 scope를 제외한 패키지명과 일치하는 명령을 사용한다. 선택이 모호하면 설치에 실패한다. 파일 확장자나 에이전트 ID로 인터프리터를 추측하지 않으며 래퍼·shebang 인수·심볼릭 링크를 유지한다.
 
 패키지 메타데이터, 진입점과 링크 대상은 설치본 내부에 존재해야 한다. 링크 대상 검증에는 canonical 경로를 사용하지만 저장·실행에는 npm의 원래 진입점 경로를 사용한다. 실행 시 다른 설치본·시스템 동명 명령을 검색하거나 패키지를 추가 다운로드하지 않는다. Node 자체의 재탐색과 관리 런타임 준비는 기존 정책을 따른다.
+
+tar 배포물은 에이전트와 관리 Node 런타임 모두 같은 해제 규칙을 사용한다. 일반 파일·디렉터리와 설치본 내부 상대 심볼릭 링크·하드 링크를 보존한다. 각 엔트리를 쓸 때 `tar::Entry::unpack_in`으로 실제 부모 경로가 설치본 내부인지 검증하고, 전체 해제 후 링크의 최종 대상이 설치본 내부에 존재하는지 확인한다. 대상보다 먼저 등장하는 심볼릭 링크와 framework 링크 체인을 허용하되 절대 경로 링크·외부 링크·끊어진 링크·순환 링크·기존 파일 덮어쓰기·특수 파일은 거부한다. 압축 해제 합계 2GiB·10만 엔트리 제한과 특수 권한 비트 제거를 유지한다. ZIP 배포물의 심볼릭 링크는 지원하지 않는다.
 
 실행 정의 해석은 ACP 인증·로그아웃, 터미널 로그인, 스레드 연결·Reconnect에서 공유한다. 작업 폴더·Registry 인수·환경변수와 ACP stdin/stdout을 보존하고, Unix 프로세스 그룹 및 Windows Job Object로 자손까지 정리한다. Windows batch 인수 처리는 Rust 표준 라이브러리에 맡기며 셸 명령 문자열을 별도로 조합하지 않는다.
 
@@ -28,3 +38,4 @@ npm 명령 선택은 npm의 규칙을 따른다. 단일 bin 또는 같은 대상
 - [npm 명령 선택](https://github.com/npm/cli/blob/latest/workspaces/libnpmexec/lib/get-bin-from-manifest.js)
 - [npm Windows shim](https://github.com/npm/cmd-shim/blob/main/lib/index.js)
 - [Rust Windows batch 실행](https://github.com/rust-lang/rust/blob/1.85.0/library/std/src/process.rs#L114-L129)
+- [tar의 설치 경계 검증](https://docs.rs/tar/0.4.46/tar/struct.Entry.html#method.unpack_in)

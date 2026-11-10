@@ -26,7 +26,6 @@ Currently in development, with macOS as the first target.
 Atte connects to agents through the **Agent Client Protocol (ACP)**. Available agents include:
 
 <p align="center">
-  <kbd><img src="src/shared/ui/agent-icon/assets/agoragentic-acp.svg" alt="" width="16" height="16" valign="middle"> Agoragentic</kbd> &nbsp;
   <kbd><img src="src/shared/ui/agent-icon/assets/amp-acp.svg" alt="" width="16" height="16" valign="middle"> Amp</kbd> &nbsp;
   <kbd><img src="src/shared/ui/agent-icon/assets/antigravity-acp.svg" alt="" width="16" height="16" valign="middle"> Google&nbsp;Antigravity</kbd> &nbsp;
   <kbd><img src="src/shared/ui/agent-icon/assets/auggie.svg" alt="" width="16" height="16" valign="middle"> Auggie&nbsp;CLI</kbd> &nbsp;
@@ -37,7 +36,6 @@ Atte connects to agents through the **Agent Client Protocol (ACP)**. Available a
   <kbd><img src="src/shared/ui/agent-icon/assets/codex-acp.svg" alt="" width="16" height="16" valign="middle"> Codex</kbd> &nbsp;
   <kbd><img src="src/shared/ui/agent-icon/assets/cortex-code.svg" alt="" width="16" height="16" valign="middle"> Cortex&nbsp;Code</kbd> &nbsp;
   <kbd><img src="src/shared/ui/agent-icon/assets/corust-agent.svg" alt="" width="16" height="16" valign="middle"> Corust&nbsp;Agent</kbd> &nbsp;
-  <kbd><img src="src/shared/ui/agent-icon/assets/crow-cli.svg" alt="" width="16" height="16" valign="middle"> crow-cli</kbd> &nbsp;
   <kbd><img src="src/shared/ui/agent-icon/assets/cursor.svg" alt="" width="16" height="16" valign="middle"> Cursor</kbd> &nbsp;
   <kbd><img src="src/shared/ui/agent-icon/assets/deepagents.svg" alt="" width="16" height="16" valign="middle"> DeepAgents</kbd> &nbsp;
   <kbd><img src="src/shared/ui/agent-icon/assets/devin.svg" alt="" width="16" height="16" valign="middle"> Devin</kbd> &nbsp;
@@ -49,7 +47,6 @@ Atte connects to agents through the **Agent Client Protocol (ACP)**. Available a
   <kbd><img src="src/shared/ui/agent-icon/assets/glm-acp-agent.svg" alt="" width="16" height="16" valign="middle"> GLM&nbsp;Agent</kbd> &nbsp;
   <kbd><img src="src/shared/ui/agent-icon/assets/goose.svg" alt="" width="16" height="16" valign="middle"> goose</kbd> &nbsp;
   <kbd><img src="src/shared/ui/agent-icon/assets/grok-build.svg" alt="" width="16" height="16" valign="middle"> Grok&nbsp;Build</kbd> &nbsp;
-  <kbd><img src="src/shared/ui/agent-icon/assets/harn.svg" alt="" width="16" height="16" valign="middle"> Harn</kbd> &nbsp;
   <kbd><img src="src/shared/ui/agent-icon/assets/junie.svg" alt="" width="16" height="16" valign="middle"> Junie</kbd> &nbsp;
   <kbd><img src="src/shared/ui/agent-icon/assets/kilo.svg" alt="" width="16" height="16" valign="middle"> Kilo</kbd> &nbsp;
   <kbd><img src="src/shared/ui/agent-icon/assets/kimchi.svg" alt="" width="16" height="16" valign="middle"> Kimchi</kbd> &nbsp;
@@ -68,6 +65,8 @@ Atte connects to agents through the **Agent Client Protocol (ACP)**. Available a
 </p>
 
 Install agents in **Settings → Agents**, powered by the [ACP registry](https://github.com/agentclientprotocol/registry). Availability depends on your platform and the agent's distribution; features and sign-in requirements vary by agent.
+
+Goose requires a configured provider, model, and credentials. Pi ACP requires a separately installed and configured `pi` CLI available on Atte's `PATH`. Existing CLI setups must be accessible to the app; installing the Registry adapter alone does not complete this setup.
 
 ## Features
 

@@ -31,7 +31,7 @@ export function AgentManagementPage(props: {
   active: boolean;
   onAgentsChanged: () => void;
 }) {
-  const { t, message } = useI18n();
+  const { t, message, content } = useI18n();
   const [error, setError] = createSignal<string>();
   const [search, setSearch] = createSignal("");
   const [installationFilter, setInstallationFilter] = createSignal<
@@ -240,6 +240,11 @@ export function AgentManagementPage(props: {
                         </Show>
                       </div>
                       <p class="text-sm text-muted">{agent.description}</p>
+                      <Show when={agent.unavailableReason}>
+                        {(reason) => (
+                          <p class="text-sm text-muted">{content(reason())}</p>
+                        )}
+                      </Show>
                     </div>
                   </div>
                   <div class="flex shrink-0 items-center gap-3 text-sm">

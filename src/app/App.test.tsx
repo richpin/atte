@@ -3843,7 +3843,7 @@ it("retries a failed install and offers the installed agent without restarting",
   });
 });
 
-it("shows simplified agent cards while keeping cached installations on automatic refresh failure", async () => {
+it("shows agent availability reasons while keeping cached installations on automatic refresh failure", async () => {
   const agents = [
     {
       id: "new-provider",
@@ -3892,6 +3892,10 @@ it("shows simplified agent cards while keeping cached installations on automatic
   expect(
     screen.getByRole("button", { name: "UV Provider 설치" }),
   ).toHaveProperty("disabled", true);
+  expect(screen.getByText("지원하지 않는 배포 형식입니다.")).toBeTruthy();
+  expect(
+    screen.getByText("Registry에서 제공하지 않는 기존 설치입니다."),
+  ).toBeTruthy();
   expect(await screen.findByRole("alert")).toHaveProperty(
     "textContent",
     "Registry 갱신 실패",
@@ -3905,7 +3909,6 @@ it("shows simplified agent cards while keeping cached installations on automatic
     "목록 새로고침",
     "에이전트를 설치하고 로그인한 뒤 작업 폴더에서 스레드를 시작하세요.",
     "npm · new-provider@1.0.0",
-    "지원하지 않는 배포 형식입니다.",
     "External auth · 미지원 인증",
     "ACP 연결",
     "인증",

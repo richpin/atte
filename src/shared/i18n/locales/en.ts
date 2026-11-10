@@ -596,6 +596,8 @@ export const en = {
     busy: "A task is in progress. Try again after it completes.",
     externalInstall:
       "This existing installation is not provided by the registry.",
+    excludedAgent:
+      "This agent is excluded because of ACP compatibility or distribution issues.",
     resumptionNotice:
       "The previous context was resumed. This agent cannot display earlier messages.",
     defaultThreadTitle: "New Thread",

@@ -245,11 +245,9 @@ impl NodeRuntime {
         let extracted = staging.path().join("unpacked");
         let url = self.distribution.archive.clone();
         let output = extracted.clone();
-        tokio::task::spawn_blocking(move || {
-            archive::extract(&archive_file, &url, &output, "node", true)
-        })
-        .await
-        .map_err(|_| ManagementError::NodeMissing)??;
+        tokio::task::spawn_blocking(move || archive::extract(&archive_file, &url, &output, "node"))
+            .await
+            .map_err(|_| ManagementError::NodeMissing)??;
         let staged = archive::enclosed(&extracted, Path::new(self.directory.as_ref()))?;
         let candidate = managed_runtime(&staged, root)?;
         if !compatible(&candidate).await {

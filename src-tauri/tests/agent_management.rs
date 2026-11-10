@@ -328,6 +328,130 @@ fn catalog_excludes_uninstalled_agents_without_a_supported_distribution() {
     assert_eq!(ids, ["antigravity-acp", "claude-acp", "codex-acp"]);
 }
 
+#[tokio::test]
+async fn excluded_agents_stay_out_of_cached_catalog_and_cannot_be_installed() {
+    let root = tempfile::tempdir().unwrap();
+    let manager = AgentManagement::open(root.path()).unwrap();
+    let agents: Vec<_> = ["harn", "agoragentic-acp", "crow-cli", "goose", "pi-acp"]
+        .into_iter()
+        .map(|id| {
+            serde_json::json!({
+                "id": id, "name": id, "version": "1.0.0",
+                "distribution": {"npx": {"package": "fixture@1.0.0"}}
+            })
+        })
+        .collect();
+    manager
+        .set_registry(
+            Registry::parse(
+                &serde_json::json!({
+                    "version": "1.0.0", "agents": agents
+                })
+                .to_string(),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+    drop(manager);
+    let manager = AgentManagement::open(root.path()).unwrap();
+    let threads = manager.restore_threads().unwrap();
+    let ids: Vec<_> = manager
+        .catalog(&threads)
+        .unwrap()
+        .into_iter()
+        .map(|agent| agent.id)
+        .collect();
+    assert_eq!(ids, ["goose", "pi-acp"]);
+
+    let installer = CountingInstaller {
+        count: AtomicUsize::new(0),
+    };
+    for id in ["harn", "agoragentic-acp", "crow-cli"] {
+        assert!(matches!(
+            manager.install(id, &threads, &installer, &|_| {}).await,
+            Err(ManagementError::Unsupported)
+        ));
+    }
+    assert_eq!(installer.count.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
+async fn excluded_installations_are_preserved_for_removal_but_not_restored_or_run() {
+    for id in ["harn", "agoragentic-acp", "crow-cli"] {
+        let root = tempfile::tempdir().unwrap();
+        let manager = AgentManagement::open(root.path()).unwrap();
+        manager
+            .set_registry(
+                Registry::parse(
+                    &serde_json::json!({
+                        "version": "1.0.0", "agents": [{
+                            "id": id, "name": id, "version": "2.0.0",
+                            "distribution": {"npx": {"package": "fixture@2.0.0"}}
+                        }]
+                    })
+                    .to_string(),
+                )
+                .unwrap(),
+            )
+            .unwrap();
+        let artifact = root.path().join("agents").join(id).join("installed");
+        std::fs::create_dir_all(&artifact).unwrap();
+        let command = artifact.join("agent");
+        std::fs::write(&command, "installed").unwrap();
+        Store::open(&root.path().join("atte.sqlite"))
+            .unwrap()
+            .save_installation(&Installation {
+                definition: AgentDefinition {
+                    id: id.into(),
+                    name: id.into(),
+                    launch_kind: Default::default(),
+                    command: command.clone(),
+                    args: vec![],
+                    env: Default::default(),
+                    node_runtime: None,
+                },
+                version: "1.0.0".into(),
+                artifact: artifact.clone(),
+            })
+            .unwrap();
+        let threads = manager.restore_threads().unwrap();
+        assert!(threads.prepared_agents().is_empty());
+        let catalog = manager.catalog(&threads).unwrap();
+        assert!(catalog[0].installed);
+        assert!(catalog[0].distribution.is_none());
+        assert!(catalog[0]
+            .unavailable_reason
+            .as_ref()
+            .unwrap()
+            .contains("제외"));
+        assert!(command.is_file());
+        let installer = CountingInstaller {
+            count: AtomicUsize::new(0),
+        };
+        assert!(matches!(
+            manager.install(id, &threads, &installer, &|_| {}).await,
+            Err(ManagementError::Unsupported)
+        ));
+        assert!(matches!(
+            manager.authenticate(id, None, &threads).await,
+            Err(ManagementError::Unsupported)
+        ));
+        manager.prepare_updates(&threads, &installer).await.unwrap();
+        assert_eq!(installer.count.load(Ordering::SeqCst), 0);
+        manager
+            .set_registry(Registry::parse(r#"{"version":"1.0.0","agents":[]}"#).unwrap())
+            .unwrap();
+        assert!(manager.catalog(&threads).unwrap()[0]
+            .unavailable_reason
+            .as_ref()
+            .unwrap()
+            .contains("제외"));
+        manager.uninstall(id, &threads).await.unwrap();
+        assert!(!artifact.exists());
+        assert!(manager.catalog(&threads).unwrap().is_empty());
+    }
+}
+
 #[test]
 fn unknown_distribution_data_survives_storage_round_trip() {
     let root = tempfile::tempdir().unwrap();

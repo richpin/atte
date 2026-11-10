@@ -5,6 +5,12 @@ use std::collections::{BTreeMap, HashMap};
 pub const REGISTRY_URL: &str =
     "https://cdn.agentclientprotocol.com/registry/v1/latest/registry.json";
 
+// Compatibility evidence and the exclusion decision: docs/testing/acp-agents-2026-11-10.md.
+pub(crate) fn exclusion_reason(id: &str) -> Option<&'static str> {
+    matches!(id, "harn" | "agoragentic-acp" | "crow-cli")
+        .then_some("ACP 호환성·배포 문제로 지원 대상에서 제외된 에이전트입니다.")
+}
+
 #[derive(Clone, Deserialize, Serialize)]
 pub struct Registry {
     pub version: String,
@@ -124,7 +130,9 @@ impl Registry {
 
 impl RegistryAgent {
     pub fn unsupported_reason(&self, platform: &str) -> Option<String> {
-        if self.distribution(platform).is_some() {
+        if let Some(reason) = exclusion_reason(&self.id) {
+            Some(reason.into())
+        } else if self.distribution(platform).is_some() {
             None
         } else if self.distribution.binary.contains_key(platform) {
             Some("지원하지 않는 바이너리 압축·설치 형식입니다.".into())
@@ -135,6 +143,9 @@ impl RegistryAgent {
         }
     }
     pub fn distribution(&self, platform: &str) -> Option<Distribution> {
+        if exclusion_reason(&self.id).is_some() {
+            return None;
+        }
         if let Some(binary) = self.distribution.binary.get(platform) {
             super::archive::supported_url(&binary.archive)
                 .then(|| Distribution::Binary(binary.clone()))

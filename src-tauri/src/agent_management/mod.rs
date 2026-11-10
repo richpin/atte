@@ -138,7 +138,9 @@ impl AgentManagement {
 
     pub fn restore(&self, threads: &Threads) -> Result<(), ManagementError> {
         for mut installation in self.store.installations()? {
-            if crate::installation::has_launch_files(&installation) {
+            if registry::exclusion_reason(&installation.definition.id).is_none()
+                && crate::installation::has_launch_files(&installation)
+            {
                 if installation.definition.launch_kind.needs_node() {
                     installation.definition.node_runtime = Some(self.runtime.clone());
                 }
@@ -247,9 +249,13 @@ impl AgentManagement {
                     description: entry
                         .map(|entry| entry.description.clone())
                         .unwrap_or_default(),
-                    unavailable_reason: entry.map_or_else(
-                        || Some("Registry에서 제공하지 않는 기존 설치입니다.".into()),
-                        |entry| entry.unsupported_reason(&registry::platform()),
+                    unavailable_reason: registry::exclusion_reason(id).map(str::to_owned).or_else(
+                        || {
+                            entry.map_or_else(
+                                || Some("Registry에서 제공하지 않는 기존 설치입니다.".into()),
+                                |entry| entry.unsupported_reason(&registry::platform()),
+                            )
+                        },
                     ),
                     available_version: entry.map(|entry| entry.version.clone()),
                     distribution: entry.and_then(|entry| entry.distribution(&registry::platform())),
@@ -289,6 +295,9 @@ impl AgentManagement {
         installer: &impl Installer,
         progress: &(dyn Fn(&str) + Send + Sync),
     ) -> Result<(), ManagementError> {
+        if registry::exclusion_reason(id).is_some() {
+            return Err(ManagementError::Unsupported);
+        }
         let _operation = self.begin(id)?;
         let stored = self
             .store

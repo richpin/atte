@@ -78,6 +78,9 @@ pub(crate) struct ResolvedLaunch {
 }
 
 pub(crate) async fn resolve(agent: &AgentDefinition) -> Result<ResolvedLaunch, ManagementError> {
+    if super::registry::exclusion_reason(&agent.id).is_some() {
+        return Err(ManagementError::Unsupported);
+    }
     if agent.launch_kind == LaunchKind::Direct {
         return Ok(ResolvedLaunch {
             program: agent.command.clone(),

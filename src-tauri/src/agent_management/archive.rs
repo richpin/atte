@@ -51,7 +51,6 @@ pub(crate) fn extract(
     url: &str,
     output: &Path,
     raw_cmd: &str,
-    node_archive: bool,
 ) -> Result<(), ManagementError> {
     if !supported_url(url) {
         return Err(ManagementError::Unsupported);
@@ -86,19 +85,9 @@ pub(crate) fn extract(
             }
         }
     } else if path.ends_with(".tar.gz") || path.ends_with(".tgz") {
-        extract_tar(
-            flate2::read::GzDecoder::new(file),
-            output,
-            node_archive,
-            &mut budget,
-        )?;
+        extract_tar(flate2::read::GzDecoder::new(file), output, &mut budget)?;
     } else if path.ends_with(".tar.bz2") || path.ends_with(".tbz2") {
-        extract_tar(
-            bzip2::read::BzDecoder::new(file),
-            output,
-            node_archive,
-            &mut budget,
-        )?;
+        extract_tar(bzip2::read::BzDecoder::new(file), output, &mut budget)?;
     } else {
         write_entry(
             &mut &file,
@@ -110,13 +99,16 @@ pub(crate) fn extract(
     Ok(())
 }
 
-fn extract_tar(
-    reader: impl Read,
-    output: &Path,
-    node_archive: bool,
-    budget: &mut u64,
-) -> Result<(), ManagementError> {
+fn extract_tar(reader: impl Read, output: &Path, budget: &mut u64) -> Result<(), ManagementError> {
+    std::fs::create_dir_all(output).map_err(|_| ManagementError::Install)?;
+    let root = output
+        .canonicalize()
+        .map_err(|_| ManagementError::Install)?;
     let mut archive = tar::Archive::new(reader);
+    archive.set_overwrite(false);
+    archive.set_mask(0o7000);
+    archive.set_preserve_mtime(false);
+    let mut links = Vec::new();
     for (index, entry) in archive
         .entries()
         .map_err(|_| ManagementError::Integrity)?
@@ -132,18 +124,41 @@ fn extract_tar(
             .into_owned();
         let destination = enclosed(output, &path)?;
         let kind = entry.header().entry_type();
-        if kind.is_dir() {
-            std::fs::create_dir_all(destination).map_err(|_| ManagementError::Install)?;
-        } else if kind.is_file() {
-            let mode = entry
-                .header()
-                .mode()
-                .map_err(|_| ManagementError::Integrity)?;
-            write_entry(&mut entry, &destination, mode, budget)?;
-        } else if node_archive && kind.is_symlink() {
-            // Official Node archives contain bin/npm and bin/npx links. We invoke their JS files directly.
-            // Do not materialize any archive link, including these trusted runtime links.
-        } else {
+        if kind.is_file() {
+            *budget = budget
+                .checked_sub(entry.size())
+                .ok_or(ManagementError::Integrity)?;
+        } else if kind.is_symlink() || kind.is_hard_link() {
+            let target = entry
+                .link_name()
+                .map_err(|_| ManagementError::Integrity)?
+                .ok_or(ManagementError::Integrity)?;
+            if target.as_os_str().is_empty() || target.has_root() || target.components().any(|part| {
+                matches!(part, Component::Prefix(_))
+                    || matches!(part, Component::Normal(name) if !crate::platform::valid_component(name))
+            }) {
+                return Err(ManagementError::Integrity);
+            }
+            links.push(destination);
+        } else if !kind.is_dir() {
+            return Err(ManagementError::Integrity);
+        }
+        // tar validates each destination's resolved parent, including paths through
+        // earlier links. Keep extraction inside staging without reimplementing it.
+        if !entry
+            .unpack_in(&root)
+            .map_err(|_| ManagementError::Integrity)?
+        {
+            return Err(ManagementError::Integrity);
+        }
+    }
+    // Forward links and framework chains may only resolve once all entries exist.
+    // No dangling, cyclic, or external links may leave the staging boundary.
+    for link in links {
+        let target = link
+            .canonicalize()
+            .map_err(|_| ManagementError::Integrity)?;
+        if !target.starts_with(&root) {
             return Err(ManagementError::Integrity);
         }
     }
@@ -189,6 +204,162 @@ pub(crate) fn executable_mode(_path: &Path, _mode: u32) -> Result<(), Management
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn unpack_fixture(bytes: &[u8], output: &Path) -> Result<(), ManagementError> {
+        let mut budget = MAX_EXPANDED;
+        extract_tar(bytes, output, &mut budget)
+    }
+
+    fn tar_fixture(files: &[(&str, &[u8])], links: &[(&str, &str)]) -> Vec<u8> {
+        let mut archive = tar::Builder::new(Vec::new());
+        // Links before their targets reproduce framework archives as well as CLI aliases.
+        for (path, target) in links {
+            let mut header = tar::Header::new_gnu();
+            header.set_entry_type(tar::EntryType::Symlink);
+            header.set_size(0);
+            header.set_mode(0o777);
+            archive.append_link(&mut header, path, target).unwrap();
+        }
+        for (path, bytes) in files {
+            let mut header = tar::Header::new_gnu();
+            header.set_size(bytes.len() as u64);
+            header.set_mode(0o755);
+            archive.append_data(&mut header, path, *bytes).unwrap();
+        }
+        archive.into_inner().unwrap()
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn tar_preserves_cli_aliases_and_python_framework_links() {
+        let bytes = tar_fixture(
+            &[
+                ("harn", b"cli"),
+                ("_internal/Python.framework/Versions/3.13/Python", b"python"),
+            ],
+            &[
+                ("harn-dap", "harn"),
+                ("harn-lsp", "harn"),
+                ("_internal/Python", "Python.framework/Python"),
+                (
+                    "_internal/Python.framework/Python",
+                    "Versions/Current/Python",
+                ),
+                ("_internal/Python.framework/Versions/Current", "3.13"),
+                ("_internal/lib/Python", "../Python"),
+            ],
+        );
+        let root = tempfile::tempdir().unwrap();
+        unpack_fixture(&bytes, root.path()).unwrap();
+        assert_eq!(std::fs::read(root.path().join("harn-dap")).unwrap(), b"cli");
+        assert_eq!(
+            std::fs::read(root.path().join("_internal/lib/Python")).unwrap(),
+            b"python"
+        );
+        assert!(std::fs::symlink_metadata(root.path().join("harn-lsp"))
+            .unwrap()
+            .is_symlink());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn tar_rejects_external_dangling_and_cyclic_links() {
+        let outside = tempfile::tempdir().unwrap();
+        std::fs::write(outside.path().join("sentinel"), b"unchanged").unwrap();
+        for links in [
+            vec![("alias", outside.path().to_str().unwrap())],
+            vec![("alias", "../outside")],
+            vec![("alias", "missing")],
+            vec![("a", "b"), ("b", "a")],
+            // Lexically internal, but resolves outside after following the first link.
+            vec![("a", "."), ("b", "a/../outside")],
+        ] {
+            let root = tempfile::tempdir().unwrap();
+            let bytes = tar_fixture(&[], &links);
+            assert!(
+                matches!(
+                    unpack_fixture(&bytes, root.path()),
+                    Err(ManagementError::Integrity)
+                ),
+                "{links:?}"
+            );
+        }
+        assert_eq!(
+            std::fs::read(outside.path().join("sentinel")).unwrap(),
+            b"unchanged"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn tar_cannot_write_through_an_external_link_or_replace_a_link() {
+        let parent = tempfile::tempdir().unwrap();
+        let outside = parent.path().join("outside");
+        std::fs::create_dir(&outside).unwrap();
+        let escaped = outside.join("sentinel");
+        std::fs::write(&escaped, b"unchanged").unwrap();
+        for files in [
+            vec![("alias/sentinel", b"overwrite".as_slice())],
+            vec![("alias", b"overwrite".as_slice())],
+        ] {
+            let root = tempfile::tempdir_in(parent.path()).unwrap();
+            let bytes = tar_fixture(&files, &[("alias", "../outside")]);
+            assert!(unpack_fixture(&bytes, root.path()).is_err());
+            assert_eq!(std::fs::read(&escaped).unwrap(), b"unchanged");
+        }
+        let root = tempfile::tempdir().unwrap();
+        let bytes = tar_fixture(
+            &[("alias", b"overwrite"), ("file", b"original")],
+            &[("alias", "file")],
+        );
+        assert!(unpack_fixture(&bytes, root.path()).is_err());
+    }
+
+    #[test]
+    fn tar_enforces_expanded_budget_and_rejects_special_files() {
+        let root = tempfile::tempdir().unwrap();
+        let bytes = tar_fixture(&[("large", b"12345")], &[]);
+        assert!(matches!(
+            extract_tar(bytes.as_slice(), root.path(), &mut 4),
+            Err(ManagementError::Integrity)
+        ));
+        assert!(!root.path().join("large").exists());
+
+        let mut archive = tar::Builder::new(Vec::new());
+        let mut header = tar::Header::new_gnu();
+        header.set_entry_type(tar::EntryType::Fifo);
+        header.set_size(0);
+        archive
+            .append_data(&mut header, "fifo", std::io::empty())
+            .unwrap();
+        let bytes = archive.into_inner().unwrap();
+        assert!(matches!(
+            unpack_fixture(&bytes, root.path()),
+            Err(ManagementError::Integrity)
+        ));
+    }
+
+    #[test]
+    fn tar_creates_the_runtime_output_directory_and_preserves_hard_links() {
+        let root = tempfile::tempdir().unwrap();
+        let output = root.path().join("unpacked");
+        let bytes = tar_fixture(&[("bin/node", b"runtime")], &[]);
+        let mut archive = tar::Builder::new(Vec::new());
+        for entry in tar::Archive::new(bytes.as_slice()).entries().unwrap() {
+            let mut entry = entry.unwrap();
+            let header = entry.header().clone();
+            archive.append(&header, &mut entry).unwrap();
+        }
+        let mut header = tar::Header::new_gnu();
+        header.set_entry_type(tar::EntryType::Link);
+        header.set_size(0);
+        archive
+            .append_link(&mut header, "bin/alias", "bin/node")
+            .unwrap();
+        let bytes = archive.into_inner().unwrap();
+        unpack_fixture(&bytes, &output).unwrap();
+        assert_eq!(std::fs::read(output.join("bin/alias")).unwrap(), b"runtime");
+    }
 
     #[test]
     fn extraction_paths_stay_inside_the_installation() {

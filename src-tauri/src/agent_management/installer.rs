@@ -164,7 +164,6 @@ impl<D: Downloader> SystemInstaller<D> {
                         &metadata.archive,
                         &output,
                         &metadata.cmd,
-                        false,
                     )
                 })
                 .await

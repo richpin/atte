@@ -595,6 +595,8 @@ export const ko = {
       "에이전트가 제공한 이 인증 방식은 아직 지원하지 않습니다.",
     busy: "진행 중인 작업이 있습니다. 완료 후 다시 시도해주세요.",
     externalInstall: "Registry에서 제공하지 않는 기존 설치입니다.",
+    excludedAgent:
+      "ACP 호환성·배포 문제로 지원 대상에서 제외된 에이전트입니다.",
     resumptionNotice:
       "기존 맥락을 재개했습니다. 이 에이전트는 이전 메시지 표시를 지원하지 않습니다.",
     defaultThreadTitle: "새 스레드",
