@@ -264,3 +264,64 @@ it("reviews discovered sources, requires an explicit conflict choice and imports
       ),
   ).toBe(false);
 });
+
+it("signs in, cancels and signs out through the subscribed OAuth state", async () => {
+  page();
+  await screen.findByText("remote");
+  const oauthSnapshot: Snapshot = {
+    ...snapshot,
+    servers: {
+      remote: {
+        type: "http",
+        enabled: true,
+        url: "https://example.com/mcp",
+        headers: {},
+        oauth: {},
+      },
+    },
+    authentication: { remote: "required" },
+  };
+  receive(oauthSnapshot);
+  await screen.findByText("Sign-in required");
+  let finishLogin: (() => void) | undefined;
+  vi.mocked(invoke).mockImplementation(async (command) => {
+    if (command === "login_mcp") {
+      await new Promise<void>((resolve) => {
+        finishLogin = resolve;
+      });
+    }
+  });
+  fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
+  await waitFor(() =>
+    expect(invoke).toHaveBeenCalledWith("login_mcp", {
+      target: { scope: "global" },
+      name: "remote",
+    }),
+  );
+  receive({ ...oauthSnapshot, authentication: { remote: "signingIn" } });
+  await screen.findByText("Signing in…");
+  fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+  await waitFor(() =>
+    expect(invoke).toHaveBeenCalledWith("cancel_mcp_login", {
+      target: { scope: "global" },
+      name: "remote",
+    }),
+  );
+  finishLogin?.();
+  receive({ ...oauthSnapshot, authentication: { remote: "authorized" } });
+  await screen.findByText("Signed in");
+  fireEvent.click(screen.getByRole("button", { name: "Sign out" }));
+  await waitFor(() =>
+    expect(invoke).toHaveBeenCalledWith("logout_mcp", {
+      target: { scope: "global" },
+      name: "remote",
+    }),
+  );
+  expect(screen.getByText("Signed in")).toBeTruthy();
+  receive({
+    ...oauthSnapshot,
+    authentication: { remote: "reauthorizationRequired" },
+  });
+  await screen.findByText("Sign in again");
+  expect(screen.getByRole("button", { name: "Sign in" })).toBeTruthy();
+});

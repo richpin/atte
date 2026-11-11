@@ -148,6 +148,20 @@ export const ko = {
     languageDescription: "Atte 전체에서 사용할 언어를 선택합니다.",
   },
   mcps: {
+    authentication: "인증",
+    headerAuthentication: "헤더 / 인증 없음",
+    clientId: "클라이언트 ID (선택)",
+    clientIdHelp:
+      "비워두면 Atte를 자동 등록합니다. 사전 등록 클라이언트는 동적 포트의 loopback callback을 허용해야 합니다.",
+    login: "로그인",
+    logout: "로그아웃",
+    auth: {
+      required: "인증 필요",
+      signingIn: "로그인 중…",
+      authorized: "인증 완료",
+      reauthorizationRequired: "재인증 필요",
+    },
+
     importTitle: "서버 가져오기",
     importHelp:
       "기존 도구의 전역 설정을 검토하고 서버와 대상 범위를 선택하세요. 원본은 보존됩니다. 가져온 서버는 비활성으로 등록되며 환경변수·헤더의 평문값은 OS 자격 증명 저장소로 옮깁니다. OAuth 자격 증명은 가져오지 않습니다.",
@@ -175,7 +189,7 @@ export const ko = {
         "연결되었습니다. 아래 도구를 확인하고 새 대화에서 사용할 때 별도로 활성화하세요.",
       noTools: "연결되었지만 도구가 없습니다. 서버의 도구 설정을 확인하세요.",
       authenticationRequired:
-        "인증이 필요합니다. 비밀값 또는 API 키를 설정하세요. OAuth 로그인은 아직 지원하지 않습니다.",
+        "인증이 필요합니다. OAuth 서버에 로그인하거나 상세 편집에서 자격 증명을 교체하세요.",
       networkError: "네트워크 오류입니다. URL·네트워크·서버 상태를 확인하세요.",
       executionFailed:
         "서버를 실행하지 못했습니다. 실행 파일·인자·환경변수를 확인하세요.",

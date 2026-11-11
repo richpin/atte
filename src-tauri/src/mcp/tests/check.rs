@@ -131,6 +131,7 @@ async fn http_check_lists_tools_with_secret_headers_and_reports_authentication_f
             Server {
                 enabled: false,
                 transport: Transport::Http {
+                    oauth: None,
                     url: remote.url.clone(),
                     headers: BTreeMap::new(),
                 },

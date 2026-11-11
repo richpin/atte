@@ -45,3 +45,18 @@ cargo test --manifest-path src-tauri/Cargo.toml --lib mcp::tests::check_http -- 
 `McpsPage.test.tsx`는 명시적 확인과 화면 종료 취소·늦은 결과 무시, 원본 표시, 선택 항목만 가져오기, 충돌 시 명시적 덮어쓰기와 자동 활성화·재연결 금지를 검증한다.
 
 네이티브 UI에서는 전역·프로젝트 대상 변경, 네이티브 파일 선택 및 취소, 붙여넣은 원본 검토 후 내용 지우기, 이름 변경·덮어쓰기, 가져오기 일부 실패 후 재시도, 확인 취소와 페이지 이동을 밝은·어두운 테마 및 키보드로 확인한다. 03번 구현 중 Mac이 잠겨 있어 네이티브 UI 검증은 수행하지 못했다.
+
+## OAuth와 ACP 인증 중계
+
+```sh
+cargo test --manifest-path src-tauri/Cargo.toml --lib mcp::tests::oauth -- --ignored
+cargo run --manifest-path src-tauri/Cargo.toml --example mcp-oauth-fixture
+```
+
+OAuth suite는 실제 loopback OAuth·MCP 서버와 메모리 자격 증명 저장소를 사용한다. SDK가 생성한 S256 PKCE를 서버에서 검증하고 동적·사전 등록, callback state·issuer 오류, 취소, 키체인 정리 실패, 재시작 복원, 동시 refresh와 회전 저장, refresh 거절, 범위·URL·issuer 격리, 로그아웃을 확인한다. URL 편집 뒤에도 기존 연결이 로그아웃으로 무효화되어야 한다. 알림·취소·열린 SSE 전달과 로그아웃에 따른 스트림 종료도 확인한다.
+
+같은 suite에서 실제 Atte 실행 파일을 빌드하여 `--mcp-stdio-bridge`로 실행한다. stdin을 유지한 채 연결을 종료해도 브리지가 제한 시간 안에 종료되는지 확인한다. ACP fixture는 세션별 MCP 설정을 유지하고 HTTP 지원 여부 두 경우 모두 new/load/resume 뒤 실제 도구를 호출한다. 한 스레드를 재연결한 뒤 다른 스레드에서도 도구를 호출하여 공유 에이전트 프로세스와 연결 격리를 확인한다. 테스트용 실행 파일 경로만 실제 빌드 산출물로 주입하며 제품은 Tauri를 실행한 앱 경로를 사용한다.
+
+예제는 URL 한 줄만 출력하고 합성 인증 정보만 발급하는 수동 UI 검증용 서버다. MCPs에서 출력된 URL과 OAuth를 등록하면 시스템 브라우저가 로컬 callback으로 돌아온다. 종료 시 프로세스를 중단하고, 앱에서 로그아웃한 뒤 테스트용 등록을 삭제한다. 실제 계정·외부 OAuth 서비스·사용자 API 키는 사용하지 않는다.
+
+04번 구현 중 macOS debug 번들에서 등록, 시스템 브라우저 로그인, 키체인 저장, 앱 종료·재시작 후 인증 복원, 복원된 인증으로 도구 목록 조회, 로그아웃과 이후 접근 거절을 확인했다. 밝은 테마의 OAuth 카드와 키보드 로그인, 어두운 테마 전환을 확인했다. 네이티브 자동화의 팝업 조작이 불안정하여 OAuth 카드 자체의 어두운 테마 시각 확인은 남아 있다. 테스트용 서버를 제거하고 원래 테마를 복원했다.

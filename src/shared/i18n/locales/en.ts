@@ -142,6 +142,20 @@ export const en = {
     languageDescription: "Choose the language used throughout Atte.",
   },
   mcps: {
+    authentication: "Authentication",
+    headerAuthentication: "Headers / no authentication",
+    clientId: "Client ID (optional)",
+    clientIdHelp:
+      "Leave empty to register Atte automatically. Pre-registered clients must allow a loopback callback with a dynamic port.",
+    login: "Sign in",
+    logout: "Sign out",
+    auth: {
+      required: "Sign-in required",
+      signingIn: "Signing in…",
+      authorized: "Signed in",
+      reauthorizationRequired: "Sign in again",
+    },
+
     importTitle: "Import servers",
     importHelp:
       "Review global settings from other tools, select servers and a destination. Sources stay unchanged. Imported servers start disabled; plain environment and header values go to the OS credential store. OAuth credentials are not imported.",
@@ -171,7 +185,7 @@ export const en = {
       noTools:
         "Connected, but no tools are available. Check the server’s tool configuration.",
       authenticationRequired:
-        "Authentication required. Replace the secret or configure an API key; OAuth sign-in is not available yet.",
+        "Authentication required. Sign in for OAuth, or replace the credentials in Details / Edit.",
       networkError:
         "Network error. Check the URL, network and server availability.",
       executionFailed:

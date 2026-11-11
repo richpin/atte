@@ -588,22 +588,23 @@ async fn run_session(
     environment: Arc<std::collections::BTreeMap<String, String>>,
 ) -> ConnectionFailure {
     let updates = &session.updates;
+    let mut mcp_leases = Vec::new();
     let handshake = async {
         let servers = if let Some(service) = &session.mcp {
             let service = service.clone();
             let source = session.source_folder.clone();
             let working = folder.clone();
             let http = capabilities.mcp_capabilities.http;
-            match tokio::task::spawn_blocking(move || {
-                service.resolve(&source, &working, http, &environment)
-            })
-            .await
+            match service
+                .resolve_session(source, working, http, environment.clone())
+                .await
             {
-                Ok(Ok((servers, state))) => {
+                Ok((servers, state, leases)) => {
+                    mcp_leases = leases;
                     updates.mcp_configured(state);
                     servers
                 }
-                _ => {
+                Err(_) => {
                     updates.mcp_configured(crate::mcp::SessionState {
                         issues: vec![crate::mcp::Issue {
                             name: "MCP settings".into(),

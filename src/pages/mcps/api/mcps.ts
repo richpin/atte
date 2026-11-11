@@ -74,3 +74,13 @@ export function checkMcp(target: Target, name: string, id: string) {
 export function cancelMcpCheck(id: string) {
   return invoke<void>("cancel_mcp_check", { id });
 }
+
+export function loginMcp(target: Target, name: string) {
+  return invoke<void>("login_mcp", { target, name });
+}
+export function cancelMcpLogin(target: Target, name: string) {
+  return invoke<void>("cancel_mcp_login", { target, name });
+}
+export function logoutMcp(target: Target, name: string) {
+  return invoke<void>("logout_mcp", { target, name });
+}

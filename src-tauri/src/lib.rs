@@ -553,6 +553,7 @@ pub fn run() {
                 app.state::<settings::Settings>().0.clone(),
                 app.path().home_dir()?.join(".atte/settings.json"),
                 Arc::new(mcp::NativeCredentials),
+                std::env::current_exe()?,
             ));
             app.state::<Threads>().set_mcp(mcp.clone());
             app.manage(mcp);
@@ -670,6 +671,9 @@ pub fn run() {
                 settings::subscribe_settings,
                 settings::update_settings,
                 mcp::subscribe_mcp,
+                mcp::oauth::login_mcp,
+                mcp::oauth::cancel_mcp_login,
+                mcp::oauth::logout_mcp,
                 mcp::save_mcp,
                 mcp::remove_mcp,
                 mcp::toggle_mcp,

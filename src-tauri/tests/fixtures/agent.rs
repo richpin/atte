@@ -231,8 +231,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut output = io::stdout().lock();
     let mut sessions = 0;
     let mut prompts = 0;
-    let mut mcp_servers = json!([]);
-    let mut mcp_cwd = json!(null);
+    let mut mcp_sessions = std::collections::HashMap::<String, (Value, Value)>::new();
     let mut configuration_requests = 0;
     let mut history: Vec<Value> = env::var_os("SESSION_FILE")
         .and_then(|path| fs::read(path).ok())
@@ -252,8 +251,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         if matches!(method, "session/new" | "session/load" | "session/resume") {
             mcp::record(method, &request["params"])?;
-            mcp_servers = request["params"]["mcpServers"].clone();
-            mcp_cwd = request["params"]["cwd"].clone();
+            let id = if method == "session/new" {
+                format!("remote-{}", sessions + 1)
+            } else {
+                request["params"]["sessionId"]
+                    .as_str()
+                    .ok_or("Missing session ID")?
+                    .to_string()
+            };
+            mcp_sessions.insert(
+                id,
+                (
+                    request["params"]["mcpServers"].clone(),
+                    request["params"]["cwd"].clone(),
+                ),
+            );
         }
         let mut error = None;
         let result = match method {
@@ -491,7 +503,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
             "session/prompt" => {
                 if env::var_os("MCP_LOG").is_some() {
-                    let text = mcp::call(&mcp_servers, &mcp_cwd)?;
+                    let (servers, cwd) = mcp_sessions
+                        .get(
+                            request["params"]["sessionId"]
+                                .as_str()
+                                .ok_or("Missing MCP session")?,
+                        )
+                        .ok_or("Unknown MCP session")?;
+                    let text = mcp::call(servers, cwd)?;
                     send(
                         &mut output,
                         json!({"jsonrpc":"2.0","method":"session/update","params":{"sessionId":request["params"]["sessionId"],"update":{"sessionUpdate":"tool_call","toolCallId":"mcp-call","title":"MCP fixture tool","kind":"other","status":"in_progress"}}}),

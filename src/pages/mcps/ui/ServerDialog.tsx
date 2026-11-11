@@ -42,6 +42,12 @@ export function ServerDialog(props: {
       initial?.type === "stdio" ? initial.env : (initial?.headers ?? {}),
     ).map(([name, source]) => ({ name, source })),
   });
+  const [oauth, setOauth] = createSignal(
+    initial?.type === "http" && Boolean(initial.oauth),
+  );
+  const [clientId, setClientId] = createSignal(
+    initial?.type === "http" ? (initial.oauth?.clientId ?? "") : "",
+  );
   const [busy, setBusy] = createSignal(false);
   const [error, setError] = createSignal<string>();
   function updateRow(index: number, change: Partial<ValueRow>) {
@@ -83,6 +89,13 @@ export function ServerDialog(props: {
               enabled: initial?.enabled ?? true,
               url: endpoint().trim(),
               headers: values,
+              ...(oauth()
+                ? {
+                    oauth: clientId().trim()
+                      ? { clientId: clientId().trim() }
+                      : {},
+                  }
+                : {}),
             };
       await props.onSave(name().trim(), server, secrets);
       props.onClose();
@@ -141,6 +154,38 @@ export function ServerDialog(props: {
               onInput={(event) => setEndpoint(event.currentTarget.value)}
             />
           </label>
+          <Show when={type() === "http"}>
+            <label class="block space-y-1 text-sm">
+              {t("mcps.authentication")}
+              <select
+                class={inputClass}
+                value={oauth() ? "oauth" : "headers"}
+                disabled={busy()}
+                onChange={(event) =>
+                  setOauth(event.currentTarget.value === "oauth")
+                }
+              >
+                <option value="headers">
+                  {t("mcps.headerAuthentication")}
+                </option>
+                <option value="oauth">OAuth</option>
+              </select>
+            </label>
+            <Show when={oauth()}>
+              <label class="block space-y-1 text-sm">
+                {t("mcps.clientId")}
+                <input
+                  class={inputClass}
+                  value={clientId()}
+                  disabled={busy()}
+                  onInput={(event) => setClientId(event.currentTarget.value)}
+                />
+                <span class="text-xs text-muted-foreground">
+                  {t("mcps.clientIdHelp")}
+                </span>
+              </label>
+            </Show>
+          </Show>
           <Show when={type() === "stdio"}>
             <label class="block space-y-1 text-sm">
               {t("mcps.args")}

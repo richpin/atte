@@ -70,13 +70,13 @@ Tauri가 없는 브라우저 개발은 메모리 설정을 사용한다. 테스�
 }
 ```
 
-`enabled`를 생략하면 활성이다. 명령어와 인자 배열은 별개로 전달하며 셸 문자열로 합치지 않는다. 명령어는 에이전트 실행 환경의 PATH 또는 작업 폴더를 기준으로 실행 가능한 절대 경로로 해석한다. Streamable HTTP는 에이전트가 ACP HTTP MCP 지원을 광고할 때만 전달한다.
+`enabled`를 생략하면 활성이다. 명령어와 인자 배열은 별개로 전달하며 셸 문자열로 합치지 않는다. 명령어는 에이전트 실행 환경의 PATH 또는 작업 폴더를 기준으로 실행 가능한 절대 경로로 해석한다. 헤더 인증·인증 없는 Streamable HTTP는 에이전트가 ACP HTTP MCP 지원을 광고할 때 전달한다. OAuth 서버는 아래 인증 중계 규칙을 따른다.
 
 환경변수·헤더의 값 유형은 일반값(`literal`), 기존 환경변수 참조(`environment`), OS 자격 증명 참조(`secret`)다. Bearer 인증은 `Authorization` 헤더를 비밀값으로 선택하고 `Bearer …`를 입력한다. 사용자 지정 인증 헤더도 동일하게 설정한다. 비밀값은 macOS Keychain 또는 Windows 자격 증명 저장소에 저장하며 JSON과 조회 응답에는 불투명 참조만 남긴다. 편집 폼의 기존 비밀값 입력을 건드리지 않으면 유지하고, 새 값을 입력하면 교체하며, 행을 삭제하면 자격 증명도 삭제한다. 참조의 자격 증명 주소에는 설정 파일의 범위·서버 이름을 함께 사용하므로 같은 이름의 프로젝트 서버끼리 공유하지 않는다. 자격 증명 저장소 오류는 평문 파일 저장으로 대체하지 않는다.
 
 ACP `session/new`, `session/load`, `session/resume`에 활성 서버를 전달한다. MCP를 전달한 세션 설정의 실패는 에이전트가 자격 증명을 오류에 되돌려 보낼 수 있으므로 코드와 안전한 일반 안내만 표시하고 원본 메시지·data는 공개하지 않는다. 누락되거나 빈 자격 증명·환경변수, 실행할 수 없는 명령어, HTTP 미지원, 지원하지 않는 서버 설정은 서버별 이유와 함께 제외하고 나머지를 계속 전달한다. 이유는 스레드 화면에 표시한다. 파일을 읽거나 JSON을 해석할 수 없으면 마지막 정상 등록 목록과 오류를 유지하고 해당 파일의 저장·영향받는 새 MCP 세션 설정을 막는다. 표시된 파일을 수정하면 구독과 감지 주기에 따라 복구한다.
 
-카탈로그·OAuth 인증과 중계는 제공하지 않는다. 가져오기와 독립 연결 확인은 아래 절차를 따른다.
+카탈로그는 제공하지 않는다. 가져오기와 독립 연결 확인은 아래 절차를 따른다.
 
 참고: [Zed의 로컬·원격 MCP 관리와 외부 에이전트 구분](https://zed.dev/docs/ai/mcp), [ACP v1 세션 설정](https://agentclientprotocol.com/protocol/v1/session-setup), [keyring 네이티브 자격 증명 저장소](https://docs.rs/keyring/3.6.3/keyring/).
 
@@ -95,3 +95,30 @@ stdio의 `command`, 문자열 배열 `args`, `env`, HTTP의 `url`, `headers` (Co
 등록 서버의 **연결 확인**은 활성 여부와 무관하게 별도의 stdio 프로세스 또는 Streamable HTTP 세션으로 MCP initialize와 도구 목록 조회를 수행한다. 전역 서버는 홈 폴더, 프로젝트 서버는 선택한 폴더를 작업 위치로 사용하고 앱 프로세스의 환경변수를 해석한다. 도구를 호출하지 않는다. 결과는 연결됨·도구 없음·인증 필요·네트워크 오류·실행 실패·시간 초과·취소·설정 오류·프로토콜 오류를 구분하고 다음 행동을 안내한다. 통신 확인 제한은 20초이고 종료 정리는 별도의 제한 시간 안에서 기다리며 화면을 떠나거나 취소하면 확인 연결을 정리한다. stdio 자식과 프로세스 그룹은 종료·회수하고, HTTP 세션은 SDK의 종료 경로로 정리한다. HTTP는 리디렉션을 따라 인증 헤더를 다른 대상으로 보내지 않는다. 응답 본문·프로세스 stderr·원본 오류는 공개하지 않는다. 기존 대화 연결을 사용하거나 종료하지 않으며 서버 활성화와 대화 재연결은 별도 동작이다.
 
 형식 근거: [Claude Code MCP](https://code.claude.com/docs/en/mcp), [Claude Desktop 설정](https://modelcontextprotocol.io/docs/develop/connect-local-servers), [Cursor MCP](https://cursor.com/docs/context/mcp), [Codex MCP](https://learn.chatgpt.com/docs/extend/mcp?surface=cli), [Zed MCP](https://zed.dev/docs/ai/mcp). 연결과 세션 종료는 [공식 Rust MCP SDK](https://docs.rs/rmcp/3.9.0/rmcp/)를 사용한다.
+
+## MCP OAuth 로그인과 ACP 인증 중계
+
+HTTP 서버의 인증을 **OAuth**로 선택하고 저장한 뒤 MCPs 카드에서 **로그인**한다. 시스템 브라우저에서 인증하고 Atte로 돌아온다. 카드는 인증 필요·로그인 중·인증 완료·재인증 필요 상태와 로그인 취소·로그아웃을 제공한다. 인증 완료는 MCP 도구 연결 확인 결과와 별개다. 사전 등록된 공개 native 클라이언트 ID를 입력하거나 비워 두어 동적 클라이언트 등록을 사용한다. 사전 등록 클라이언트는 `http://127.0.0.1:<동적 포트>/callback`을 허용해야 한다. 클라이언트 secret을 사용하는 confidential 클라이언트는 지원하지 않는다.
+
+```json
+{
+  "mcpServers": {
+    "remote-oauth": {
+      "type": "http",
+      "url": "https://example.com/mcp",
+      "oauth": {},
+      "headers": {}
+    }
+  }
+}
+```
+
+사전 등록은 `"oauth": { "clientId": "your-public-client-id" }`로 설정한다. OAuth와 정적 Authorization 헤더는 함께 사용할 수 없다. 다른 사용자 지정 헤더와 비밀값 참조는 유지한다. OAuth 전송은 HTTPS 또는 loopback HTTP만 허용하며 리디렉션에 토큰을 전달하지 않는다.
+
+공식 Rust MCP SDK가 서버 메타데이터 탐색, Authorization Code와 S256 PKCE, callback state·issuer 검증, 만료 확인과 refresh token 회전을 수행한다. Atte는 인증 세션을 범위·서버 이름·정확한 서버 URL·클라이언트 설정에 묶어 OS 자격 증명 저장소에만 저장한다. 재시작 후에는 현재 issuer를 확인하고 복원한다. 같은 인증의 토큰 복원·갱신·저장·로그아웃을 직렬화하며 저장소 실패 시 평문 저장으로 대체하지 않는다. 갱신 거절이나 권한 변경은 재인증을 안내한다. 로그인은 5분 후 시간 초과하고 callback listener는 성공·실패·취소 시 닫는다.
+
+ACP new/load/resume은 연결마다 임시 Bearer 자격 증명으로 보호된 `127.0.0.1` 중계를 받는다. 상위 OAuth 토큰은 에이전트에 전달하지 않는다. HTTP 지원 에이전트는 중계 URL을, 미지원 에이전트는 같은 Atte 실행 파일의 `--mcp-stdio-bridge` 진입점을 사용한다. 이 진입점은 Tauri를 시작하지 않고 stdio MCP와 Streamable HTTP를 연결한다. 중계는 요청·응답·알림·취소·SSE 스트림을 전달하고 각 연결은 별도 MCP 세션을 유지한다. 독립 연결 확인도 별도 중계를 사용한다.
+
+로그아웃하면 저장 자격 증명을 삭제하고 해당 인증의 열린 중계 접근과 스트림을 무효화한다. 저장소 삭제에 실패해도 현재 실행의 접근은 차단하며 저장소를 잠금 해제한 뒤 로그아웃을 재시도해야 한다. 일반 설정 편집·토글은 기존과 같이 다음 연결에 적용한다. 연결 종료 시 listener와 임시 자격 증명을 폐기하고 알려진 상위 MCP 세션에 제한 시간 내 DELETE를 시도한다. 다른 스레드나 공유 에이전트 프로세스는 종료하지 않는다.
+
+프로토콜 근거: [Rust MCP SDK OAuth](https://github.com/modelcontextprotocol/rust-sdk/blob/main/docs/OAUTH_SUPPORT.md), [Zed OAuth 구현](https://github.com/zed-industries/zed/blob/main/crates/context_server/src/oauth.rs). 외부 ACP 전달과 앱 자체 OAuth를 구분하고 Atte가 공통 인증을 소유한다.

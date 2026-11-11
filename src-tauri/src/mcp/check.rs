@@ -44,6 +44,7 @@ pub(super) struct Prepared {
     server: Server,
     values: BTreeMap<String, String>,
     folder: PathBuf,
+    authorization: Option<Arc<oauth::Authorization>>,
 }
 impl Mcp {
     pub(super) fn prepare_check(
@@ -86,10 +87,25 @@ impl Mcp {
             }
             values.insert(key.clone(), value);
         }
+        let authorization = if let Transport::Http {
+            url,
+            oauth: Some(config),
+            ..
+        } = &server.transport
+        {
+            Some(
+                self.authorizations
+                    .entry(&path, name, url, config, self.credentials.clone())
+                    .map_err(|_| Status::AuthenticationRequired)?,
+            )
+        } else {
+            None
+        };
         Ok(Prepared {
             server,
             values,
             folder,
+            authorization,
         })
     }
     pub(super) async fn run_check(
@@ -136,8 +152,40 @@ impl Mcp {
                 result
             }
             Transport::Http { url, .. } => {
+                let mut relay_lease = None;
+                let mut endpoint = url.clone();
+                let mut values = prepared.values.clone();
+                if let Some(auth) = prepared.authorization {
+                    let deadline = tokio::time::Instant::now() + limit;
+                    let result = until(
+                        super::relay::Lease::start(
+                            "check",
+                            auth,
+                            values.into_iter().collect(),
+                            true,
+                            &self.executable,
+                        ),
+                        &cancel,
+                        deadline,
+                    )
+                    .await;
+                    match result {
+                        Ok(Ok((McpServer::Http(server), lease))) => {
+                            endpoint = server.url;
+                            values = server
+                                .headers
+                                .into_iter()
+                                .map(|header| (header.name, header.value))
+                                .collect();
+                            relay_lease = Some(lease);
+                        }
+                        Err(status) => return CheckResult::failed(status),
+                        _ => return CheckResult::failed(Status::AuthenticationRequired),
+                    }
+                }
+                let _relay_lease = relay_lease;
                 let mut headers = reqwest::header::HeaderMap::new();
-                for (key, value) in &prepared.values {
+                for (key, value) in &values {
                     let (Ok(key), Ok(mut value)) = (
                         reqwest::header::HeaderName::from_bytes(key.as_bytes()),
                         reqwest::header::HeaderValue::from_str(value),
@@ -155,7 +203,7 @@ impl Mcp {
                 else {
                     return CheckResult::failed(Status::NetworkError);
                 };
-                let config = StreamableHttpClientTransportConfig::with_uri(url.clone())
+                let config = StreamableHttpClientTransportConfig::with_uri(endpoint)
                     .control_request_timeout(Duration::from_secs(2));
                 let transport = StreamableHttpClientTransport::with_client(client, config);
                 discover(transport, Status::NetworkError, &cancel, limit).await

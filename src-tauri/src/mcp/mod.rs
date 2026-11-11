@@ -1,8 +1,11 @@
 //! Scoped MCP configuration, credentials, and ACP forwarding.
+pub mod bridge;
 pub(crate) mod check;
 mod credentials;
 pub(crate) mod import;
 mod model;
+pub(crate) mod oauth;
+mod relay;
 use agent_client_protocol::schema::v1::{
     EnvVariable, HttpHeader, McpServer, McpServerHttp, McpServerStdio,
 };
@@ -45,9 +48,12 @@ pub struct Snapshot {
     pub issues: Vec<Issue>,
     pub error: Option<String>,
     pub path: PathBuf,
+    pub authentication: BTreeMap<String, oauth::Status>,
 }
 
 pub struct Mcp {
+    executable: PathBuf,
+    authorizations: oauth::Authorizations,
     imports: import::Imports,
     checks: check::Checks,
     global: Arc<Mutex<crate::settings::store::Store>>,
@@ -61,8 +67,11 @@ impl Mcp {
         global: Arc<Mutex<crate::settings::store::Store>>,
         global_path: PathBuf,
         credentials: Arc<dyn Credentials>,
+        executable: PathBuf,
     ) -> Self {
         Self {
+            executable,
+            authorizations: Default::default(),
             imports: Default::default(),
             checks: Default::default(),
             global,
@@ -105,6 +114,7 @@ impl Mcp {
             issues: vec![],
             error: None,
             path,
+            authentication: BTreeMap::new(),
         };
         match self.read(target) {
             Err(_) => {
@@ -115,7 +125,15 @@ impl Mcp {
             Ok(servers) => {
                 for (name, value) in servers {
                     match serde_json::from_value::<Server>(value) {
-                        Ok(server) => { snapshot.servers.insert(name, server); }
+                        Ok(server) => {
+                            if let Server { transport: Transport::Http { url, oauth: Some(config), .. }, .. } = &server {
+                                match self.authorizations.entry(&snapshot.path, &name, url, config, self.credentials.clone()) {
+                                    Ok(auth) => { snapshot.authentication.insert(name.clone(), auth.status()); }
+                                    Err(reason) => snapshot.issues.push(Issue { name: name.clone(), reason }),
+                                }
+                            }
+                            snapshot.servers.insert(name, server);
+                        }
                         Err(_) => snapshot.issues.push(Issue { name, reason: "Unsupported or invalid server configuration; edit the settings file".into() }),
                     }
                 }
@@ -147,6 +165,7 @@ impl Mcp {
         }
         server.validate()?;
         let path = self.path(target)?;
+        self.authorizations.cancel_logins(&path, name)?;
         let old = self.read(target)?;
         if create && old.contains_key(name) {
             return Err("A server with this name already exists in this scope".into());
@@ -433,7 +452,10 @@ impl Mcp {
                             ),
                         )))
                     }
-                    Transport::Http { url, .. } => {
+                    Transport::Http { url, oauth, .. } => {
+                        if oauth.is_some() {
+                            return Err("Sign in to this MCP server".into());
+                        }
                         if !http {
                             return Err("Agent does not support HTTP MCP servers".into());
                         }

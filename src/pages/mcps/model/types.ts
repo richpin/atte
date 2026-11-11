@@ -10,13 +10,22 @@ export type Server = { enabled: boolean } & (
       args: string[];
       env: Record<string, ValueSource>;
     }
-  | { type: "http"; url: string; headers: Record<string, ValueSource> }
+  | {
+      type: "http";
+      url: string;
+      headers: Record<string, ValueSource>;
+      oauth?: { clientId?: string };
+    }
 );
 export type Snapshot = {
   servers: Record<string, Server>;
   issues: { name: string; reason: string }[];
   error: string | null;
   path: string;
+  authentication?: Record<
+    string,
+    "required" | "signingIn" | "authorized" | "reauthorizationRequired"
+  >;
 };
 export type ValueRow = {
   name: string;

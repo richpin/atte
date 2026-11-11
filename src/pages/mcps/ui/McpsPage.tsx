@@ -15,6 +15,7 @@ import {
 import { createEffect, createSignal, For, onCleanup, Show } from "solid-js";
 import { removeMcp, saveMcp, subscribeMcp, toggleMcp } from "../api/mcps";
 import type { Server, Snapshot, Target } from "../model/types";
+import { Authentication } from "./Authentication";
 import { ConnectionCheck } from "./ConnectionCheck";
 import { ImportDialog } from "./ImportDialog";
 import { ServerDialog } from "./ServerDialog";
@@ -219,6 +220,14 @@ export function McpsPage(props: {
                     {t("common.delete")}
                   </Button>
                 </div>
+                <Show when={server.type === "http" && server.oauth}>
+                  <Authentication
+                    target={target()}
+                    name={name}
+                    status={snapshot()?.authentication?.[name] ?? "required"}
+                    disabled={busy() || Boolean(snapshot()?.error)}
+                  />
+                </Show>
                 <ConnectionCheck
                   target={target()}
                   name={name}

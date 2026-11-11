@@ -423,6 +423,7 @@ fn convert(value: Value, format: Format) -> Result<(Server, BTreeMap<String, Str
         enabled: false,
         transport: if http {
             Transport::Http {
+                oauth: None,
                 url: endpoint.into(),
                 headers: values,
             }

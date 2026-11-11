@@ -20,7 +20,12 @@ fn service(root: &Path, credentials: Arc<dyn Credentials>) -> Mcp {
     let path = root.join("settings.json");
     let mut store = Store::new(path.clone(), root.join("legacy.json"));
     store.initialize(Legacy::default());
-    Mcp::new(Arc::new(Mutex::new(store)), path, credentials)
+    Mcp::new(
+        Arc::new(Mutex::new(store)),
+        path,
+        credentials,
+        std::env::current_exe().unwrap(),
+    )
 }
 fn http() -> Server {
     serde_json::from_value(json!({"type":"http","url":"https://example.com/mcp","headers":{}}))
@@ -756,3 +761,5 @@ mod http_session;
 mod check;
 mod check_http;
 mod import;
+
+mod oauth;

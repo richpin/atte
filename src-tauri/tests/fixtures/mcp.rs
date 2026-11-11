@@ -152,6 +152,10 @@ fn call_http(server: &Value) -> Result<String, Box<dyn std::error::Error>> {
             let mut request = json!({"jsonrpc":"2.0","method":method,"params":params});
             if method != "notifications/initialized" { request["id"] = json!(id); }
             let response = client.post(url).headers(headers.clone()).json(&request).send().await?.error_for_status()?;
+            if method == "initialize" {
+                if let Some(session) = response.headers().get("mcp-session-id") { headers.insert("mcp-session-id", session.clone()); }
+                headers.insert("mcp-protocol-version", reqwest::header::HeaderValue::from_static("2025-03-26"));
+            }
             if method == "notifications/initialized" { continue; }
             last = response.json::<Value>().await?;
             assert_eq!(last["id"], id);

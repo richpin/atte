@@ -163,6 +163,7 @@ async fn failed_cancelled_and_timed_out_checks_await_remote_session_cleanup() {
                 Server {
                     enabled: false,
                     transport: Transport::Http {
+                        oauth: None,
                         url: peer.url.clone(),
                         headers: BTreeMap::new(),
                     },

@@ -38,10 +38,19 @@ pub enum Transport {
     },
     Http {
         url: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        oauth: Option<OAuthConfig>,
         #[serde(default)]
         headers: BTreeMap<String, ValueSource>,
     },
 }
+#[derive(Clone, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct OAuthConfig {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub client_id: Option<String>,
+}
+
 impl Server {
     pub fn values(&self) -> &BTreeMap<String, ValueSource> {
         match &self.transport {
@@ -71,7 +80,11 @@ impl Server {
                     return Err("Invalid environment variable name".into());
                 }
             }
-            Transport::Http { url, headers } => {
+            Transport::Http {
+                url,
+                headers,
+                oauth,
+            } => {
                 let parsed = reqwest::Url::parse(url).map_err(|_| "Enter a valid HTTP URL")?;
                 if !matches!(parsed.scheme(), "http" | "https")
                     || !parsed.username().is_empty()
@@ -79,6 +92,15 @@ impl Server {
                     || parsed.fragment().is_some()
                 {
                     return Err("Use an HTTP URL without embedded credentials or a fragment".into());
+                }
+                if oauth.is_some() {
+                    super::oauth::validate_url(url)?;
+                    if headers
+                        .keys()
+                        .any(|key| key.eq_ignore_ascii_case("authorization"))
+                    {
+                        return Err("OAuth owns the Authorization header".into());
+                    }
                 }
                 for key in headers.keys() {
                     reqwest::header::HeaderName::from_bytes(key.as_bytes())
