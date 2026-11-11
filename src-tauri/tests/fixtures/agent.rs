@@ -284,6 +284,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 } else {
                     json!({"loadSession":true})
                 };
+                if env::var_os("MCP_HTTP").is_some() {
+                    agent_capabilities["mcpCapabilities"] = json!({"http":true});
+                }
                 if mode.starts_with("account-") && mode != "account-no-logout" {
                     agent_capabilities["auth"] = json!({"logout": {}});
                 }
@@ -340,7 +343,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 if mode == "auth" {
                     error = Some(json!({"code": -32000, "message": "Authentication required"}));
                 }
-                if mode == "session-error" {
+                if mode == "session-error" && env::var_os("MCP_REJECT").is_some() {
+                    error = Some(
+                        json!({"code":-32603,"message":request["params"]["mcpServers"].to_string(),"data":request["params"]["mcpServers"]}),
+                    );
+                } else if mode == "session-error" {
                     error = Some(
                         json!({"code": -32603, "message": "session rejected", "data": {"source": "fixture"}}),
                     );

@@ -112,3 +112,20 @@ it("keeps saved credentials opaque while editing and can explicitly replace them
     ),
   );
 });
+
+it("keeps an existing secret when a replacement is typed and then cleared", async () => {
+  page();
+  fireEvent.click(
+    await screen.findByRole("button", { name: "Details / Edit" }),
+  );
+  const secret = await screen.findByLabelText("Secret value");
+  fireEvent.input(secret, { target: { value: "temporary replacement" } });
+  fireEvent.input(secret, { target: { value: "" } });
+  fireEvent.click(screen.getByRole("button", { name: "Save" }));
+  await waitFor(() =>
+    expect(invoke).toHaveBeenCalledWith(
+      "save_mcp",
+      expect.objectContaining({ secrets: {} }),
+    ),
+  );
+});

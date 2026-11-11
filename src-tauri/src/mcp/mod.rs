@@ -155,7 +155,9 @@ impl Mcp {
         for (key, value) in server.values() {
             if let ValueSource::Secret(reference) = value {
                 if !secrets.contains_key(key)
-                    && previous.as_ref().and_then(|old| old.values().get(key)) != Some(value)
+                    && !previous
+                        .as_ref()
+                        .is_some_and(|old| old.values().values().any(|saved| saved == value))
                 {
                     return Err(format!("Replace the secret for {key}"));
                 }

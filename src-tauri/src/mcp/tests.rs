@@ -669,3 +669,86 @@ fn edits_during_credential_storage_are_not_overwritten() {
         "https://edited.example/mcp"
     );
 }
+
+#[tokio::test]
+async fn agents_cannot_echo_mcp_credentials_into_connection_errors() {
+    let root = tempfile::tempdir().unwrap();
+    let service = Arc::new(service(root.path(), Arc::new(MemoryCredentials::default())));
+    let executable = fixture();
+    let mut server: Server =
+        serde_json::from_value(json!({"type":"stdio","command":executable})).unwrap();
+    server
+        .values_mut()
+        .insert("API_KEY".into(), ValueSource::Secret(String::new()));
+    service
+        .save(
+            &Target::Global,
+            "tool",
+            server,
+            BTreeMap::from([("API_KEY".into(), "private-fixture-token".into())]),
+            true,
+        )
+        .unwrap();
+    let agent = crate::agent::AgentDefinition {
+        id: "fixture".into(),
+        name: "Fixture".into(),
+        launch_kind: Default::default(),
+        command: executable,
+        args: vec![],
+        env: std::collections::HashMap::from([
+            ("FIXTURE_MODE".into(), "session-error".into()),
+            ("MCP_REJECT".into(), "1".into()),
+        ]),
+        node_runtime: None,
+    };
+    let threads = crate::thread::Threads::new(vec![agent]);
+    threads.set_mcp(service);
+    let draft = threads.create(root.path()).unwrap();
+    threads.connect(draft.id).unwrap();
+    let failed = ready(&threads, draft.id).await;
+    assert_eq!(failed.status, crate::thread::ThreadStatus::Failed);
+    assert!(!serde_json::to_string(&failed)
+        .unwrap()
+        .contains("private-fixture-token"));
+    threads.shutdown().await;
+}
+
+#[test]
+fn renaming_a_value_preserves_its_saved_secret_reference() {
+    let root = tempfile::tempdir().unwrap();
+    let credentials = Arc::new(MemoryCredentials::default());
+    let service = service(root.path(), credentials.clone());
+    let mut server = http();
+    server
+        .values_mut()
+        .insert("Authorization".into(), ValueSource::Secret(String::new()));
+    service
+        .save(
+            &Target::Global,
+            "remote",
+            server,
+            BTreeMap::from([("Authorization".into(), "keep-this-key".into())]),
+            true,
+        )
+        .unwrap();
+    let mut server = service
+        .snapshot(&Target::Global)
+        .servers
+        .remove("remote")
+        .unwrap();
+    let source = server.values_mut().remove("Authorization").unwrap();
+    server.values_mut().insert("X-Api-Key".into(), source);
+    service
+        .save(&Target::Global, "remote", server, BTreeMap::new(), false)
+        .unwrap();
+    assert_eq!(credentials.0.lock().unwrap().len(), 1);
+    let (wire, _) = service
+        .resolve(root.path(), root.path(), true, &BTreeMap::new())
+        .unwrap();
+    assert_eq!(
+        serde_json::to_value(wire).unwrap()[0]["headers"][0],
+        json!({"name":"X-Api-Key","value":"keep-this-key"})
+    );
+}
+
+mod http_session;

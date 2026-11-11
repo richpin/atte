@@ -8,7 +8,8 @@ import {
   DialogHeader,
   DialogTitle,
 } from "shared/ui";
-import { createSignal, Index, Show } from "solid-js";
+import { createSignal, For, Show } from "solid-js";
+import { createStore } from "solid-js/store";
 import type { Server, ValueRow } from "../model/types";
 
 const inputClass =
@@ -36,20 +37,17 @@ export function ServerDialog(props: {
   const [args, setArgs] = createSignal(
     initial?.type === "stdio" ? JSON.stringify(initial.args) : "[]",
   );
-  const [rows, setRows] = createSignal<ValueRow[]>(
-    Object.entries(
+  const [form, setForm] = createStore<{ rows: ValueRow[] }>({
+    rows: Object.entries(
       initial?.type === "stdio" ? initial.env : (initial?.headers ?? {}),
     ).map(([name, source]) => ({ name, source })),
-  );
+  });
   const [busy, setBusy] = createSignal(false);
   const [error, setError] = createSignal<string>();
   function updateRow(index: number, change: Partial<ValueRow>) {
-    setRows((rows) =>
-      rows.map((row, position) =>
-        position === index ? { ...row, ...change } : row,
-      ),
-    );
+    setForm("rows", index, change);
   }
+
   async function save() {
     if (busy()) return;
     setBusy(true);
@@ -64,7 +62,7 @@ export function ServerDialog(props: {
         throw new Error(t("mcps.invalidArgs"));
       const values: Record<string, ValueRow["source"]> = Object.create(null);
       const secrets: Record<string, string> = Object.create(null);
-      for (const row of rows()) {
+      for (const row of form.rows) {
         if (!row.name.trim() || Object.hasOwn(values, row.name))
           throw new Error(t("mcps.invalidNames"));
         values[row.name] = row.source;
@@ -127,7 +125,7 @@ export function ServerDialog(props: {
               onChange={(event) => {
                 setType(event.currentTarget.value as "stdio" | "http");
                 setEndpoint("");
-                setRows([]);
+                setForm("rows", []);
               }}
             >
               <option value="stdio">stdio</option>
@@ -158,7 +156,7 @@ export function ServerDialog(props: {
             <legend class="text-sm font-medium">
               {type() === "stdio" ? t("mcps.env") : t("mcps.headers")}
             </legend>
-            <Index each={rows()}>
+            <For each={form.rows}>
               {(row, index) => (
                 <div class="space-y-2 rounded-lg border border-line p-3">
                   <div class="flex gap-2">
@@ -166,9 +164,9 @@ export function ServerDialog(props: {
                       {t("mcps.name")}
                       <input
                         class={inputClass}
-                        value={row().name}
+                        value={row.name}
                         onInput={(event) =>
-                          updateRow(index, {
+                          updateRow(index(), {
                             name: event.currentTarget.value,
                           })
                         }
@@ -178,9 +176,9 @@ export function ServerDialog(props: {
                       {t("mcps.valueType")}
                       <select
                         class={inputClass}
-                        value={row().source.kind}
+                        value={row.source.kind}
                         onChange={(event) =>
-                          updateRow(index, {
+                          updateRow(index(), {
                             source: {
                               kind: event.currentTarget
                                 .value as ValueRow["source"]["kind"],
@@ -202,35 +200,35 @@ export function ServerDialog(props: {
                     </label>
                   </div>
                   <label class="block text-sm">
-                    {row().source.kind === "secret"
+                    {row.source.kind === "secret"
                       ? t("mcps.secretValue")
-                      : row().source.kind === "environment"
+                      : row.source.kind === "environment"
                         ? t("mcps.environmentName")
                         : t("mcps.value")}
                     <input
                       class={inputClass}
-                      type={
-                        row().source.kind === "secret" ? "password" : "text"
-                      }
+                      type={row.source.kind === "secret" ? "password" : "text"}
                       autocomplete="off"
                       value={
-                        row().source.kind === "secret"
-                          ? (row().replacement ?? "")
-                          : row().source.value
+                        row.source.kind === "secret"
+                          ? (row.replacement ?? "")
+                          : row.source.value
                       }
                       placeholder={
-                        row().source.kind === "secret" && row().source.value
+                        row.source.kind === "secret" && row.source.value
                           ? t("mcps.keepSecret")
                           : ""
                       }
                       onInput={(event) =>
-                        row().source.kind === "secret"
-                          ? updateRow(index, {
-                              replacement: event.currentTarget.value,
+                        row.source.kind === "secret"
+                          ? updateRow(index(), {
+                              replacement:
+                                event.currentTarget.value ||
+                                (row.source.value ? undefined : ""),
                             })
-                          : updateRow(index, {
+                          : updateRow(index(), {
                               source: {
-                                ...row().source,
+                                ...row.source,
                                 value: event.currentTarget.value,
                               },
                             })
@@ -241,8 +239,8 @@ export function ServerDialog(props: {
                     size="sm"
                     variant="ghost"
                     onClick={() =>
-                      setRows((rows) =>
-                        rows.filter((_, position) => position !== index),
+                      setForm("rows", (rows) =>
+                        rows.filter((_, position) => position !== index()),
                       )
                     }
                   >
@@ -250,12 +248,12 @@ export function ServerDialog(props: {
                   </Button>
                 </div>
               )}
-            </Index>
+            </For>
             <Button
               size="sm"
               variant="outline"
               onClick={() =>
-                setRows((rows) => [
+                setForm("rows", (rows) => [
                   ...rows,
                   { name: "", source: { kind: "literal", value: "" } },
                 ])

@@ -620,6 +620,20 @@ async fn run_session(
         } else {
             Vec::new()
         };
+        let has_mcp = !servers.is_empty();
+        let session_failure = |error: agent_client_protocol::Error, fallback| {
+            if !has_mcp {
+                return classify_and_remember(error, fallback, updates);
+            }
+            // Agents may echo the session request, which contains resolved credentials.
+            if !is_transport_closed(&error) {
+                let mut detail: AcpError = error.clone().into();
+                detail.message = "Agent rejected session setup; MCP configuration details are hidden to protect credentials".into();
+                detail.data = None;
+                updates.remember_acp_failure(detail);
+            }
+            classify(error, fallback)
+        };
         if let Some(id) = &session.remote_session {
             if let Ok(mut routes) = routes.lock() {
                 routes.insert(
@@ -642,11 +656,7 @@ async fn run_session(
                 )
                 .await
                 .map_err(|error| {
-                    classify_and_remember(
-                        error,
-                        ConnectionFailure::SessionRestorationFailed,
-                        updates,
-                    )
+                    session_failure(error, ConnectionFailure::SessionRestorationFailed)
                 })?;
                 let history = routes
                     .lock()
@@ -666,11 +676,7 @@ async fn run_session(
                 )
                 .await
                 .map_err(|error| {
-                    classify_and_remember(
-                        error,
-                        ConnectionFailure::SessionRestorationFailed,
-                        updates,
-                    )
+                    session_failure(error, ConnectionFailure::SessionRestorationFailed)
                 })?;
                 if let Ok(mut routes) = routes.lock() {
                     if let Some(route) = routes.get_mut(id) {
@@ -693,9 +699,7 @@ async fn run_session(
                 updates,
             )
             .await
-            .map_err(|error| {
-                classify_and_remember(error, ConnectionFailure::SessionCreationFailed, updates)
-            })?;
+            .map_err(|error| session_failure(error, ConnectionFailure::SessionCreationFailed))?;
             if let Ok(mut routes) = routes.lock() {
                 routes.insert(
                     response.session_id.to_string(),

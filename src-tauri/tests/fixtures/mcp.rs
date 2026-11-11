@@ -59,6 +59,9 @@ pub fn call(servers: &Value, cwd: &Value) -> Result<String, Box<dyn std::error::
         .as_array()
         .and_then(|servers| servers.iter().find(|server| server["name"] == "tool"))
         .ok_or("Missing forwarded server")?;
+    if server["type"] == "http" {
+        return call_http(server);
+    }
     let mut command = Command::new(server["command"].as_str().ok_or("Missing MCP command")?);
     for arg in server["args"].as_array().into_iter().flatten() {
         command.arg(arg.as_str().ok_or("Invalid MCP argument")?);
@@ -118,4 +121,28 @@ pub fn call(servers: &Value, cwd: &Value) -> Result<String, Box<dyn std::error::
     let _ = child.kill();
     let _ = child.wait();
     result
+}
+
+fn call_http(server: &Value) -> Result<String, Box<dyn std::error::Error>> {
+    tokio::runtime::Builder::new_current_thread().enable_all().build()?.block_on(async {
+        let client = reqwest::Client::builder().timeout(std::time::Duration::from_secs(5)).build()?;
+        let url = server["url"].as_str().ok_or("Missing MCP URL")?;
+        let mut headers = reqwest::header::HeaderMap::new();
+        for header in server["headers"].as_array().into_iter().flatten() {
+            headers.insert(reqwest::header::HeaderName::from_bytes(header["name"].as_str().ok_or("Missing header name")?.as_bytes())?, reqwest::header::HeaderValue::from_str(header["value"].as_str().ok_or("Missing header value")?)?);
+        }
+        headers.insert(reqwest::header::ACCEPT, reqwest::header::HeaderValue::from_static("application/json, text/event-stream"));
+        let mut last = json!(null);
+        for (id, method) in [(1, "initialize"), (2, "notifications/initialized"), (3, "tools/list"), (4, "tools/call")] {
+            let params = if method == "initialize" { json!({"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"fixture-agent","version":"1"}}) } else if method == "tools/call" { json!({"name":"where","arguments":{}}) } else { json!({}) };
+            let mut request = json!({"jsonrpc":"2.0","method":method,"params":params});
+            if method != "notifications/initialized" { request["id"] = json!(id); }
+            let response = client.post(url).headers(headers.clone()).json(&request).send().await?.error_for_status()?;
+            if method == "notifications/initialized" { continue; }
+            last = response.json::<Value>().await?;
+            assert_eq!(last["id"], id);
+            if method == "tools/list" { assert_eq!(last["result"]["tools"][0]["name"], "where"); }
+        }
+        Ok(last["result"]["content"][0]["text"].as_str().ok_or("Missing HTTP MCP result")?.to_string())
+    })
 }
