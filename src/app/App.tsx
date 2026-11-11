@@ -20,6 +20,7 @@ import {
 } from "lucide-solid";
 import { AgentManagementPage } from "pages/agent-management";
 import { GeneralPage } from "pages/general";
+import { McpsPage } from "pages/mcps";
 import { NewThreadPage } from "pages/new-thread";
 import { SkillsPage } from "pages/skills";
 import { ThreadPage } from "pages/thread";
@@ -56,6 +57,7 @@ import {
   createEffect,
   createSignal,
   createUniqueId,
+  For,
   onCleanup,
   onMount,
   Show,
@@ -245,6 +247,7 @@ function ShellSidebar(props: { shell: AppShellModel }) {
       onShowGeneral={shell.showGeneral}
       onManageAgents={shell.showAgents}
       onManageSkills={shell.showSkills}
+      onManageMcps={shell.showMcps}
     />
   );
 }
@@ -292,6 +295,7 @@ function ShellContent(props: { shell: AppShellModel }) {
     if (shell.view() === "general") return t("settings.general");
     if (shell.view() === "agents") return t("settings.agents");
     if (shell.view() === "skills") return t("settings.skills");
+    if (shell.view() === "mcps") return t("settings.mcps");
     if (shell.view() !== "thread") return "";
     const selected = threads.selectedThreadId();
     const current = threads.thread();
@@ -476,6 +480,38 @@ function ShellContent(props: { shell: AppShellModel }) {
           onManageAgents={shell.showAgents}
         />
       </div>
+      <Show
+        when={
+          shell.view() === "thread" && threads.thread()?.mcp?.reconnectRequired
+        }
+      >
+        <div
+          role="status"
+          class="flex items-center gap-4 border-b border-line px-6 py-3 text-sm"
+        >
+          <p class="flex-1">{t("mcps.reconnect")}</p>
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={!threads.canReconnect()}
+            onClick={() => void threads.reconnect()}
+          >
+            {t("thread.reconnect")}
+          </Button>
+        </div>
+      </Show>
+      <Show when={shell.view() === "thread"}>
+        <For each={threads.thread()?.mcp?.issues}>
+          {(issue) => (
+            <p
+              role="status"
+              class="border-b border-line px-6 py-2 text-sm text-muted"
+            >
+              MCP · {issue.name}: {issue.reason}
+            </p>
+          )}
+        </For>
+      </Show>
       <div hidden={shell.view() !== "thread"} class="min-h-0 flex-1">
         <ThreadPanelLayout
           model={shell.threadPanels}
@@ -529,6 +565,11 @@ function ShellContent(props: { shell: AppShellModel }) {
             active={shell.view() === "skills"}
             projects={shell.projects()}
           />
+        </Show>
+      </div>
+      <div hidden={shell.view() !== "mcps"} class="min-h-0 flex-1">
+        <Show when={shell.view() === "mcps"}>
+          <McpsPage active projects={shell.projects()} />
         </Show>
       </div>
       <AppUpdateNotice updates={updates} />

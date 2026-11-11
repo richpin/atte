@@ -17,7 +17,7 @@
 - `theme`: `system`, `light`, `dark`. `system`은 OS 화면 모드 변경을 계속 따른다.
 - `locale`: `system`, `en`, `ko`. `system`은 OS 언어 목록의 첫 지원 언어를 사용하고, 지원 언어가 없으면 영어로 표시한다. 실행 중 시스템 언어 변경도 반영한다.
 - `notifications`: 응답 완료(`completion`), 승인 및 질문 요청(`permission`)의 OS 알림 허용 여부다. 누락한 항목은 활성으로 해석한다.
-- `mcpServers`: 빈 객체를 기본값으로 보존한다. MCP 등록 및 실행은 별도 후속 기능이다.
+- `mcpServers`: 이름으로 구분한 전역 MCP 서버 설정이다. 아래 MCP 서버 관리 규칙을 따른다.
 
 누락한 테마·언어는 `system`이다. 알려진 항목의 지원하지 않는 값과 JSON 문법 오류는 설정 오류다. 알 수 없는 필드와 알림 하위 필드, 기존 `mcpServers` 내용은 화면에서 다른 설정을 바꿔도 보존한다.
 
@@ -40,3 +40,42 @@ Tauri가 없는 브라우저 개발은 메모리 설정을 사용한다. 테스�
 구독을 다시 연결하면 이전 구독을 해제하고 오래된 구독의 스냅샷을 무시한다. 앱 명령은 신뢰된 `main` WebView에서만 허용하며 프런트엔드에 임의 파일 접근 권한을 추가하지 않는다.
 
 참고: [VS Code 사용자 설정](https://code.visualstudio.com/docs/configure/settings), [tempfile 원자 교체](https://docs.rs/tempfile/latest/tempfile/struct.NamedTempFile.html#method.persist).
+
+## MCP 서버 관리
+
+앱 메뉴의 **MCPs**에서 전역 또는 사이드바에 표시된 프로젝트를 선택하고 서버를 검색·추가·상세 편집·삭제한다. 등록은 연결 성공을 뜻하지 않는다. 토글은 Atte가 전달할 목록만 제어하며 에이전트가 자체 설정에서 읽는 서버를 변경하지 않는다.
+
+전역 서버는 `~/.atte/settings.json`의 `mcpServers`, 프로젝트 서버는 선택한 폴더의 `.atte/mcp.json`에 저장한다. 상위 폴더나 Git 루트를 탐색하지 않는다. 같은 이름은 프로젝트 항목 전체가 우선하며 비활성 프로젝트 항목은 같은 이름의 전역 서버도 제외한다. 관리 worktree 스레드는 원본 폴더의 설정을 사용하고 도구의 실제 작업 위치는 스레드의 작업 폴더다. 설정 변경은 새 대화·재연결부터 적용된다. 열린 스레드에는 재연결 안내를 표시하며 실행 중인 작업을 중단하거나 공유 에이전트 프로세스를 종료하지 않는다.
+
+```json
+{
+  "mcpServers": {
+    "local-tools": {
+      "type": "stdio",
+      "command": "npx",
+      "args": ["-y", "your-mcp-server"],
+      "env": {
+        "API_KEY": { "kind": "environment", "value": "EXISTING_API_KEY" }
+      }
+    },
+    "remote-tools": {
+      "type": "http",
+      "enabled": false,
+      "url": "https://example.com/mcp",
+      "headers": {
+        "X-Workspace": { "kind": "literal", "value": "example" }
+      }
+    }
+  }
+}
+```
+
+`enabled`를 생략하면 활성이다. 명령어와 인자 배열은 별개로 전달하며 셸 문자열로 합치지 않는다. 명령어는 에이전트 실행 환경의 PATH 또는 작업 폴더를 기준으로 실행 가능한 절대 경로로 해석한다. Streamable HTTP는 에이전트가 ACP HTTP MCP 지원을 광고할 때만 전달한다.
+
+환경변수·헤더의 값 유형은 일반값(`literal`), 기존 환경변수 참조(`environment`), OS 자격 증명 참조(`secret`)다. Bearer 인증은 `Authorization` 헤더를 비밀값으로 선택하고 `Bearer …`를 입력한다. 사용자 지정 인증 헤더도 동일하게 설정한다. 비밀값은 macOS Keychain 또는 Windows 자격 증명 저장소에 저장하며 JSON과 조회 응답에는 불투명 참조만 남긴다. 편집 폼의 기존 비밀값 입력을 건드리지 않으면 유지하고, 새 값을 입력하면 교체하며, 행을 삭제하면 자격 증명도 삭제한다. 참조의 자격 증명 주소에는 설정 파일의 범위·서버 이름을 함께 사용하므로 같은 이름의 프로젝트 서버끼리 공유하지 않는다. 자격 증명 저장소 오류는 평문 파일 저장으로 대체하지 않는다.
+
+ACP `session/new`, `session/load`, `session/resume`에 활성 서버를 전달한다. 누락되거나 빈 자격 증명·환경변수, 실행할 수 없는 명령어, HTTP 미지원, 지원하지 않는 서버 설정은 서버별 이유와 함께 제외하고 나머지를 계속 전달한다. 이유는 스레드 화면에 표시한다. 파일을 읽거나 JSON을 해석할 수 없으면 마지막 정상 등록 목록과 오류를 유지하고 해당 파일의 저장·영향받는 새 MCP 세션 설정을 막는다. 표시된 파일을 수정하면 구독과 감지 주기에 따라 복구한다.
+
+자동 가져오기·카탈로그·독립 연결 확인·OAuth 인증과 중계는 제공하지 않는다.
+
+참고: [Zed의 로컬·원격 MCP 관리와 외부 에이전트 구분](https://zed.dev/docs/ai/mcp), [ACP v1 세션 설정](https://agentclientprotocol.com/protocol/v1/session-setup), [keyring 네이티브 자격 증명 저장소](https://docs.rs/keyring/3.6.3/keyring/).

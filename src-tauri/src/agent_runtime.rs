@@ -58,6 +58,8 @@ use uuid::Uuid;
 pub(crate) struct Session {
     pub id: Uuid,
     pub remote_session: Option<String>,
+    pub mcp: Option<Arc<crate::mcp::Mcp>>,
+    pub source_folder: PathBuf,
     pub initial_configuration: Vec<ThreadConfiguration>,
     pub updates: RuntimeUpdates,
     pub prompts: mpsc::UnboundedReceiver<Prompt>,
@@ -113,6 +115,14 @@ pub(crate) async fn run(
         }
         return true;
     };
+    let mut environment: std::collections::BTreeMap<String, String> = std::env::vars_os()
+        .filter_map(|(key, value)| Some((key.into_string().ok()?, value.into_string().ok()?)))
+        .collect();
+    environment.extend(agent.env.clone());
+    if let Some(path) = &launch.path {
+        environment.insert("PATH".into(), path.to_string_lossy().into_owned());
+    }
+    let environment = Arc::new(environment);
     let mut command = Command::new(launch.program);
     command
         .args(launch.args)
@@ -407,13 +417,14 @@ pub(crate) async fn run(
                                 let folder = folder.clone();
                                 let routes = routes.clone();
                                 let owners = owners.clone();
+                                let environment = environment.clone();
                                 connection.spawn(async move {
                                     let id = session.id;
                                     let generation = session.updates.generation();
                                     let failure = tokio::select! {
                                         biased;
                                         _ = stopped => ConnectionFailure::ConnectionClosed,
-                                        failure = run_session(connection_task, capabilities, folder, routes, owners, session) => failure,
+                                        failure = run_session(connection_task, capabilities, folder, routes, owners, session, environment) => failure,
                                     };
                                     let _ = finished.send((id, generation, failure));
                                     Ok(())
@@ -574,9 +585,41 @@ async fn run_session(
     routes: Routes,
     owners: elicitation::Owners,
     mut session: Session,
+    environment: Arc<std::collections::BTreeMap<String, String>>,
 ) -> ConnectionFailure {
     let updates = &session.updates;
     let handshake = async {
+        let servers = if let Some(service) = &session.mcp {
+            let service = service.clone();
+            let source = session.source_folder.clone();
+            let working = folder.clone();
+            let http = capabilities.mcp_capabilities.http;
+            match tokio::task::spawn_blocking(move || {
+                service.resolve(&source, &working, http, &environment)
+            })
+            .await
+            {
+                Ok(Ok((servers, state))) => {
+                    updates.mcp_configured(state);
+                    servers
+                }
+                _ => {
+                    updates.mcp_configured(crate::mcp::SessionState {
+                        issues: vec![crate::mcp::Issue {
+                            name: "MCP settings".into(),
+                            reason:
+                                "Correct the global or project settings file before reconnecting"
+                                    .into(),
+                        }],
+                        revision: "invalid".into(),
+                        reconnect_required: false,
+                    });
+                    return Err(ConnectionFailure::SessionCreationFailed);
+                }
+            }
+        } else {
+            Vec::new()
+        };
         if let Some(id) = &session.remote_session {
             if let Ok(mut routes) = routes.lock() {
                 routes.insert(
@@ -591,7 +634,9 @@ async fn run_session(
             }
             let configuration = if capabilities.load_session {
                 let response = elicitation::call(
-                    connection.send_request(LoadSessionRequest::new(id.clone(), &folder)),
+                    connection.send_request(
+                        LoadSessionRequest::new(id.clone(), &folder).mcp_servers(servers.clone()),
+                    ),
                     &owners,
                     updates,
                 )
@@ -613,7 +658,9 @@ async fn run_session(
                 response.config_options.unwrap_or_default()
             } else if capabilities.session_capabilities.resume.is_some() {
                 let response = elicitation::call(
-                    connection.send_request(ResumeSessionRequest::new(id.clone(), &folder)),
+                    connection.send_request(
+                        ResumeSessionRequest::new(id.clone(), &folder).mcp_servers(servers.clone()),
+                    ),
                     &owners,
                     updates,
                 )
@@ -641,7 +688,7 @@ async fn run_session(
             ))
         } else {
             let response = elicitation::call(
-                connection.send_request(NewSessionRequest::new(&folder)),
+                connection.send_request(NewSessionRequest::new(&folder).mcp_servers(servers)),
                 &owners,
                 updates,
             )

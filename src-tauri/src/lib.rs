@@ -13,6 +13,7 @@ mod git_working;
 mod installation;
 mod installation_files;
 mod lifecycle;
+pub mod mcp;
 mod notifications;
 mod open_working_folder;
 mod platform;
@@ -548,6 +549,13 @@ pub fn run() {
             }
             lifecycle::install(app.handle())?;
             settings::install(app.handle())?;
+            let mcp = Arc::new(mcp::Mcp::new(
+                app.state::<settings::Settings>().0.clone(),
+                app.path().home_dir()?.join(".atte/settings.json"),
+                Arc::new(mcp::NativeCredentials),
+            ));
+            app.state::<Threads>().set_mcp(mcp.clone());
+            app.manage(mcp);
             notifications::install(app.handle())?;
             settings::observe_notifications(app.handle())?;
             settings::watch(app.handle());
@@ -661,6 +669,10 @@ pub fn run() {
                 notifications::request_notification_permission,
                 settings::subscribe_settings,
                 settings::update_settings,
+                mcp::subscribe_mcp,
+                mcp::save_mcp,
+                mcp::remove_mcp,
+                mcp::toggle_mcp,
                 notifications::acknowledge_notification_navigation,
                 notifications::open_notification_settings,
                 subscribe_thread_list,

@@ -5741,3 +5741,54 @@ it("keeps the initial theme and language while a settings error blocks saving un
     false,
   );
 });
+
+it("shows MCP diagnostics and defers reconnection until the current task finishes", async () => {
+  const current = {
+    id: "mcp-thread",
+    title: "MCP thread",
+    agentId: "codex",
+    workingFolder: "/project",
+    status: "running",
+    sessionId: "remote-1",
+    turns: [],
+    mcp: {
+      revision: "old",
+      reconnectRequired: true,
+      issues: [
+        { name: "remote", reason: "Agent does not support HTTP MCP servers" },
+      ],
+    },
+  };
+  const original = vi.mocked(invoke).getMockImplementation();
+  vi.mocked(invoke).mockImplementation((command, args) => {
+    if (command === "list_threads") return Promise.resolve([current]);
+    if (command === "subscribe_thread") return subscribeWith(args, current);
+    return original?.(command, args) ?? Promise.resolve();
+  });
+  render(() => <App settings={settingsModel} />);
+  await userEvent.click(
+    await screen.findByRole("button", { name: current.title }),
+  );
+  expect(await screen.findByText(/MCP 설정이 변경되었습니다/)).toBeTruthy();
+  expect(
+    screen.getByText(/Agent does not support HTTP MCP servers/),
+  ).toBeTruthy();
+  expect(screen.getByRole("button", { name: "다시 연결" })).toHaveProperty(
+    "disabled",
+    true,
+  );
+  expect(
+    vi
+      .mocked(invoke)
+      .mock.calls.filter(([command]) => command === "reconnect_thread"),
+  ).toHaveLength(0);
+  receive({ ...current, status: "sessionReady" });
+  await waitFor(() =>
+    expect(screen.getByRole("button", { name: "다시 연결" })).toHaveProperty(
+      "disabled",
+      false,
+    ),
+  );
+  await userEvent.click(screen.getByRole("button", { name: "다시 연결" }));
+  expect(invoke).toHaveBeenCalledWith("reconnect_thread", { id: current.id });
+});

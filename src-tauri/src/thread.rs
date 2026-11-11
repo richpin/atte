@@ -61,6 +61,7 @@ pub struct Thread {
     pub pending_interactions: Vec<PendingInteraction>,
     pub queued_messages: Vec<QueuedMessage>,
     pub configuration: Vec<ThreadConfiguration>,
+    pub mcp: crate::mcp::SessionState,
     pub prompt_capabilities: PromptCapabilities,
     pub context_usage: Option<ContextUsage>,
     pub available_commands: Vec<AvailableCommand>,
@@ -79,6 +80,7 @@ pub struct ThreadPatch {
     pub pending_interactions: Vec<PendingInteraction>,
     pub queued_messages: Vec<QueuedMessage>,
     pub configuration: Vec<ThreadConfiguration>,
+    pub mcp: crate::mcp::SessionState,
     pub prompt_capabilities: PromptCapabilities,
     pub context_usage: Option<ContextUsage>,
     pub available_commands: Vec<AvailableCommand>,
@@ -95,6 +97,7 @@ impl From<&Thread> for ThreadPatch {
             pending_interactions: thread.pending_interactions.clone(),
             queued_messages: thread.queued_messages.clone(),
             configuration: thread.configuration.clone(),
+            mcp: thread.mcp.clone(),
             prompt_capabilities: thread.prompt_capabilities.clone(),
             context_usage: thread.context_usage,
             available_commands: thread.available_commands.clone(),
@@ -142,6 +145,7 @@ impl ThreadPatch {
         thread.pending_interactions = self.pending_interactions;
         thread.queued_messages = self.queued_messages;
         thread.configuration = self.configuration;
+        thread.mcp = self.mcp;
         thread.prompt_capabilities = self.prompt_capabilities;
         thread.context_usage = self.context_usage;
         thread.available_commands = self.available_commands;
@@ -580,6 +584,7 @@ pub struct Threads {
     authentication: Arc<Mutex<HashMap<String, AuthenticationStatus>>>,
     authentication_observations: Arc<Mutex<HashMap<String, AuthenticationObservation>>>,
     state: Mutex<State>,
+    mcp: Mutex<Option<Arc<crate::mcp::Mcp>>>,
 }
 
 #[derive(Default)]
@@ -733,6 +738,7 @@ impl Threads {
             authentication: Arc::default(),
             authentication_observations: Arc::default(),
             state: Mutex::new(State::default()),
+            mcp: Mutex::new(None),
         }
     }
 
@@ -796,6 +802,7 @@ impl Threads {
                 pending_interactions: Vec::new(),
                 queued_messages: store.queued_messages(saved.id)?,
                 configuration: Vec::new(),
+                mcp: Default::default(),
                 prompt_capabilities: PromptCapabilities::default(),
                 context_usage: None,
                 available_commands: Vec::new(),
@@ -853,6 +860,40 @@ impl Threads {
             }),
             ..Self::new(agents)
         })
+    }
+
+    pub(crate) fn set_mcp(&self, service: Arc<crate::mcp::Mcp>) {
+        if let Ok(mut mcp) = self.mcp.lock() {
+            *mcp = Some(service);
+        }
+    }
+
+    pub(crate) fn refresh_mcp(&self) {
+        let Some(service) = self.mcp.lock().ok().and_then(|mcp| mcp.clone()) else {
+            return;
+        };
+        let Ok(state) = self.lock() else {
+            return;
+        };
+        for entry in state.entries.values() {
+            let Ok(mut current) = entry.state.lock() else {
+                continue;
+            };
+            if current.thread.mcp.revision.is_empty() {
+                continue;
+            }
+            let folder = current
+                .thread
+                .worktree
+                .as_ref()
+                .map(|worktree| &worktree.source_folder)
+                .unwrap_or(&current.thread.working_folder);
+            let changed = service.revision(folder) != current.thread.mcp.revision;
+            if changed != current.thread.mcp.reconnect_required {
+                current.thread.mcp.reconnect_required = changed;
+                current.publish();
+            }
+        }
     }
 
     pub fn list(&self) -> Result<Vec<ThreadMetadata>, ThreadError> {
@@ -1368,6 +1409,7 @@ impl Threads {
             pending_interactions: Vec::new(),
             queued_messages: Vec::new(),
             configuration: Vec::new(),
+            mcp: Default::default(),
             prompt_capabilities: PromptCapabilities::default(),
             context_usage: None,
             available_commands: Vec::new(),
@@ -1818,6 +1860,12 @@ impl Threads {
         let session = crate::agent_runtime::Session {
             id,
             remote_session: thread.session_id.clone(),
+            mcp: self.mcp.lock().map_err(|_| unavailable())?.clone(),
+            source_folder: thread
+                .worktree
+                .as_ref()
+                .map(|worktree| worktree.source_folder.clone())
+                .unwrap_or_else(|| folder.clone()),
             initial_configuration: self
                 .recent_configuration
                 .lock()
@@ -3160,6 +3208,10 @@ pub(crate) struct RuntimeUpdates {
 }
 
 impl RuntimeUpdates {
+    pub(crate) fn mcp_configured(&self, mcp: crate::mcp::SessionState) {
+        self.modify(|thread| thread.mcp = mcp);
+    }
+
     pub fn title_updated(&self, title: Option<String>) {
         let Ok(mut state) = self.state.lock() else {
             return;

@@ -50,7 +50,13 @@ import {
 import { createMemo, createSignal, For, Show } from "solid-js";
 import { RenameThreadDialog } from "./RenameThreadDialog";
 
-type AppView = "new-thread" | "thread" | "general" | "agents" | "skills";
+type AppView =
+  | "new-thread"
+  | "thread"
+  | "general"
+  | "agents"
+  | "skills"
+  | "mcps";
 
 type SidebarThread = {
   id: string;
@@ -82,6 +88,7 @@ export function AppSidebar(props: {
   onShowGeneral: () => void;
   onManageAgents: () => void;
   onManageSkills: () => void;
+  onManageMcps?: () => void;
 }) {
   const { t, message, content } = useI18n();
   const { state, isMobile } = useSidebar();
@@ -550,6 +557,13 @@ export function AppSidebar(props: {
                 >
                   <Sparkles aria-hidden="true" class="size-4" />
                   {t("settings.skills")}
+                </DropdownMenuItem>
+                <DropdownMenuItem
+                  aria-current={props.view === "mcps" ? "page" : undefined}
+                  onSelect={props.onManageMcps}
+                >
+                  <Settings aria-hidden="true" class="size-4" />
+                  {t("settings.mcps")}
                 </DropdownMenuItem>
               </DropdownMenuContent>
             </DropdownMenu>

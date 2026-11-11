@@ -17,7 +17,13 @@ import {
 } from "solid-js";
 import { createThreadPanelModel } from "widgets/thread-panel";
 
-export type AppView = "new-thread" | "thread" | "general" | "agents" | "skills";
+export type AppView =
+  | "new-thread"
+  | "thread"
+  | "general"
+  | "agents"
+  | "skills"
+  | "mcps";
 
 export function createAppShellModel() {
   const { t, locale } = useI18n();
@@ -225,6 +231,7 @@ export function createAppShellModel() {
     showGeneral,
     showAgents,
     showSkills,
+    showMcps: () => setView("mcps"),
     selectFolder,
     startThread,
     removeThread,

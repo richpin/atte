@@ -1,11 +1,14 @@
 //! Global user settings; the WebView observes an ordered snapshot subscription.
-mod store;
-use std::{sync::Mutex, time::Duration};
+pub(crate) mod store;
+use std::{
+    sync::{Arc, Mutex},
+    time::Duration,
+};
 use store::{Legacy, Patch, Snapshot, Store};
 use tauri::{ipc::Channel, AppHandle, Manager, State};
 use uuid::Uuid;
 
-pub(crate) struct Settings(Mutex<Store>);
+pub(crate) struct Settings(pub(crate) Arc<Mutex<Store>>);
 
 pub(crate) fn install(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
     let store = Store::new(
@@ -14,7 +17,7 @@ pub(crate) fn install(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>>
             .app_data_dir()?
             .join("notification-preferences.json"),
     );
-    app.manage(Settings(Mutex::new(store)));
+    app.manage(Settings(Arc::new(Mutex::new(store))));
     Ok(())
 }
 
@@ -86,6 +89,7 @@ pub(crate) fn watch(app: &AppHandle) {
                         store.refresh();
                     }
                 }
+                handle.state::<crate::thread::Threads>().refresh_mcp();
             })
             .await;
         }

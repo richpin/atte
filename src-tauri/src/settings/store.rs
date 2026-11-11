@@ -68,7 +68,7 @@ pub(crate) struct Snapshot {
     pub migrated: bool,
 }
 
-pub(super) struct Store {
+pub(crate) struct Store {
     path: PathBuf,
     legacy_path: PathBuf,
     legacy: Legacy,
@@ -78,7 +78,7 @@ pub(super) struct Store {
     subscribers: Vec<mpsc::UnboundedSender<Snapshot>>,
 }
 impl Store {
-    pub(super) fn new(path: PathBuf, legacy_path: PathBuf) -> Self {
+    pub(crate) fn new(path: PathBuf, legacy_path: PathBuf) -> Self {
         Self {
             path,
             legacy_path,
@@ -201,7 +201,7 @@ impl Store {
         Ok(())
     }
 
-    pub(super) fn initialize(&mut self, legacy: Legacy) {
+    pub(crate) fn initialize(&mut self, legacy: Legacy) {
         self.legacy = legacy;
         self.initialized = true;
         self.write_error = None;
@@ -259,6 +259,55 @@ impl Store {
     fn publish(&mut self) {
         self.subscribers
             .retain(|sender| sender.send(self.snapshot.clone()).is_ok());
+    }
+
+    pub(crate) fn mcp_servers(&self) -> Result<serde_json::Map<String, Value>, String> {
+        if let Some(error) = &self.snapshot.error {
+            return Err(error.clone());
+        }
+        let (_, document) = self.read()?;
+        Ok(document
+            .get("mcpServers")
+            .and_then(Value::as_object)
+            .cloned()
+            .unwrap_or_default())
+    }
+
+    pub(crate) fn change_mcp(
+        &mut self,
+        name: &str,
+        server: Option<Value>,
+        create: bool,
+        expected: Option<&Value>,
+    ) -> Result<(), String> {
+        if let Some(error) = &self.snapshot.error {
+            return Err(error.clone());
+        }
+        let (before, mut document) = self.read()?;
+        if document.get("mcpServers").is_none() {
+            document["mcpServers"] = json!({});
+        }
+        let servers = document["mcpServers"]
+            .as_object_mut()
+            .ok_or("mcpServers must be an object")?;
+        if servers.get(name) != expected {
+            return Err("MCP server changed while saving; refresh and retry".into());
+        }
+        if create && servers.contains_key(name) {
+            return Err("A server with this name already exists in this scope".into());
+        }
+        match server {
+            Some(server) => {
+                servers.insert(name.into(), server);
+            }
+            None => {
+                servers.remove(name);
+            }
+        }
+        Self::validate(&document)?;
+        self.write(&before, &document)?;
+        self.refresh();
+        Ok(())
     }
     pub(super) fn subscribe(&mut self) -> mpsc::UnboundedReceiver<Snapshot> {
         let (sender, receiver) = mpsc::unbounded_channel();

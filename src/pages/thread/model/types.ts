@@ -59,6 +59,11 @@ export interface Thread {
   configuration: ThreadConfiguration[];
   contextUsage: ContextUsage | null;
   availableCommands: AvailableCommand[];
+  mcp?: {
+    issues: { name: string; reason: string }[];
+    revision: string;
+    reconnectRequired: boolean;
+  };
   promptCapabilities?: {
     image: boolean;
     audio: boolean;
