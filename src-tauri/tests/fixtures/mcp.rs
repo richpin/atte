@@ -7,6 +7,16 @@ use std::{
 };
 
 pub fn serve() -> Result<(), Box<dyn std::error::Error>> {
+    if let Some(path) = env::var_os("MCP_PID") {
+        fs::write(path, std::process::id().to_string())?;
+    }
+    let mode = env::var("MCP_CHECK_MODE").unwrap_or_default();
+    if mode == "fail" {
+        return Err("Fixture execution failure".into());
+    }
+    if mode == "hang" || mode == "cancel" {
+        std::thread::sleep(std::time::Duration::from_secs(60));
+    }
     let mut output = io::stdout().lock();
     for line in io::stdin().lock().lines() {
         let request: Value = serde_json::from_str(&line?)?;
@@ -15,10 +25,14 @@ pub fn serve() -> Result<(), Box<dyn std::error::Error>> {
         }
         let result = match request["method"].as_str().unwrap_or_default() {
             "initialize" => {
-                json!({"protocolVersion":"2025-03-26","capabilities":{"tools":{}},"serverInfo":{"name":"fixture","version":"1"}})
+                json!({"protocolVersion":"2025-03-26","capabilities": if mode == "no-capabilities" { json!({}) } else { json!({"tools":{}}) },"serverInfo":{"name":"fixture","version":"1"}})
             }
             "tools/list" => {
-                json!({"tools":[{"name":"where","description":"Return the working directory","inputSchema":{"type":"object"}}]})
+                if mode == "empty" {
+                    json!({"tools":[]})
+                } else {
+                    json!({"tools":[{"name":"where","description":"Return the working directory","inputSchema":{"type":"object"}}]})
+                }
             }
             "tools/call" => {
                 assert_eq!(env::var("API_KEY")?, "fixture-key");

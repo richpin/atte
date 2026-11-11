@@ -148,6 +148,45 @@ export const ko = {
     languageDescription: "Atte 전체에서 사용할 언어를 선택합니다.",
   },
   mcps: {
+    importTitle: "서버 가져오기",
+    importHelp:
+      "기존 도구의 전역 설정을 검토하고 서버와 대상 범위를 선택하세요. 원본은 보존됩니다. 가져온 서버는 비활성으로 등록되며 환경변수·헤더의 평문값은 OS 자격 증명 저장소로 옮깁니다. OAuth 자격 증명은 가져오지 않습니다.",
+    discover: "전역 설정 탐색",
+    importFormat: "원본 형식",
+    selectFile: "설정 파일 선택",
+    pasteJson: "설정 붙여넣기",
+    review: "검토",
+    importName: "대상 이름 (충돌 시 이름 변경)",
+    overwrite: "같은 이름의 기존 서버를 명시적으로 덮어쓰기",
+    importSelected: "선택한 서버 가져오기",
+    importDone: "비활성 서버로 가져왔습니다. 검토 후 활성화하세요.",
+    reviewFailed:
+      "설정을 검토하지 못했습니다. 원본 형식을 확인하고 다시 시도하세요.",
+    importFailed:
+      "가져오지 못했습니다. 대상과 OS 자격 증명 저장소를 확인하세요.",
+    noDiscovered: "이 원본에 서버가 없습니다.",
+    unsupported: "지원하지 않음",
+    check: "연결 확인",
+    cancelCheck: "확인 취소",
+    checkFailed: "연결을 확인하지 못했습니다. 다시 시도하세요.",
+    conflict: "이미 있는 이름입니다. 이름을 변경하거나 덮어쓰기를 선택하세요.",
+    checkStatus: {
+      connected:
+        "연결되었습니다. 아래 도구를 확인하고 새 대화에서 사용할 때 별도로 활성화하세요.",
+      noTools: "연결되었지만 도구가 없습니다. 서버의 도구 설정을 확인하세요.",
+      authenticationRequired:
+        "인증이 필요합니다. 비밀값 또는 API 키를 설정하세요. OAuth 로그인은 아직 지원하지 않습니다.",
+      networkError: "네트워크 오류입니다. URL·네트워크·서버 상태를 확인하세요.",
+      executionFailed:
+        "서버를 실행하지 못했습니다. 실행 파일·인자·환경변수를 확인하세요.",
+      timeout:
+        "연결 확인 시간이 초과되었습니다. 서버 상태를 확인하고 다시 시도하세요.",
+      cancelled: "연결 확인을 취소했습니다.",
+      invalidConfiguration:
+        "서버 설정·환경변수 참조·자격 증명 저장소를 확인하세요.",
+      protocolError:
+        "MCP 초기화 또는 도구 조회에 실패했습니다. MCP 엔드포인트인지 확인하세요.",
+    },
     description: "에이전트 대화에서 사용할 로컬·원격 MCP 서버를 등록합니다.",
     add: "서버 추가",
     edit: "서버 편집",

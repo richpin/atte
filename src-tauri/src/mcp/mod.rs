@@ -1,5 +1,7 @@
 //! Scoped MCP configuration, credentials, and ACP forwarding.
+pub(crate) mod check;
 mod credentials;
+pub(crate) mod import;
 mod model;
 use agent_client_protocol::schema::v1::{
     EnvVariable, HttpHeader, McpServer, McpServerHttp, McpServerStdio,
@@ -46,6 +48,8 @@ pub struct Snapshot {
 }
 
 pub struct Mcp {
+    imports: import::Imports,
+    checks: check::Checks,
     global: Arc<Mutex<crate::settings::store::Store>>,
     global_path: PathBuf,
     credentials: Arc<dyn Credentials>,
@@ -59,6 +63,8 @@ impl Mcp {
         credentials: Arc<dyn Credentials>,
     ) -> Self {
         Self {
+            imports: Default::default(),
+            checks: Default::default(),
             global,
             global_path,
             credentials,

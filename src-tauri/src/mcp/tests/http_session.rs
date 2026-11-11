@@ -7,14 +7,18 @@ use std::{
     time::Duration,
 };
 
-struct HttpFixture {
-    url: String,
+pub(super) struct HttpFixture {
+    pub(super) url: String,
     calls: Arc<AtomicUsize>,
     stop: Arc<AtomicBool>,
     task: Option<JoinHandle<()>>,
+    pub(super) deletions: Arc<AtomicUsize>,
 }
 impl HttpFixture {
-    fn start() -> Self {
+    pub(super) fn start() -> Self {
+        Self::with_session(false)
+    }
+    pub(super) fn with_session(stateful: bool) -> Self {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         listener.set_nonblocking(true).unwrap();
         let url = format!("http://{}/mcp", listener.local_addr().unwrap());
@@ -22,10 +26,12 @@ impl HttpFixture {
         let stop = Arc::new(AtomicBool::new(false));
         let count = calls.clone();
         let stopping = stop.clone();
+        let deletions = Arc::new(AtomicUsize::new(0));
+        let deleted = deletions.clone();
         let task = thread::spawn(move || {
             while !stopping.load(Ordering::Acquire) {
                 match listener.accept() {
-                    Ok((stream, _)) => handle(stream, &count).unwrap(),
+                    Ok((stream, _)) => handle(stream, &count, stateful, &deleted).unwrap(),
                     Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
                         thread::sleep(Duration::from_millis(2))
                     }
@@ -38,6 +44,7 @@ impl HttpFixture {
             calls,
             stop,
             task: Some(task),
+            deletions,
         }
     }
 }
@@ -49,12 +56,22 @@ impl Drop for HttpFixture {
         }
     }
 }
-fn handle(mut stream: TcpStream, calls: &AtomicUsize) -> Result<(), Box<dyn std::error::Error>> {
+fn handle(
+    mut stream: TcpStream,
+    calls: &AtomicUsize,
+    stateful: bool,
+    deletions: &AtomicUsize,
+) -> Result<(), Box<dyn std::error::Error>> {
     stream.set_read_timeout(Some(Duration::from_secs(5)))?;
     let mut reader = std::io::BufReader::new(stream.try_clone()?);
     let mut headers = BTreeMap::new();
     let mut line = String::new();
     reader.read_line(&mut line)?;
+    let method = line
+        .split_whitespace()
+        .next()
+        .unwrap_or_default()
+        .to_string();
     loop {
         line.clear();
         reader.read_line(&mut line)?;
@@ -64,6 +81,22 @@ fn handle(mut stream: TcpStream, calls: &AtomicUsize) -> Result<(), Box<dyn std:
         if let Some((key, value)) = line.trim().split_once(':') {
             headers.insert(key.to_ascii_lowercase(), value.trim().to_string());
         }
+    }
+    if method == "GET" || method == "DELETE" {
+        if method == "DELETE" {
+            deletions.fetch_add(1, Ordering::AcqRel);
+        }
+        let status = if method == "DELETE" {
+            "204 No Content"
+        } else {
+            "405 Method Not Allowed"
+        };
+        write!(
+            stream,
+            "HTTP/1.1 {status}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+        )?;
+        stream.flush()?;
+        return Ok(());
     }
     let length = headers
         .get("content-length")
@@ -110,7 +143,12 @@ fn handle(mut stream: TcpStream, calls: &AtomicUsize) -> Result<(), Box<dyn std:
         )
     };
     let body = result.to_string();
-    write!(stream, "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len())?;
+    let session = if stateful && authorized && request["method"] == "initialize" {
+        "Mcp-Session-Id: fixture-session\r\n"
+    } else {
+        ""
+    };
+    write!(stream, "HTTP/1.1 {status}\r\n{session}Content-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len())?;
     stream.flush()?;
     Ok(())
 }

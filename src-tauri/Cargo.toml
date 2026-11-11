@@ -47,6 +47,9 @@ trash = "5.2"
 ignore = "0.4.34"
 tauri-plugin-updater = "2.14.1"
 keyring = { version = "3.6.3", features = ["apple-native", "windows-native"] }
+jsonc-parser = { version = "0.34.0", features = ["serde"] }
+toml = "1.2.1"
+rmcp = { version = "3.9.0", default-features = false, features = ["client", "transport-async-rw", "transport-streamable-http-client-reqwest"] }
 
 [target.'cfg(unix)'.dependencies]
 nix = { version = "0.28.0", features = ["signal", "process"] }

@@ -15,6 +15,8 @@ import {
 import { createEffect, createSignal, For, onCleanup, Show } from "solid-js";
 import { removeMcp, saveMcp, subscribeMcp, toggleMcp } from "../api/mcps";
 import type { Server, Snapshot, Target } from "../model/types";
+import { ConnectionCheck } from "./ConnectionCheck";
+import { ImportDialog } from "./ImportDialog";
 import { ServerDialog } from "./ServerDialog";
 
 export function McpsPage(props: {
@@ -34,6 +36,7 @@ export function McpsPage(props: {
   }>();
   const [removing, setRemoving] = createSignal<string>();
   const [busy, setBusy] = createSignal(false);
+  const [importing, setImporting] = createSignal(false);
   const target = (): Target =>
     folder() ? { scope: "project", folder: folder() } : { scope: "global" };
   createEffect(() => {
@@ -101,6 +104,9 @@ export function McpsPage(props: {
       <div class="@container mx-auto max-w-4xl space-y-6 pt-6">
         <div class="flex items-start justify-between gap-4">
           <p class="text-sm text-muted-foreground">{t("mcps.description")}</p>
+          <Button variant="outline" onClick={() => setImporting(true)}>
+            {t("mcps.importTitle")}
+          </Button>
           <Button
             disabled={!snapshot() || Boolean(snapshot()?.error) || busy()}
             onClick={() => setEditor({ target: target() })}
@@ -213,11 +219,25 @@ export function McpsPage(props: {
                     {t("common.delete")}
                   </Button>
                 </div>
+                <ConnectionCheck
+                  target={target()}
+                  name={name}
+                  server={server}
+                  active={props.active}
+                  disabled={busy() || Boolean(snapshot()?.error)}
+                />
               </li>
             )}
           </For>
         </ul>
         <p class="text-sm text-muted-foreground">{t("mcps.forwardingHelp")}</p>
+        <Show when={props.active && importing()}>
+          <ImportDialog
+            target={target()}
+            projects={props.projects}
+            onClose={() => setImporting(false)}
+          />
+        </Show>
         <Show when={props.active ? editor() : undefined} keyed>
           {(selected) => (
             <ServerDialog

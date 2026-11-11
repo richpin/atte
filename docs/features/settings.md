@@ -76,8 +76,22 @@ Tauri가 없는 브라우저 개발은 메모리 설정을 사용한다. 테스�
 
 ACP `session/new`, `session/load`, `session/resume`에 활성 서버를 전달한다. MCP를 전달한 세션 설정의 실패는 에이전트가 자격 증명을 오류에 되돌려 보낼 수 있으므로 코드와 안전한 일반 안내만 표시하고 원본 메시지·data는 공개하지 않는다. 누락되거나 빈 자격 증명·환경변수, 실행할 수 없는 명령어, HTTP 미지원, 지원하지 않는 서버 설정은 서버별 이유와 함께 제외하고 나머지를 계속 전달한다. 이유는 스레드 화면에 표시한다. 파일을 읽거나 JSON을 해석할 수 없으면 마지막 정상 등록 목록과 오류를 유지하고 해당 파일의 저장·영향받는 새 MCP 세션 설정을 막는다. 표시된 파일을 수정하면 구독과 감지 주기에 따라 복구한다.
 
-자동 가져오기·카탈로그·독립 연결 확인·OAuth 인증과 중계는 제공하지 않는다.
+카탈로그·OAuth 인증과 중계는 제공하지 않는다. 가져오기와 독립 연결 확인은 아래 절차를 따른다.
 
 참고: [Zed의 로컬·원격 MCP 관리와 외부 에이전트 구분](https://zed.dev/docs/ai/mcp), [ACP v1 세션 설정](https://agentclientprotocol.com/protocol/v1/session-setup), [keyring 네이티브 자격 증명 저장소](https://docs.rs/keyring/3.6.3/keyring/).
 
 검증 절차와 네이티브 확인 범위는 [MCP 설정 검증](../testing/mcp-settings.md)을 따른다.
+
+## 기존 MCP 가져오기와 연결 확인
+
+MCPs의 **서버 가져오기**에서 **전역 설정 탐색**을 실행하면 Claude Code (`~/.claude.json`), Claude Desktop (macOS의 `~/Library/Application Support/Claude/claude_desktop_config.json`, Windows의 앱 설정 디렉터리 `Claude/claude_desktop_config.json`), Cursor (`~/.cursor/mcp.json`), Codex (`$CODEX_HOME/config.toml`, 기본 `~/.codex/config.toml`), Zed (macOS의 `~/.config/zed/settings.json`, 다른 OS의 설정 디렉터리 `zed/settings.json`)를 읽는다. 프로젝트 설정이나 OAuth 자격 증명 파일은 탐색하지 않는다. 원본 도구·경로·읽기 오류와 서버별 지원 여부를 표시하며, 한 원본의 오류가 다른 원본을 막지 않는다. 탐색은 등록이나 실행을 수행하지 않는다.
+
+일반 `mcpServers` JSON/JSONC 붙여넣기, 네이티브 파일 선택, Codex TOML 및 Zed `context_servers` JSONC를 지원한다. JSONC는 주석과 마지막 쉼표를 허용하는 검증된 파서로 해석한다. 파일은 UTF-8, 최대 1 MiB다. 검토 응답은 서버 이름·전송 방식·불투명 선택 ID만 포함하고 실제 설정과 비밀값은 Rust 메모리에 유지한다. 검토를 닫으면 이를 폐기하고 15분이 지난 선택은 거절한다.
+
+대상 전역·프로젝트와 가져올 서버를 고른다. 충돌은 대상 이름을 바꾸거나 **명시적으로 덮어쓰기**를 선택해야 한다. 저장 시에도 충돌을 검사한다. 서버마다 성공·실패를 처리하여 일부 오류로 성공한 항목을 되돌리지 않는다. 가져온 서버는 항상 비활성이다. 환경변수·헤더의 평문값은 일반값인지 비밀값인지 추측하지 않고 모두 OS 자격 증명 저장소에 보관한다. 원본 파일은 변경하지 않으며 원본과 대상이 같은 파일이면 거절한다.
+
+stdio의 `command`, 문자열 배열 `args`, `env`, HTTP의 `url`, `headers` (Codex는 `http_headers`)를 변환한다. 값 전체가 `${NAME}` 또는 `${env:NAME}`이면 환경변수 참조로 보존한다. Codex의 `env_vars`와 `env_http_headers`도 참조로 변환한다. 인자의 자격 증명·인증 헤더 옵션, 환경변수 대입, 인증·query가 포함된 URL은 보수적으로 거절하고 비밀 환경변수·헤더를 사용한 수동 설정을 안내한다. 지원하지 않는 전송, 명령어·인자·URL의 변수 확장, 복합 변수식·기본값, URL query, 별도 작업 위치, OAuth 설정, 동적 헤더 helper, 도구 허용 정책 등 알 수 없는 서버 옵션이 있으면 해당 항목 전체를 거절하고 수동 등록을 안내한다. 예를 들어 `bearer_token_env_var`는 접두사가 필요한 참조이므로 현재 자동 변환하지 않는다. 호환되지 않는 옵션을 누락한 채 가져오지 않는다.
+
+등록 서버의 **연결 확인**은 활성 여부와 무관하게 별도의 stdio 프로세스 또는 Streamable HTTP 세션으로 MCP initialize와 도구 목록 조회를 수행한다. 전역 서버는 홈 폴더, 프로젝트 서버는 선택한 폴더를 작업 위치로 사용하고 앱 프로세스의 환경변수를 해석한다. 도구를 호출하지 않는다. 결과는 연결됨·도구 없음·인증 필요·네트워크 오류·실행 실패·시간 초과·취소·설정 오류·프로토콜 오류를 구분하고 다음 행동을 안내한다. 통신 확인 제한은 20초이고 종료 정리는 별도의 제한 시간 안에서 기다리며 화면을 떠나거나 취소하면 확인 연결을 정리한다. stdio 자식과 프로세스 그룹은 종료·회수하고, HTTP 세션은 SDK의 종료 경로로 정리한다. HTTP는 리디렉션을 따라 인증 헤더를 다른 대상으로 보내지 않는다. 응답 본문·프로세스 stderr·원본 오류는 공개하지 않는다. 기존 대화 연결을 사용하거나 종료하지 않으며 서버 활성화와 대화 재연결은 별도 동작이다.
+
+형식 근거: [Claude Code MCP](https://code.claude.com/docs/en/mcp), [Claude Desktop 설정](https://modelcontextprotocol.io/docs/develop/connect-local-servers), [Cursor MCP](https://cursor.com/docs/context/mcp), [Codex MCP](https://learn.chatgpt.com/docs/extend/mcp?surface=cli), [Zed MCP](https://zed.dev/docs/ai/mcp). 연결과 세션 종료는 [공식 Rust MCP SDK](https://docs.rs/rmcp/3.9.0/rmcp/)를 사용한다.

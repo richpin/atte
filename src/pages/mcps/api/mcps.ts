@@ -1,5 +1,13 @@
 import { Channel, invoke } from "@tauri-apps/api/core";
-import type { Server, Snapshot, Target } from "../model/types";
+import type {
+  CheckResult,
+  ImportFormat,
+  ImportSelection,
+  ImportSource,
+  Server,
+  Snapshot,
+  Target,
+} from "../model/types";
 
 export async function subscribeMcp(
   target: Target,
@@ -30,4 +38,39 @@ export function removeMcp(target: Target, name: string) {
 
 export function toggleMcp(target: Target, name: string, enabled: boolean) {
   return invoke<void>("toggle_mcp", { target, name, enabled });
+}
+
+export function discoverMcps() {
+  return invoke<ImportSource[]>("discover_mcps");
+}
+export function previewMcpImport(text: string, format: ImportFormat) {
+  return invoke<ImportSource>("preview_mcp_import", {
+    text,
+    format,
+  });
+}
+export function selectMcpImport(format: ImportFormat) {
+  return invoke<ImportSource | null>("select_mcp_import", { format });
+}
+export function importMcps(target: Target, selections: ImportSelection[]) {
+  return invoke<{ id: string; name: string; error: string | null }[]>(
+    "import_mcps",
+    {
+      target,
+      selections,
+    },
+  );
+}
+export function clearMcpImports() {
+  return invoke<void>("clear_mcp_imports");
+}
+export function checkMcp(target: Target, name: string, id: string) {
+  return invoke<CheckResult>("check_mcp", {
+    target,
+    name,
+    id,
+  });
+}
+export function cancelMcpCheck(id: string) {
+  return invoke<void>("cancel_mcp_check", { id });
 }

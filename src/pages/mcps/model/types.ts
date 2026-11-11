@@ -23,3 +23,29 @@ export type ValueRow = {
   source: ValueSource;
   replacement?: string;
 };
+
+export type ImportFormat = "json" | "jsonc" | "codex" | "zed";
+export type ImportSource = {
+  tool: string;
+  path: string;
+  status: "ready" | "missing" | "error";
+  error: string | null;
+  candidates: {
+    id: string | null;
+    name: string;
+    transport: string | null;
+    reason: string | null;
+  }[];
+};
+export type ImportSelection = { id: string; name: string; overwrite: boolean };
+export type CheckStatus =
+  | "connected"
+  | "noTools"
+  | "authenticationRequired"
+  | "networkError"
+  | "executionFailed"
+  | "timeout"
+  | "cancelled"
+  | "invalidConfiguration"
+  | "protocolError";
+export type CheckResult = { status: CheckStatus; tools: string[] };

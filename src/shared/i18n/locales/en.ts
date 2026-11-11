@@ -142,6 +142,48 @@ export const en = {
     languageDescription: "Choose the language used throughout Atte.",
   },
   mcps: {
+    importTitle: "Import servers",
+    importHelp:
+      "Review global settings from other tools, select servers and a destination. Sources stay unchanged. Imported servers start disabled; plain environment and header values go to the OS credential store. OAuth credentials are not imported.",
+    discover: "Discover global settings",
+    importFormat: "Source format",
+    selectFile: "Choose configuration file",
+    pasteJson: "Paste configuration",
+    review: "Review",
+    importName: "Destination name (rename to avoid a conflict)",
+    overwrite: "Explicitly replace the existing server with this name",
+    importSelected: "Import selected",
+    importDone: "Servers imported disabled. Review them before enabling.",
+    reviewFailed:
+      "Could not review configuration. Check the selected format and try again.",
+    importFailed:
+      "Import failed. Review the destination and unlock the OS credential store.",
+    noDiscovered: "No servers found in this source.",
+    unsupported: "Unsupported",
+    check: "Check connection",
+    cancelCheck: "Cancel check",
+    checkFailed: "Connection check failed. Try again.",
+    conflict:
+      "This name already exists. Rename it or explicitly choose replacement.",
+    checkStatus: {
+      connected:
+        "Connected. Tools listed below. Enable separately to use in new conversations.",
+      noTools:
+        "Connected, but no tools are available. Check the server’s tool configuration.",
+      authenticationRequired:
+        "Authentication required. Replace the secret or configure an API key; OAuth sign-in is not available yet.",
+      networkError:
+        "Network error. Check the URL, network and server availability.",
+      executionFailed:
+        "Server could not run. Check the executable, arguments and environment.",
+      timeout:
+        "Connection check timed out. Check server availability and try again.",
+      cancelled: "Connection check cancelled.",
+      invalidConfiguration:
+        "Check the server settings, environment references and credential store.",
+      protocolError:
+        "MCP initialization or tool discovery failed. Check that the endpoint supports MCP.",
+    },
     description:
       "Register local and remote MCP servers for agent conversations.",
     add: "Add server",
