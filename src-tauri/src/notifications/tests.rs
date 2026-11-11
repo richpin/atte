@@ -1,4 +1,4 @@
-use super::{save_preferences, state::*};
+use super::state::*;
 use crate::thread::{ThreadMetadata, ThreadStatus};
 use std::path::PathBuf;
 use uuid::Uuid;
@@ -301,23 +301,4 @@ fn unsupported_platforms_keep_completion_confirmation_without_system_notificatio
         Some(&Uuid::from_u128(10))
     );
     assert_eq!(policy.badge_count(), 0);
-}
-
-#[test]
-fn preference_file_roundtrips_and_failed_writes_preserve_existing_file() {
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("preferences.json");
-    let preferences = Preferences {
-        completion: false,
-        permission: true,
-    };
-    save_preferences(&path, preferences).unwrap();
-    let restored: Preferences = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
-    assert_eq!(restored, preferences);
-    let invalid = path.join("preferences.json");
-    assert!(save_preferences(&invalid, Preferences::default()).is_err());
-    assert_eq!(
-        serde_json::from_slice::<Preferences>(&std::fs::read(path).unwrap()).unwrap(),
-        preferences
-    );
 }

@@ -7,8 +7,15 @@ import {
 } from "@solidjs/testing-library";
 import { invoke } from "@tauri-apps/api/core";
 import userEvent from "@testing-library/user-event";
+import { createMemorySettings } from "shared/settings";
+import { createSignal } from "solid-js";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import App from "./App";
+
+let settingsModel = createMemorySettings();
+beforeEach(() => {
+  settingsModel = createMemorySettings();
+});
 
 const openUrl = vi.hoisted(() => vi.fn(() => Promise.resolve()));
 
@@ -122,7 +129,7 @@ it("answers a form in its thread while the connection has no ACP session", async
     if (command === "subscribe_thread") return subscribeWith(args, waiting);
     return "subscription";
   });
-  render(() => <App />);
+  render(() => <App settings={settingsModel} />);
   await userEvent.click(
     await waitFor(() => getSidebarThreadButton(/Connecting thread/)),
   );
@@ -204,7 +211,7 @@ it("keeps project tabs independent per thread, folds without clearing and resets
       );
     return original?.(command, args) ?? Promise.resolve();
   });
-  render(() => <App />);
+  render(() => <App settings={settingsModel} />);
   expect(
     screen.queryByRole("button", { name: "프로젝트 패널 열기" }),
   ).toBeNull();
@@ -236,7 +243,7 @@ it("keeps project tabs independent per thread, folds without clearing and resets
   await userEvent.click(await waitFor(() => getSidebarThreadButton(one.title)));
   expect(screen.getAllByRole("tab")).toHaveLength(2);
   cleanup();
-  render(() => <App />);
+  render(() => <App settings={settingsModel} />);
   await userEvent.click(await screen.findByRole("button", { name: one.title }));
   expect(
     screen
@@ -285,7 +292,7 @@ it("shows registry icons and falls back for missing or failed images", async () 
       ].map((agent) => ({ ...agent, authentication: { methods: [] } }));
   });
   try {
-    render(() => <App />);
+    render(() => <App settings={settingsModel} />);
     await openAgentManagement();
     await screen.findByRole("heading", { name: "Available" });
     const website = screen.getByRole("link", {
@@ -362,7 +369,7 @@ beforeEach(() => {
       [
         "set_notification_context",
         "acknowledge_notification_navigation",
-        "set_notification_preferences",
+        "update_settings",
         "request_notification_permission",
         "open_notification_settings",
       ].includes(command)
@@ -451,7 +458,7 @@ it("opens conversation find from the thread menu and restores the menu trigger f
     if (command === "subscribe_thread") return subscribeWith(args, saved);
     return original?.(command, args) ?? Promise.resolve();
   });
-  render(() => <App />);
+  render(() => <App settings={settingsModel} />);
   await userEvent.click(
     await screen.findByRole("button", { name: saved.title }),
   );
@@ -474,7 +481,7 @@ async function openAgentManagement() {
 }
 
 it("opens settings pages from the sidebar menu and keeps language selection there", async () => {
-  render(() => <App />);
+  render(() => <App settings={settingsModel} />);
 
   const settings = screen.getByRole("button", { name: "Atte 메뉴 열기" });
   settings.focus();
@@ -507,18 +514,18 @@ it("opens settings pages from the sidebar menu and keeps language selection ther
   await userEvent.click(screen.getByRole("radio", { name: "다크" }));
   expect(document.documentElement.dataset.theme).toBe("dark");
   expect(document.documentElement.style.colorScheme).toBe("dark");
-  expect(localStorage.getItem("atte.theme")).toBe("dark");
+  expect(localStorage.getItem("atte.theme")).toBeNull();
 
   await userEvent.click(screen.getByRole("radio", { name: "시스템" }));
   expect(document.documentElement.dataset.theme).toBe("light");
-  expect(localStorage.getItem("atte.theme")).toBe("system");
+  expect(localStorage.getItem("atte.theme")).toBeNull();
 
   await userEvent.click(
     screen.getByRole("button", { name: "언어 시스템 설정" }),
   );
   await userEvent.click(screen.getByRole("option", { name: "English" }));
   expect(await screen.findByRole("heading", { name: "General" })).toBeTruthy();
-  expect(localStorage.getItem("atte.locale")).toBe("en");
+  expect(localStorage.getItem("atte.locale")).toBeNull();
 
   await userEvent.click(screen.getByRole("button", { name: "Open Atte menu" }));
   expect(
@@ -551,7 +558,7 @@ it("starts on new thread and preserves a thread draft across that navigation", a
     return original?.(command, args) ?? Promise.resolve();
   });
 
-  render(() => <App />);
+  render(() => <App settings={settingsModel} />);
 
   expect(
     await screen.findByRole("heading", { name: "무엇을 만들고 싶으세요?" }),
@@ -592,7 +599,7 @@ it("toggles thread information with pointer and keyboard and reveals the latest 
     return original?.(command, args) ?? Promise.resolve();
   });
 
-  render(() => <App />);
+  render(() => <App settings={settingsModel} />);
   expect(screen.queryByRole("button", { name: "스레드 정보" })).toBeNull();
   await userEvent.click(
     await screen.findByRole("button", { name: saved.title }),
@@ -662,7 +669,7 @@ it("shares thread information visibility across navigation and resets for each a
     return original?.(command, args) ?? Promise.resolve();
   });
 
-  const application = render(() => <App />);
+  const application = render(() => <App settings={settingsModel} />);
   await userEvent.click(
     await screen.findByRole("button", { name: first.title }),
   );
@@ -699,8 +706,7 @@ it("shares thread information visibility across navigation and resets for each a
   ).toBe("false");
 
   application.unmount();
-  localStorage.setItem("atte.locale", "en");
-  render(() => <App />);
+  render(() => <App settings={createMemorySettings({ locale: "en" })} />);
   await userEvent.click(
     await screen.findByRole("button", { name: second.title }),
   );
@@ -740,7 +746,7 @@ it("shows the thread agent icon beside both titles and keeps the composer free o
     return original?.(command, args) ?? Promise.resolve();
   });
 
-  render(() => <App />);
+  render(() => <App settings={settingsModel} />);
   const sidebarTitle = await screen.findByRole("button", {
     name: saved.title,
   });
@@ -794,7 +800,7 @@ it("updates sidebar and header titles through subscriptions and shows the defaul
       );
     return original?.(command, args) ?? Promise.resolve();
   });
-  render(() => <App />);
+  render(() => <App settings={settingsModel} />);
   await userEvent.click(
     await screen.findByRole("button", { name: saved.title }),
   );
@@ -878,7 +884,7 @@ it("groups threads by folder, collapses projects and creates within the selected
     if (command === "connect_thread") return;
     return original?.(command, args);
   });
-  render(() => <App />);
+  render(() => <App settings={settingsModel} />);
   const project = await screen.findByRole("button", {
     name: "프로젝트 project",
   });
@@ -971,7 +977,10 @@ it("groups threads by folder, collapses projects and creates within the selected
 it.each(["light", "dark"])(
   "remembers new thread selections until app remount in %s theme",
   async (theme) => {
-    localStorage.setItem("atte.theme", theme);
+    settingsModel = createMemorySettings({
+      ...settingsModel.values(),
+      theme: theme === "dark" ? "dark" : "light",
+    });
     const saved = {
       id: "saved",
       title: "Saved task",
@@ -991,7 +1000,7 @@ it.each(["light", "dark"])(
       return original?.(command, args) ?? Promise.resolve();
     });
     requests.mockResolvedValue({ ...saved, id: "created", agentId: "fixture" });
-    render(() => <App />);
+    render(() => <App settings={settingsModel} />);
     expect(document.documentElement.dataset.theme).toBe(theme);
     await selectNewThreadAgent("Codex");
     await userEvent.click(
@@ -1039,7 +1048,7 @@ it.each(["light", "dark"])(
     expect(screen.getByRole("button", { name: "original" })).toBeTruthy();
 
     cleanup();
-    render(() => <App />);
+    render(() => <App settings={settingsModel} />);
     expect(screen.getByRole("button", { name: "폴더 선택" })).toBeTruthy();
     expect(
       screen.getByRole("button", { name: /^새 스레드 에이전트/ }).textContent,
@@ -1191,7 +1200,7 @@ it("presents agent configuration and reconciles it from the thread subscription"
     if (command === "list_threads") return [saved];
     return original?.(command, args);
   });
-  render(() => <App />);
+  render(() => <App settings={settingsModel} />);
   await userEvent.click(
     await screen.findByRole("button", { name: "Configured thread" }),
   );
@@ -1346,7 +1355,7 @@ it("keeps cancellation and permission responses usable during configuration reco
     if (command === "list_threads") return [saved];
     return original?.(command, args);
   });
-  render(() => <App />);
+  render(() => <App settings={settingsModel} />);
   await userEvent.click(
     await screen.findByRole("button", {
       name: /^Active configured thread(?! 메뉴)/,
@@ -1435,7 +1444,7 @@ it("renames through subscriptions, supports cancel and leaves later agent title 
     if (command === "rename_thread") return request.promise;
     return original?.(command, args) ?? Promise.resolve();
   });
-  render(() => <App />);
+  render(() => <App settings={settingsModel} />);
   await userEvent.click(
     await screen.findByRole("button", { name: "기존 제목" }),
   );
@@ -1506,7 +1515,7 @@ it("opens rename from right click and retains the input after a failed save for 
     if (command === "rename_thread") return rename(args);
     return original?.(command, args) ?? Promise.resolve();
   });
-  render(() => <App />);
+  render(() => <App settings={settingsModel} />);
   const menu = await screen.findByRole("button", { name: "변경 전 메뉴" });
   fireEvent.contextMenu(menu.parentElement as HTMLElement);
   await userEvent.click(
@@ -1543,7 +1552,7 @@ it("opens the same delete action from the row menu and right click, then cancels
     if (command === "subscribe_thread_list") return "list";
     if (command === "prepared_agents") return [{ id: "codex", name: "Codex" }];
   });
-  render(() => <App />);
+  render(() => <App settings={settingsModel} />);
 
   await userEvent.click(
     await screen.findByRole("button", { name: "삭제할 초안 메뉴" }),
@@ -1606,7 +1615,7 @@ it("keeps confirmation open while deleting the selected thread and ignores late 
       });
     return original?.(command, args) ?? Promise.resolve();
   });
-  render(() => <App />);
+  render(() => <App settings={settingsModel} />);
   await userEvent.click(
     await screen.findByRole("button", { name: "현재 스레드" }),
   );
@@ -1669,7 +1678,7 @@ it("does not reopen a deleted thread when an overlapping open finishes late", as
     if (command === "delete_thread") return Promise.resolve();
     return original?.(command, args) ?? Promise.resolve();
   });
-  render(() => <App />);
+  render(() => <App settings={settingsModel} />);
   await userEvent.click(
     await screen.findByRole("button", { name: "느린 스레드" }),
   );
@@ -1708,7 +1717,7 @@ it("preserves the selected thread and draft when deleting another thread", async
     if (command === "delete_thread") return Promise.resolve();
     return original?.(command, args) ?? Promise.resolve();
   });
-  render(() => <App />);
+  render(() => <App settings={settingsModel} />);
   await userEvent.click(
     await screen.findByRole("button", { name: "계속 작업" }),
   );
@@ -1749,7 +1758,7 @@ it("keeps the thread and allows retry after local deletion fails", async () => {
         throw { code: "unavailable", message: "로컬 저장소 오류" };
     }
   });
-  render(() => <App />);
+  render(() => <App settings={settingsModel} />);
   await screen.findByRole("button", { name: "실패할 삭제" });
   await userEvent.click(threadMenu("실패할 삭제"));
   await userEvent.click(screen.getByRole("menuitem", { name: "삭제" }));
@@ -1796,7 +1805,7 @@ it("keeps the saved list accessible without agents and restores on selection onl
       return "subscription";
     }
   });
-  render(() => <App />);
+  render(() => <App settings={settingsModel} />);
   await screen.findByRole("button", { name: "지난 작업" });
   expect(screen.getByRole("button", { name: "지난 작업 메뉴" })).toBeTruthy();
   expect(screen.queryByRole("heading", { name: "에이전트" })).toBeNull();
@@ -1840,7 +1849,7 @@ it("loads selected history once and keeps newer list metadata when an older thre
     }
     return original?.(command, args) ?? Promise.resolve();
   });
-  render(() => <App />);
+  render(() => <App settings={settingsModel} />);
   await userEvent.click(
     await screen.findByRole("button", { name: "저장된 제목" }),
   );
@@ -1940,7 +1949,7 @@ it("keeps authentication discovery failures inline and retries on request", asyn
     }
     return original?.(command, args) ?? Promise.resolve();
   });
-  render(() => <App />);
+  render(() => <App settings={settingsModel} />);
   await userEvent.click(
     await screen.findByRole("button", { name: "인증이 필요한 작업" }),
   );
@@ -1982,7 +1991,7 @@ it("automatically connects a new thread and disables sending while connecting", 
   requests
     .mockResolvedValueOnce(draft)
     .mockResolvedValueOnce({ ...draft, status: "connecting" });
-  render(() => <App />);
+  render(() => <App settings={settingsModel} />);
   await userEvent.click(screen.getByRole("button", { name: "폴더 선택" }));
   await startNewThreadWithAgent();
   await waitFor(() => {
@@ -2007,7 +2016,7 @@ it("automatically connects a new thread and disables sending while connecting", 
 
 it("keeps the initial screen when folder selection is cancelled", async () => {
   folderSelection.mockResolvedValueOnce(null);
-  render(() => <App />);
+  render(() => <App settings={settingsModel} />);
   await userEvent.click(screen.getByRole("button", { name: "폴더 선택" }));
   expect(
     screen.getByRole("heading", { name: "무엇을 만들고 싶으세요?" }),
@@ -2021,7 +2030,7 @@ it("shows folder errors and lets the user retry", async () => {
     code: "invalidWorkingFolder",
     message: "존재하는 작업 폴더를 선택해주세요.",
   });
-  render(() => <App />);
+  render(() => <App settings={settingsModel} />);
   await userEvent.click(screen.getByRole("button", { name: "폴더 선택" }));
   expect((await screen.findByRole("alert")).textContent).toContain(
     "존재하는 작업 폴더를 선택해주세요.",
@@ -2049,7 +2058,7 @@ it("keeps the new thread page when another folder selection is cancelled", async
   folderSelection
     .mockResolvedValueOnce("/Users/test/project")
     .mockResolvedValueOnce(null);
-  render(() => <App />);
+  render(() => <App settings={settingsModel} />);
   await userEvent.click(screen.getByRole("button", { name: "폴더 선택" }));
   await startNewThreadWithAgent();
   await screen.findByRole("textbox");
@@ -2068,7 +2077,7 @@ it("disables folder selection until the native dialog completes", async () => {
       finish = resolve;
     }),
   );
-  render(() => <App />);
+  render(() => <App settings={settingsModel} />);
   await userEvent.click(screen.getByRole("button", { name: "폴더 선택" }));
   expect(
     (screen.getByRole("button", { name: "선택 중…" }) as HTMLButtonElement)
@@ -2113,7 +2122,7 @@ it("connects the fixed agent and waits for the first message without an authenti
       sessionId: "remote-1",
     };
   });
-  render(() => <App />);
+  render(() => <App settings={settingsModel} />);
   await userEvent.click(screen.getByRole("button", { name: "폴더 선택" }));
   await startNewThreadWithAgent();
   expect(await screen.findByText("불러오는 중")).toBeTruthy();
@@ -2180,7 +2189,7 @@ it("keeps the authentication explanation without duplicate timeline actions", as
       failure: "authenticationRequired",
     };
   });
-  render(() => <App />);
+  render(() => <App settings={settingsModel} />);
   await userEvent.click(screen.getByRole("button", { name: "폴더 선택" }));
   await startNewThreadWithAgent();
   expect(await screen.findByRole("dialog")).toBeTruthy();
@@ -2232,7 +2241,7 @@ it("automatically blocks the thread with sign-in while preserving the composer",
     if (command === "authenticate_agent") return authentication.promise;
     return original?.(command, args) ?? Promise.resolve();
   });
-  render(() => <App />);
+  render(() => <App settings={settingsModel} />);
 
   const title = await screen.findByText("Private work");
   const threadButton = title.closest("button");
@@ -2361,7 +2370,7 @@ it.each(["escape", "close", "outside"] as const)(
   "blocks %s dismissal while retaining sign-in progress and the draft",
   async (dismissal) => {
     const { login, cancellation, requireSignIn } = mockSignInThread();
-    render(() => <App />);
+    render(() => <App settings={settingsModel} />);
     await userEvent.click(
       await screen.findByRole("button", { name: "Dialog work" }),
     );
@@ -2426,7 +2435,7 @@ it.each(["escape", "close", "outside"] as const)(
 
 it("shows login failure once in the dialog and retries discovery into an empty supported list", async () => {
   const { login, emptyMethods, requireSignIn } = mockSignInThread();
-  render(() => <App />);
+  render(() => <App settings={settingsModel} />);
   await userEvent.click(
     await screen.findByRole("button", { name: "Dialog work" }),
   );
@@ -2460,7 +2469,7 @@ it("shows login failure once in the dialog and retries discovery into an empty s
 
 it("keeps successful login distinct from reconnect failure and retains recovery and the draft", async () => {
   const { failed, login, requireSignIn } = mockSignInThread();
-  render(() => <App />);
+  render(() => <App settings={settingsModel} />);
   await userEvent.click(
     await screen.findByRole("button", { name: "Dialog work" }),
   );
@@ -2507,7 +2516,7 @@ it("shows reconnect command failure without turning successful sign-in into a lo
       ? Promise.reject("Reconnect command unavailable")
       : (original?.(command, args) ?? Promise.resolve()),
   );
-  render(() => <App />);
+  render(() => <App settings={settingsModel} />);
   await userEvent.click(
     await screen.findByRole("button", { name: "Dialog work" }),
   );
@@ -2600,7 +2609,7 @@ it("shares agent login progress and ignores completion after cancellation", asyn
     if (command === "cancel_agent_authentication") return cancellation.promise;
     return original?.(command, args) ?? Promise.resolve();
   });
-  render(() => <App />);
+  render(() => <App settings={settingsModel} />);
 
   const firstTitle = await screen.findByText("First private thread");
   await userEvent.click(firstTitle.closest("button") as HTMLButtonElement);
@@ -2715,7 +2724,7 @@ it("does not reconnect another same-agent authentication failure when login comp
     if (command === "connect_thread") return Promise.resolve();
     return original?.(command, args) ?? Promise.resolve();
   });
-  render(() => <App />);
+  render(() => <App settings={settingsModel} />);
 
   await screen.findByText("Login origin");
   await userEvent.click(
@@ -2819,7 +2828,7 @@ it("reconnects the still-selected origin once without sending preserved input", 
     if (command === "connect_thread") return Promise.resolve();
     return original?.(command, args) ?? Promise.resolve();
   });
-  render(() => <App />);
+  render(() => <App settings={settingsModel} />);
 
   const title = await screen.findByText("Private work");
   await userEvent.click(title.closest("button") as HTMLButtonElement);
@@ -2926,7 +2935,7 @@ it("defers reconnect after navigation and reconnects once when the failed thread
     if (command === "connect_thread") return Promise.resolve();
     return original?.(command, args) ?? Promise.resolve();
   });
-  render(() => <App />);
+  render(() => <App settings={settingsModel} />);
 
   await screen.findByText("Private work");
   const privateRow = screen.getByText("Private work").closest("button");
@@ -3020,7 +3029,7 @@ it("returns to login methods when the authenticated reconnect still requires aut
     if (command === "connect_thread") return Promise.resolve();
     return original?.(command, args) ?? Promise.resolve();
   });
-  render(() => <App />);
+  render(() => <App settings={settingsModel} />);
 
   const title = await screen.findByText("Private work");
   await userEvent.click(title.closest("button") as HTMLButtonElement);
@@ -3067,7 +3076,7 @@ it("shows process exit after readiness without reconnecting automatically", asyn
       return { ...draft, status: "sessionReady" };
     return { ...draft, status: "failed", failure: "processExited" };
   });
-  render(() => <App />);
+  render(() => <App settings={settingsModel} />);
   await userEvent.click(screen.getByRole("button", { name: "폴더 선택" }));
   await startNewThreadWithAgent();
   expect(
@@ -3112,7 +3121,7 @@ it("keeps the existing thread's agent fixed when selecting a target for the next
     agentId: "fixture",
     status: "disconnected",
   });
-  render(() => <App />);
+  render(() => <App settings={settingsModel} />);
   await waitFor(() =>
     expect(
       screen.getByRole("button", { name: /^새 스레드 에이전트/ }),
@@ -3145,7 +3154,7 @@ it("reports prepared-agent loading failure without crashing the page", async () 
     if (command === "list_threads") return [];
     throw new Error("offline");
   });
-  render(() => <App />);
+  render(() => <App settings={settingsModel} />);
   expect((await screen.findByRole("alert")).textContent).toContain(
     "에이전트를 불러올 수 없습니다",
   );
@@ -3169,7 +3178,7 @@ it("shows a removed working folder error from the connection command", async () 
       status: "disconnected",
     };
   });
-  render(() => <App />);
+  render(() => <App settings={settingsModel} />);
   await userEvent.click(screen.getByRole("button", { name: "폴더 선택" }));
   await startNewThreadWithAgent();
   expect((await screen.findByRole("alert")).textContent).toContain(
@@ -3195,7 +3204,7 @@ it("sends with Enter, inserts a newline with Shift+Enter, and preserves IME comp
     turns: [],
   };
   requests.mockResolvedValue(ready);
-  render(() => <App />);
+  render(() => <App settings={settingsModel} />);
   await userEvent.click(screen.getByRole("button", { name: "폴더 선택" }));
   await startNewThreadWithAgent();
   const input = screen.getByRole("textbox");
@@ -3230,7 +3239,7 @@ it("focuses the message input when the conversation becomes ready", async () => 
     turns: [],
   };
   requests.mockResolvedValue(connecting);
-  render(() => <App />);
+  render(() => <App settings={settingsModel} />);
   await userEvent.click(screen.getByRole("button", { name: "폴더 선택" }));
   await startNewThreadWithAgent();
 
@@ -3272,7 +3281,7 @@ it("lays the composer over the full-height timeline and reserves its measured he
     queuedMessages: [],
   };
   requests.mockResolvedValue(ready);
-  render(() => <App />);
+  render(() => <App settings={settingsModel} />);
   await userEvent.click(screen.getByRole("button", { name: "폴더 선택" }));
   await startNewThreadWithAgent();
 
@@ -3306,7 +3315,7 @@ it("sends once, renders streaming text and completion, and admits the next messa
     turns: [],
   };
   requests.mockResolvedValue(ready);
-  render(() => <App />);
+  render(() => <App settings={settingsModel} />);
   await userEvent.click(screen.getByRole("button", { name: "폴더 선택" }));
   await startNewThreadWithAgent();
   const input = screen.getByRole("textbox");
@@ -3371,7 +3380,7 @@ it("queues input above the composer and preserves it after stopping until delete
     queuedMessages: [],
   };
   requests.mockResolvedValue(active);
-  render(() => <App />);
+  render(() => <App settings={settingsModel} />);
   await userEvent.click(screen.getByRole("button", { name: "폴더 선택" }));
   await startNewThreadWithAgent();
   const queued = {
@@ -3437,7 +3446,7 @@ it("keeps the message on send failure and displays permission cancellation", asy
       throw { message: "응답이 완료된 연결된 스레드에서 전송해주세요." };
     return ready;
   });
-  render(() => <App />);
+  render(() => <App settings={settingsModel} />);
   await userEvent.click(screen.getByRole("button", { name: "폴더 선택" }));
   await startNewThreadWithAgent();
   await userEvent.type(screen.getByRole("textbox"), "keep this");
@@ -3478,7 +3487,7 @@ it("ignores updates after unmount and unsubscribes even when registration finish
     }
     return Promise.resolve(ready);
   });
-  const view = render(() => <App />);
+  const view = render(() => <App settings={settingsModel} />);
   await userEvent.click(screen.getByRole("button", { name: "폴더 선택" }));
   await startNewThreadWithAgent();
   view.unmount();
@@ -3502,7 +3511,7 @@ it("appends ordered text deltas and rejects updates for another thread", async (
     ],
   };
   requests.mockResolvedValue(ready);
-  render(() => <App />);
+  render(() => <App settings={settingsModel} />);
   await userEvent.click(screen.getByRole("button", { name: "폴더 선택" }));
   await startNewThreadWithAgent();
   const delta = {
@@ -3532,7 +3541,7 @@ it("offers manual reconnection only after five automatic retries", async () => {
     turns: [],
   };
   requests.mockResolvedValue(ready);
-  render(() => <App />);
+  render(() => <App settings={settingsModel} />);
   await userEvent.click(screen.getByRole("button", { name: "폴더 선택" }));
   await startNewThreadWithAgent();
   await screen.findByRole("textbox");
@@ -3585,7 +3594,7 @@ it("does not disable the new thread when old subscription cleanup fails", async 
       });
     return original(command, args);
   });
-  render(() => <App />);
+  render(() => <App settings={settingsModel} />);
   await userEvent.click(screen.getByRole("button", { name: "폴더 선택" }));
   await startNewThreadWithAgent();
   await userEvent.click(getNewThreadButton());
@@ -3622,7 +3631,7 @@ it("opens agent management when creating a thread without an installed agent", a
         },
       ];
   });
-  render(() => <App />);
+  render(() => <App settings={settingsModel} />);
   await userEvent.click(
     await screen.findByRole("button", { name: "에이전트 관리" }),
   );
@@ -3691,7 +3700,7 @@ it("keeps project setup after installation until an agent is explicitly selected
     }
     return original?.(command, args);
   });
-  render(() => <App />);
+  render(() => <App settings={settingsModel} />);
   await userEvent.click(
     await screen.findByRole("button", { name: "original에 새 스레드" }),
   );
@@ -3746,7 +3755,7 @@ it("keeps streaming and the fixed thread while management is open", async () => 
     return original?.(command, args) ?? Promise.resolve();
   });
   requests.mockResolvedValue(ready);
-  render(() => <App />);
+  render(() => <App settings={settingsModel} />);
   await userEvent.click(screen.getByRole("button", { name: "폴더 선택" }));
   await startNewThreadWithAgent();
   await openAgentManagement();
@@ -3813,7 +3822,7 @@ it("retries a failed install and offers the installed agent without restarting",
       return null;
     }
   });
-  render(() => <App />);
+  render(() => <App settings={settingsModel} />);
   await openAgentManagement();
   await userEvent.click(
     await screen.findByRole("button", { name: "New Provider 설치" }),
@@ -3883,7 +3892,7 @@ it("shows agent availability reasons while keeping cached installations on autom
     if (command === "refresh_agent_catalog") throw "Registry 갱신 실패";
     if (command === "agent_catalog") return agents;
   });
-  render(() => <App />);
+  render(() => <App settings={settingsModel} />);
   await openAgentManagement();
   expect(
     await screen.findByRole("button", { name: "New Provider 설치" }),
@@ -3994,7 +4003,7 @@ it("shows only confirmed account fields and capability-gated logout actions", as
       return agents;
   });
 
-  render(() => <App />);
+  render(() => <App settings={settingsModel} />);
   await openAgentManagement();
 
   expect(await screen.findByText("complete@example.com")).toBeTruthy();
@@ -4069,7 +4078,7 @@ it("confirms logout, blocks duplicates, preserves failures, and clears only afte
     }
   });
 
-  render(() => <App />);
+  render(() => <App settings={settingsModel} />);
   await openAgentManagement();
   await userEvent.click(
     await screen.findByRole("button", { name: "Codex 로그아웃" }),
@@ -4170,7 +4179,7 @@ it("keeps an existing thread after logout and follows a later authentication-req
     return original?.(command, args);
   });
 
-  render(() => <App />);
+  render(() => <App settings={settingsModel} />);
   await userEvent.click(screen.getByRole("button", { name: "폴더 선택" }));
   await startNewThreadWithAgent();
   expect(await screen.findByText("Preserved response")).toBeTruthy();
@@ -4224,7 +4233,7 @@ it("confirms uninstall, supports cancel and retry, and removes the agent from ne
       return;
     }
   });
-  render(() => <App />);
+  render(() => <App settings={settingsModel} />);
   await openAgentManagement();
   await userEvent.click(
     await screen.findByRole("button", { name: "New Provider 삭제" }),
@@ -4261,7 +4270,7 @@ it("keeps thread content after agent removal and offers setup and explicit retry
   requests
     .mockResolvedValueOnce(draft)
     .mockResolvedValueOnce({ ...draft, status: "connecting" });
-  render(() => <App />);
+  render(() => <App settings={settingsModel} />);
   await userEvent.click(screen.getByRole("button", { name: "폴더 선택" }));
   await startNewThreadWithAgent();
   await screen.findByText("불러오는 중");
@@ -4305,7 +4314,7 @@ it("shows agent choices instead of the composer and restores the draft after one
     pendingInteractions: [],
   };
   requests.mockResolvedValue(ready);
-  render(() => <App />);
+  render(() => <App settings={settingsModel} />);
   await userEvent.click(screen.getByRole("button", { name: "폴더 선택" }));
   await startNewThreadWithAgent();
   await userEvent.type(screen.getByRole("textbox"), "keep this draft");
@@ -4396,7 +4405,7 @@ it.each(["running"])(
           : [],
     };
     requests.mockResolvedValue(waiting);
-    render(() => <App />);
+    render(() => <App settings={settingsModel} />);
     await userEvent.click(screen.getByRole("button", { name: "폴더 선택" }));
     await startNewThreadWithAgent();
     requests.mockResolvedValue({
@@ -4449,7 +4458,7 @@ it("keeps folder selection local until starting with the currently selected agen
     status: "disconnected",
     turns: [],
   });
-  render(() => <App />);
+  render(() => <App settings={settingsModel} />);
   expect(screen.getByRole("button", { name: "스레드 시작" })).toHaveProperty(
     "disabled",
     true,
@@ -4487,7 +4496,7 @@ it("retains the chosen folder after creation fails and allows retry", async () =
       status: "disconnected",
       turns: [],
     });
-  render(() => <App />);
+  render(() => <App settings={settingsModel} />);
   await userEvent.click(screen.getByRole("button", { name: "폴더 선택" }));
   await startNewThreadWithAgent();
   expect(await screen.findByRole("alert")).toBeTruthy();
@@ -4534,7 +4543,7 @@ it("loads centrally during manual reconnection and restores history and the draf
     }
     return original?.(command, args) ?? Promise.resolve();
   });
-  render(() => <App />);
+  render(() => <App settings={settingsModel} />);
   await userEvent.click(
     await screen.findByRole("button", { name: saved.title }),
   );
@@ -4584,7 +4593,7 @@ it("shows first-message waiting after a history-free resumption without its noti
     if (command === "subscribe_thread") return subscribeWith(args, resumed);
     return original?.(command, args) ?? Promise.resolve();
   });
-  render(() => <App />);
+  render(() => <App settings={settingsModel} />);
   await userEvent.click(
     await screen.findByRole("button", { name: resumed.title }),
   );
@@ -4624,7 +4633,7 @@ it("keeps the response indicator through streamed text until protocol completion
     if (command === "subscribe_thread") return subscribeWith(args, ready);
     return "subscription";
   });
-  render(() => <App />);
+  render(() => <App settings={settingsModel} />);
   await userEvent.click(
     await screen.findByRole("button", { name: ready.title }),
   );
@@ -4743,7 +4752,7 @@ it.each([
         );
       return original?.(command, args) ?? Promise.resolve();
     });
-    render(() => <App />);
+    render(() => <App settings={settingsModel} />);
     await userEvent.click(
       await screen.findByRole("button", { name: first.title }),
     );
@@ -4818,7 +4827,7 @@ it("reports request failure with one toast and no banner or sidebar error, witho
       );
     return original?.(command, args) ?? Promise.resolve();
   });
-  render(() => <App />);
+  render(() => <App settings={settingsModel} />);
   await userEvent.click(
     await screen.findByRole("button", { name: failed.title }),
   );
@@ -4908,7 +4917,7 @@ it("uses backend completion confirmations and reports only the visible thread pa
       return [];
     return "subscription";
   });
-  render(() => <App />);
+  render(() => <App settings={settingsModel} />);
   expect(
     await screen.findByRole("status", { name: "미확인 완료" }),
   ).toBeDefined();
@@ -5026,7 +5035,7 @@ it("keeps actual errors after list recovery and prioritizes subscription failure
       return [];
     return "subscription";
   });
-  render(() => <App />);
+  render(() => <App settings={settingsModel} />);
   expect(
     await screen.findByRole("status", {
       name: "스레드 상태를 확인할 수 없습니다",
@@ -5097,7 +5106,7 @@ it("retries the failed list subscription and keeps rows and connection errors du
     }
     return "subscription";
   });
-  render(() => <App />);
+  render(() => <App settings={settingsModel} />);
   expect(
     await screen.findByRole("status", {
       name: "스레드 상태를 확인할 수 없습니다",
@@ -5150,7 +5159,7 @@ it("opens each conversation link in a new web tab and routes user and agent link
       return Promise.resolve([]);
     return original?.(command, args) ?? Promise.resolve();
   });
-  render(() => <App />);
+  render(() => <App settings={settingsModel} />);
   await userEvent.click(
     await screen.findByRole("button", { name: saved.title }),
   );
@@ -5187,7 +5196,7 @@ it("opens a half-width project panel at the default window size and hides it whe
     if (command === "subscribe_thread") return subscribeWith(args, saved);
     return original?.(command, args) ?? Promise.resolve();
   });
-  render(() => <App />);
+  render(() => <App settings={settingsModel} />);
   await userEvent.click(
     await screen.findByRole("button", { name: saved.title }),
   );
@@ -5232,7 +5241,7 @@ it("completes a subscribed slash command and preserves it after a failed send", 
     if (command === "send_message") throw { message: "Send failed" };
     return ready;
   });
-  render(() => <App />);
+  render(() => <App settings={settingsModel} />);
   await userEvent.click(screen.getByRole("button", { name: "폴더 선택" }));
   await startNewThreadWithAgent();
   const input = await screen.findByRole("combobox", { name: "메시지" });
@@ -5255,7 +5264,10 @@ it("completes a subscribed slash command and preserves it after a failed send", 
 it.each(["light", "dark"])(
   "creates a worktree thread once and retains selections after a failed creation in %s theme",
   async (theme) => {
-    localStorage.setItem("atte.theme", theme);
+    settingsModel = createMemorySettings({
+      ...settingsModel.values(),
+      theme: theme === "dark" ? "dark" : "light",
+    });
     folderInspection.mockResolvedValue({
       repositoryRoot: "/project",
       commit: "abc123",
@@ -5268,7 +5280,7 @@ it.each(["light", "dark"])(
           rejectCreation = reject;
         });
     });
-    render(() => <App />);
+    render(() => <App settings={settingsModel} />);
     expect(screen.getByRole("switch", { name: "새 worktree" })).toHaveProperty(
       "checked",
       false,
@@ -5335,7 +5347,7 @@ it("ignores stale folder inspection results", async () => {
       unavailableReason: "notRepository",
     };
   });
-  render(() => <App />);
+  render(() => <App settings={settingsModel} />);
   await userEvent.click(screen.getByRole("button", { name: "폴더 선택" }));
   await waitFor(() =>
     expect(invoke).toHaveBeenCalledWith("inspect_working_folder", {
@@ -5364,7 +5376,10 @@ it("ignores stale folder inspection results", async () => {
 it.each(["light", "dark"])(
   "starts a fresh conversation only from the header worktree menu in %s theme and retries without losing selections",
   async (theme) => {
-    localStorage.setItem("atte.theme", theme);
+    settingsModel = createMemorySettings({
+      ...settingsModel.values(),
+      theme: theme === "dark" ? "dark" : "light",
+    });
     const source = {
       ...responseThread("shared-source"),
       title: "Source worktree thread",
@@ -5402,7 +5417,7 @@ it.each(["light", "dark"])(
         return creation(args);
       return original?.(command, args) ?? Promise.resolve();
     });
-    render(() => <App />);
+    render(() => <App settings={settingsModel} />);
     await userEvent.click(
       await screen.findByRole("button", {
         name: source.title,
@@ -5480,7 +5495,7 @@ it("requires a new agent choice when the source worktree agent is unavailable", 
     if (command === "subscribe_thread") return subscribeWith(args, source);
     return original?.(command, args) ?? Promise.resolve();
   });
-  render(() => <App />);
+  render(() => <App settings={settingsModel} />);
   await userEvent.click(
     await screen.findByRole("button", { name: source.title }),
   );
@@ -5502,7 +5517,10 @@ it("requires a new agent choice when the source worktree agent is unavailable", 
 it.each(["light", "dark"])(
   "updates shared worktree deletion guidance from the live list in %s theme",
   async (theme) => {
-    localStorage.setItem("atte.theme", theme);
+    settingsModel = createMemorySettings({
+      ...settingsModel.values(),
+      theme: theme === "dark" ? "dark" : "light",
+    });
     const source = {
       ...responseThread("delete-source"),
       worktree: {
@@ -5526,7 +5544,7 @@ it.each(["light", "dark"])(
       }
       return original?.(command, args) ?? Promise.resolve();
     });
-    render(() => <App />);
+    render(() => <App settings={settingsModel} />);
     await screen.findByRole("button", { name: source.title });
     await userEvent.click(threadMenu(source.title));
     await userEvent.click(screen.getByRole("menuitem", { name: "삭제" }));
@@ -5558,7 +5576,7 @@ it("hides worktree sharing from both menus on ordinary folder threads", async ()
     if (command === "subscribe_thread") return subscribeWith(args, source);
     return original?.(command, args) ?? Promise.resolve();
   });
-  render(() => <App />);
+  render(() => <App settings={settingsModel} />);
   await userEvent.click(
     await screen.findByRole("button", { name: source.title }),
   );
@@ -5576,7 +5594,10 @@ it("hides worktree sharing from both menus on ordinary folder threads", async ()
 it.each(["light", "dark"])(
   "groups worktree threads by source and shows the rotated icon in %s theme",
   async (theme) => {
-    localStorage.setItem("atte.theme", theme);
+    settingsModel = createMemorySettings({
+      ...settingsModel.values(),
+      theme: theme === "dark" ? "dark" : "light",
+    });
     const saved = {
       id: "worktree-id",
       title: "Isolated task",
@@ -5598,7 +5619,7 @@ it.each(["light", "dark"])(
       if (command === "subscribe_thread") return subscribeWith(args, saved);
       return original?.(command, args) ?? Promise.resolve();
     });
-    render(() => <App />);
+    render(() => <App settings={settingsModel} />);
     const rowButton = await screen.findByRole("button", { name: saved.title });
     expect(
       screen.getByRole("button", { name: "source에 새 스레드" }),
@@ -5650,7 +5671,7 @@ it("opens the thread from a notification and acknowledges its navigation intent 
     }
     return original?.(command, args) ?? Promise.resolve();
   });
-  render(() => <App />);
+  render(() => <App settings={settingsModel} />);
   await waitFor(() => expect(typeof notificationUpdate).toBe("function"));
   const state = {
     supported: true,
@@ -5682,4 +5703,41 @@ it("opens the thread from a notification and acknowledges its navigation intent 
         ([command]) => command === "acknowledge_notification_navigation",
       ),
   ).toHaveLength(1);
+});
+
+it("keeps the initial theme and language while a settings error blocks saving until retry", async () => {
+  const [error, setError] = createSignal<string | null>(
+    "Invalid settings JSON",
+  );
+  const retry = vi.fn(async () => {
+    setError(null);
+  });
+  const settings = {
+    ...createMemorySettings({ theme: "dark", locale: "en" }),
+    error,
+    retry,
+  };
+  render(() => <App settings={settings} />);
+  expect(document.documentElement.dataset.theme).toBe("dark");
+  expect(document.documentElement.lang).toBe("en");
+  expect(screen.getByRole("alert").textContent).toContain(
+    "Invalid settings JSON",
+  );
+  await userEvent.click(screen.getByRole("button", { name: "Open Atte menu" }));
+  await userEvent.click(screen.getByRole("menuitem", { name: "General" }));
+  expect(await screen.findByRole("radio", { name: "Dark" })).toHaveProperty(
+    "disabled",
+    true,
+  );
+  expect(screen.getByRole("button", { name: /^Language/ })).toHaveProperty(
+    "disabled",
+    true,
+  );
+  await userEvent.click(screen.getByRole("button", { name: "Retry" }));
+  expect(retry).toHaveBeenCalledOnce();
+  expect(screen.queryByRole("alert")).toBeNull();
+  expect(screen.getByRole("radio", { name: "Dark" })).toHaveProperty(
+    "disabled",
+    false,
+  );
 });

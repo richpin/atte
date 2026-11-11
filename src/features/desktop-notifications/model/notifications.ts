@@ -1,3 +1,4 @@
+import { useSettings } from "shared/settings";
 import { createSignal, onCleanup, onMount } from "solid-js";
 import {
   acknowledgeNotificationNavigation,
@@ -5,13 +6,13 @@ import {
   type NotificationState,
   openNotificationSettings,
   requestNotificationPermission,
-  saveNotificationPreferences,
   setNotificationContext,
   subscribeNotifications,
   unsubscribeNotifications,
 } from "../api/notifications";
 
 export function createDesktopNotifications() {
+  const settings = useSettings();
   const [state, setState] = createSignal<NotificationState>();
   const [subscriptionFailed, setSubscriptionFailed] = createSignal(false);
   const [operationFailed, setOperationFailed] = createSignal(false);
@@ -60,10 +61,10 @@ export function createDesktopNotifications() {
     }
   }
 
-  async function save(preferences: NotificationPreferences) {
+  async function save(preferences: Partial<NotificationPreferences>) {
     if (saving()) return;
     setSaving(true);
-    await run(() => saveNotificationPreferences(preferences));
+    await run(() => settings.update({ notifications: preferences }));
     if (!disposed) setSaving(false);
   }
 
@@ -77,7 +78,10 @@ export function createDesktopNotifications() {
 
   return {
     state,
-    error: () => subscriptionFailed() || operationFailed(),
+    preferences: () => settings.values().notifications,
+    settingsError: settings.error,
+    error: () =>
+      subscriptionFailed() || operationFailed() || Boolean(settings.error()),
     loading,
     saving,
     retry: connect,

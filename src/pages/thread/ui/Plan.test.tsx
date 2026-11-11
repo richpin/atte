@@ -1,11 +1,20 @@
 import { cleanup, fireEvent, render, screen } from "@solidjs/testing-library";
 import { I18nProvider } from "shared/i18n";
+import { createMemorySettings, SettingsProvider } from "shared/settings";
 import { createSignal } from "solid-js";
 import { afterEach, beforeEach, expect, it } from "vitest";
 import type { Plan as PlanData } from "../model/types";
 import { Plan } from "./Plan";
 
-beforeEach(() => localStorage.setItem("atte.locale", "en"));
+let settings = createMemorySettings();
+beforeEach(() => {
+  settings = createMemorySettings();
+});
+
+beforeEach(
+  () =>
+    (settings = createMemorySettings({ ...settings.values(), locale: "en" })),
+);
 afterEach(cleanup);
 
 it("retains collapsed state through replacement, clearing and restoration", () => {
@@ -20,9 +29,11 @@ it("retains collapsed state through replacement, clearing and restoration", () =
     ],
   });
   render(() => (
-    <I18nProvider>
-      <Plan plan={plan()} active />
-    </I18nProvider>
+    <SettingsProvider settings={settings}>
+      <I18nProvider>
+        <Plan plan={plan()} active />
+      </I18nProvider>
+    </SettingsProvider>
   ));
   expect(screen.getByRole("button").getAttribute("aria-expanded")).toBe("true");
   expect(screen.getByText("1/2 completed")).toBeTruthy();
@@ -58,9 +69,11 @@ it("stops animation without changing unfinished status and preserves agent order
     { content: "High second", priority: "high", status: "pending" },
   ];
   const { container } = render(() => (
-    <I18nProvider>
-      <Plan plan={{ entries }} active={active()} />
-    </I18nProvider>
+    <SettingsProvider settings={settings}>
+      <I18nProvider>
+        <Plan plan={{ entries }} active={active()} />
+      </I18nProvider>
+    </SettingsProvider>
   ));
   expect(
     [...container.querySelectorAll("li")].map((row) => row.textContent),

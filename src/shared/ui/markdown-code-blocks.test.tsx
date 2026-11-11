@@ -1,12 +1,12 @@
 import { cleanup, fireEvent, render, screen } from "@solidjs/testing-library";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { I18nProvider } from "../i18n";
+import { createMemorySettings, SettingsProvider } from "../settings";
 import { Markdown } from "./markdown";
 
 const writeText = vi.fn<(text: string) => Promise<void>>();
 
 beforeEach(() => {
-  localStorage.setItem("atte.locale", "en");
   writeText.mockReset();
   writeText.mockResolvedValue(undefined);
   Object.defineProperty(navigator, "clipboard", {
@@ -23,9 +23,11 @@ afterEach(() => {
 
 function renderCode(source: string, streaming = true) {
   return render(() => (
-    <I18nProvider>
-      <Markdown source={source} variant="agent" streaming={streaming} />
-    </I18nProvider>
+    <SettingsProvider settings={createMemorySettings({ locale: "en" })}>
+      <I18nProvider>
+        <Markdown source={source} variant="agent" streaming={streaming} />
+      </I18nProvider>
+    </SettingsProvider>
   ));
 }
 

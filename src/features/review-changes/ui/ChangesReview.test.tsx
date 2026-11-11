@@ -2,9 +2,15 @@ import { cleanup, fireEvent, render, screen } from "@solidjs/testing-library";
 import userEvent from "@testing-library/user-event";
 import { prepareFileChanges } from "shared/diff";
 import { I18nProvider } from "shared/i18n";
+import { createMemorySettings, SettingsProvider } from "shared/settings";
 import { createSignal } from "solid-js";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { ChangesReview } from "./ChangesReview";
+
+let settings = createMemorySettings();
+beforeEach(() => {
+  settings = createMemorySettings();
+});
 
 vi.mock("shared/ui", async (original) => ({
   ...(await original<typeof import("shared/ui")>()),
@@ -18,7 +24,7 @@ afterEach(() => {
 });
 
 it("totals all files and reported edits in the toolbar and file rows", async () => {
-  localStorage.setItem("atte.locale", "en");
+  settings = createMemorySettings({ ...settings.values(), locale: "en" });
   const files = await prepareFileChanges([
     {
       path: "a.ts",
@@ -30,9 +36,11 @@ it("totals all files and reported edits in the toolbar and file rows", async () 
     { path: "b.ts", comparisons: [{ before: null, after: "four\nfive\n" }] },
   ]);
   const { container } = render(() => (
-    <I18nProvider>
-      <ChangesReview files={files} visible />
-    </I18nProvider>
+    <SettingsProvider settings={settings}>
+      <I18nProvider>
+        <ChangesReview files={files} visible />
+      </I18nProvider>
+    </SettingsProvider>
   ));
   expect(screen.queryByRole("heading", { name: "Changes" })).toBeNull();
   expect(container.textContent).toContain("2 files changed");
@@ -53,9 +61,11 @@ it("opens the current file from a reported change without collapsing its diff", 
   ]);
   const onOpenFile = vi.fn();
   render(() => (
-    <I18nProvider>
-      <ChangesReview files={files} visible onOpenFile={onOpenFile} />
-    </I18nProvider>
+    <SettingsProvider settings={settings}>
+      <I18nProvider>
+        <ChangesReview files={files} visible onOpenFile={onOpenFile} />
+      </I18nProvider>
+    </SettingsProvider>
   ));
   await userEvent.setup().click(screen.getByRole("button", { name: "a.ts" }));
   expect(onOpenFile).toHaveBeenCalledExactlyOnceWith("src/a.ts");
@@ -67,14 +77,16 @@ it("opens the current file from a reported change without collapsing its diff", 
 });
 
 it("opens and closes file rows with the keyboard", async () => {
-  localStorage.setItem("atte.locale", "en");
+  settings = createMemorySettings({ ...settings.values(), locale: "en" });
   const files = await prepareFileChanges([
     { path: "/project/a.ts", comparisons: [{ before: "old", after: "new" }] },
   ]);
   render(() => (
-    <I18nProvider>
-      <ChangesReview files={files} visible />
-    </I18nProvider>
+    <SettingsProvider settings={settings}>
+      <I18nProvider>
+        <ChangesReview files={files} visible />
+      </I18nProvider>
+    </SettingsProvider>
   ));
   const user = userEvent.setup();
   await user.tab();
@@ -90,7 +102,7 @@ it("opens and closes file rows with the keyboard", async () => {
 });
 
 it("starts expanded, independently collapses files, and preserves state when hidden", async () => {
-  localStorage.setItem("atte.locale", "en");
+  settings = createMemorySettings({ ...settings.values(), locale: "en" });
   const files = await prepareFileChanges([
     {
       path: "/project/a.ts",
@@ -103,9 +115,11 @@ it("starts expanded, independently collapses files, and preserves state when hid
   ]);
   const [visible, setVisible] = createSignal(true);
   render(() => (
-    <I18nProvider>
-      <ChangesReview files={files} visible={visible()} />
-    </I18nProvider>
+    <SettingsProvider settings={settings}>
+      <I18nProvider>
+        <ChangesReview files={files} visible={visible()} />
+      </I18nProvider>
+    </SettingsProvider>
   ));
   const first = screen.getByRole("button", { name: "Collapse /project/a.ts" });
   const second = screen.getByRole("button", { name: "Collapse /project/b.ts" });

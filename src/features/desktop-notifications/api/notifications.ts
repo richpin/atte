@@ -42,12 +42,6 @@ export function setNotificationContext(
   });
 }
 
-export function saveNotificationPreferences(
-  preferences: NotificationPreferences,
-) {
-  return invoke<void>("set_notification_preferences", { preferences });
-}
-
 export function acknowledgeNotificationNavigation(id: string) {
   return invoke<void>("acknowledge_notification_navigation", { id });
 }

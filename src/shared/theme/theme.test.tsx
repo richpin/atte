@@ -76,7 +76,7 @@ test("follows system appearance until an explicit theme is selected", async () =
   expect(document.documentElement.dataset.theme).toBe("light");
 
   fireEvent.click(screen.getByRole("button", { name: "dark" }));
-  expect(localStorage.getItem("atte.theme")).toBe("dark");
+  expect(localStorage.getItem("atte.theme")).toBeNull();
   expect(screen.getByTestId("resolved").textContent).toBe("dark");
   expect(document.documentElement.dataset.theme).toBe("dark");
   await waitFor(() => expect(setNativeTheme).toHaveBeenCalledWith("dark"));
@@ -85,12 +85,12 @@ test("follows system appearance until an explicit theme is selected", async () =
   expect(screen.getByTestId("resolved").textContent).toBe("dark");
 });
 
-test("normalizes an invalid saved preference and removes its system listener", () => {
+test("ignores WebView storage and removes its system listener", () => {
   localStorage.setItem("atte.theme", "sepia");
   systemDark = true;
   initializeTheme();
 
-  expect(localStorage.getItem("atte.theme")).toBe("system");
+  expect(localStorage.getItem("atte.theme")).toBe("sepia");
   expect(document.documentElement.dataset.theme).toBe("dark");
 
   const result = render(() => (
@@ -101,12 +101,14 @@ test("normalizes an invalid saved preference and removes its system listener", (
   expect(media.addEventListener).toHaveBeenCalledWith(
     "change",
     expect.any(Function),
+    undefined,
   );
 
   result.unmount();
   expect(media.removeEventListener).toHaveBeenCalledWith(
     "change",
     expect.any(Function),
+    undefined,
   );
 });
 

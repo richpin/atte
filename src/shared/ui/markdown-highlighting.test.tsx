@@ -8,6 +8,7 @@ import {
 import { createSignal } from "solid-js";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { I18nProvider } from "../i18n";
+import { createMemorySettings, SettingsProvider } from "../settings";
 import { ThemeProvider, useTheme } from "../theme";
 import { Markdown } from "./markdown";
 
@@ -34,7 +35,6 @@ function deferred<T>() {
 }
 
 beforeEach(() => {
-  localStorage.setItem("atte.locale", "en");
   highlightCode.mockReset();
   animationFrames = new Map();
   let nextAnimationFrame = 1;
@@ -173,15 +173,17 @@ it("keeps unknown-language source copyable inside the code layout", async () => 
     value: { writeText },
   });
   const { container } = render(() => (
-    <I18nProvider>
-      <Markdown
-        source={`\`\`\`unknown-runtime
+    <SettingsProvider settings={createMemorySettings({ locale: "en" })}>
+      <I18nProvider>
+        <Markdown
+          source={`\`\`\`unknown-runtime
 plain();
 \`\`\``}
-        variant="agent"
-        streaming={false}
-      />
-    </I18nProvider>
+          variant="agent"
+          streaming={false}
+        />
+      </I18nProvider>
+    </SettingsProvider>
   ));
 
   expect(highlightCode).not.toHaveBeenCalled();
@@ -241,13 +243,15 @@ it("keeps source, copy, and layout working when highlighting fails", async () =>
   });
   const source = "const safe = '<script>never markup</script>';";
   const { container } = render(() => (
-    <I18nProvider>
-      <Markdown
-        source={`\`\`\`javascript\n${source}\n\`\`\``}
-        variant="agent"
-        streaming={false}
-      />
-    </I18nProvider>
+    <SettingsProvider settings={createMemorySettings({ locale: "en" })}>
+      <I18nProvider>
+        <Markdown
+          source={`\`\`\`javascript\n${source}\n\`\`\``}
+          variant="agent"
+          streaming={false}
+        />
+      </I18nProvider>
+    </SettingsProvider>
   ));
 
   await Promise.resolve();

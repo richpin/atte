@@ -4,16 +4,15 @@ import {
   type Translator,
   translator,
 } from "@solid-primitives/i18n";
-import { makePersisted } from "@solid-primitives/storage";
 import {
   createContext,
   createEffect,
   createSignal,
   type JSX,
   onCleanup,
-  type Signal,
   useContext,
 } from "solid-js";
+import { useSettings } from "../settings";
 import {
   en,
   ko,
@@ -85,14 +84,8 @@ const I18nContext = createContext<I18n>({
 
 export function I18nProvider(props: { children: JSX.Element }) {
   const [system, setSystem] = createSignal(systemLocale());
-  const [preference, setPreference] = makePersisted<
-    LocalePreference,
-    Signal<LocalePreference>
-  >(createSignal<LocalePreference>("system"), {
-    name: "atte.locale",
-    serialize: (value) => value,
-    deserialize: (value) => (isLocalePreference(value) ? value : "system"),
-  });
+  const settings = useSettings();
+  const preference = () => settings.values().locale;
   const locale = (): Locale =>
     preference() === "system" ? system() : (preference() as Locale);
   const t = createTranslate(locale);
@@ -113,7 +106,7 @@ export function I18nProvider(props: { children: JSX.Element }) {
       value={{
         locale,
         preference,
-        setPreference: (value) => setPreference(value),
+        setPreference: (locale) => void settings.update({ locale }),
         t,
         message: (value, fallback) => translateMessage(value, fallback, t),
         content: (value) => translateContent(value, t),
@@ -122,10 +115,6 @@ export function I18nProvider(props: { children: JSX.Element }) {
       {props.children}
     </I18nContext.Provider>
   );
-}
-
-function isLocalePreference(value: string): value is LocalePreference {
-  return value === "system" || value === "en" || value === "ko";
 }
 
 export function useI18n() {

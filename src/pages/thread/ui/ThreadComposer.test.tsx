@@ -7,6 +7,7 @@ import {
 } from "@solidjs/testing-library";
 import userEvent from "@testing-library/user-event";
 import { I18nProvider } from "shared/i18n";
+import { createMemorySettings, SettingsProvider } from "shared/settings";
 import { ThemeProvider } from "shared/theme";
 import { createSignal } from "solid-js";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
@@ -21,8 +22,13 @@ import type {
 } from "../model/types";
 import { ThreadComposer } from "./ThreadComposer";
 
+let settings = createMemorySettings();
 beforeEach(() => {
-  localStorage.setItem("atte.locale", "en");
+  settings = createMemorySettings();
+});
+
+beforeEach(() => {
+  settings = createMemorySettings({ ...settings.values(), locale: "en" });
 });
 
 afterEach(() => {
@@ -109,26 +115,28 @@ it("renders agent-provided thread configuration and sends typed selections", asy
   ];
 
   render(() => (
-    <I18nProvider>
-      <ThreadComposer
-        active={false}
-        thread={current}
-        draft=""
-        answerPending={false}
-        cancelPending={false}
-        showStop={false}
-        stopping={false}
-        actionsEnabled={true}
-        canSend={true}
-        onDraftChange={() => {}}
-        onSend={() => {}}
-        onCancel={() => {}}
-        onAnswer={() => {}}
-        onConfigure={onConfigure}
-        onDeleteQueued={async () => {}}
-        onRetryQueued={async () => {}}
-      />
-    </I18nProvider>
+    <SettingsProvider settings={settings}>
+      <I18nProvider>
+        <ThreadComposer
+          active={false}
+          thread={current}
+          draft=""
+          answerPending={false}
+          cancelPending={false}
+          showStop={false}
+          stopping={false}
+          actionsEnabled={true}
+          canSend={true}
+          onDraftChange={() => {}}
+          onSend={() => {}}
+          onCancel={() => {}}
+          onAnswer={() => {}}
+          onConfigure={onConfigure}
+          onDeleteQueued={async () => {}}
+          onRetryQueued={async () => {}}
+        />
+      </I18nProvider>
+    </SettingsProvider>
   ));
 
   await userEvent.click(screen.getByRole("button", { name: "Model Model A" }));
@@ -159,26 +167,28 @@ it("replaces the message input with the approval card", () => {
   const onAnswer = vi.fn();
 
   render(() => (
-    <I18nProvider>
-      <ThreadComposer
-        active={false}
-        thread={thread()}
-        draft=""
-        answerPending={false}
-        cancelPending={false}
-        showStop={false}
-        stopping={false}
-        actionsEnabled={true}
-        canSend={true}
-        onDraftChange={() => {}}
-        onSend={() => {}}
-        onCancel={() => {}}
-        onAnswer={onAnswer}
-        onConfigure={() => {}}
-        onDeleteQueued={async () => {}}
-        onRetryQueued={async () => {}}
-      />
-    </I18nProvider>
+    <SettingsProvider settings={settings}>
+      <I18nProvider>
+        <ThreadComposer
+          active={false}
+          thread={thread()}
+          draft=""
+          answerPending={false}
+          cancelPending={false}
+          showStop={false}
+          stopping={false}
+          actionsEnabled={true}
+          canSend={true}
+          onDraftChange={() => {}}
+          onSend={() => {}}
+          onCancel={() => {}}
+          onAnswer={onAnswer}
+          onConfigure={() => {}}
+          onDeleteQueued={async () => {}}
+          onRetryQueued={async () => {}}
+        />
+      </I18nProvider>
+    </SettingsProvider>
   ));
 
   expect(screen.getByRole("combobox", { name: "Message" })).toBeTruthy();
@@ -239,37 +249,39 @@ it.each<FormField>([
       pendingInteractions: [question],
     });
     render(() => (
-      <I18nProvider>
-        <ThreadComposer
-          active={false}
-          thread={current()}
-          draft="keep this draft"
-          draftAttachments={[
-            {
-              id: "file",
-              kind: "file",
-              name: "notes.txt",
-              uri: "file:///workspace/notes.txt",
-              mimeType: "text/plain",
-            },
-          ]}
-          answerPending={false}
-          cancelPending={false}
-          showStop={true}
-          stopping={false}
-          actionsEnabled={true}
-          canSend={true}
-          onDraftChange={() => {}}
-          onSend={onSend}
-          onCancel={() => {}}
-          onAnswer={() => {}}
-          formValues={formDefaults}
-          onAnswerQuestion={onAnswerQuestion}
-          onConfigure={() => {}}
-          onDeleteQueued={async () => {}}
-          onRetryQueued={async () => {}}
-        />
-      </I18nProvider>
+      <SettingsProvider settings={settings}>
+        <I18nProvider>
+          <ThreadComposer
+            active={false}
+            thread={current()}
+            draft="keep this draft"
+            draftAttachments={[
+              {
+                id: "file",
+                kind: "file",
+                name: "notes.txt",
+                uri: "file:///workspace/notes.txt",
+                mimeType: "text/plain",
+              },
+            ]}
+            answerPending={false}
+            cancelPending={false}
+            showStop={true}
+            stopping={false}
+            actionsEnabled={true}
+            canSend={true}
+            onDraftChange={() => {}}
+            onSend={onSend}
+            onCancel={() => {}}
+            onAnswer={() => {}}
+            formValues={formDefaults}
+            onAnswerQuestion={onAnswerQuestion}
+            onConfigure={() => {}}
+            onDeleteQueued={async () => {}}
+            onRetryQueued={async () => {}}
+          />
+        </I18nProvider>
+      </SettingsProvider>
     ));
     expect(screen.getByRole("region", { name: "Agent question" })).toBeTruthy();
     expect(screen.queryByRole("combobox", { name: "Message" })).toBeNull();
@@ -332,38 +344,41 @@ function requestNavigation() {
   const onAnswerQuestion = vi.fn();
   const onAnswer = vi.fn();
   render(() => (
-    <I18nProvider>
-      <ThreadComposer
-        active={true}
-        thread={current()}
-        draft="keep this draft"
-        answerPending={answerPending()}
-        cancelPending={false}
-        showStop={true}
-        stopping={false}
-        actionsEnabled={actionsEnabled()}
-        canSend={false}
-        onDraftChange={() => {}}
-        onSend={() => {}}
-        onCancel={() => {}}
-        onAnswer={onAnswer}
-        formValues={(request) => drafts()[request.id] ?? {}}
-        onFormChange={(request, name, value) =>
-          setDrafts((previous) => ({
-            ...previous,
-            [request.id]: Object.fromEntries(
-              Object.entries({ ...previous[request.id], [name]: value }).filter(
-                ([, item]) => item !== undefined,
-              ),
-            ) as FormValues,
-          }))
-        }
-        onAnswerQuestion={onAnswerQuestion}
-        onConfigure={() => {}}
-        onDeleteQueued={async () => {}}
-        onRetryQueued={async () => {}}
-      />
-    </I18nProvider>
+    <SettingsProvider settings={settings}>
+      <I18nProvider>
+        <ThreadComposer
+          active={true}
+          thread={current()}
+          draft="keep this draft"
+          answerPending={answerPending()}
+          cancelPending={false}
+          showStop={true}
+          stopping={false}
+          actionsEnabled={actionsEnabled()}
+          canSend={false}
+          onDraftChange={() => {}}
+          onSend={() => {}}
+          onCancel={() => {}}
+          onAnswer={onAnswer}
+          formValues={(request) => drafts()[request.id] ?? {}}
+          onFormChange={(request, name, value) =>
+            setDrafts((previous) => ({
+              ...previous,
+              [request.id]: Object.fromEntries(
+                Object.entries({
+                  ...previous[request.id],
+                  [name]: value,
+                }).filter(([, item]) => item !== undefined),
+              ) as FormValues,
+            }))
+          }
+          onAnswerQuestion={onAnswerQuestion}
+          onConfigure={() => {}}
+          onDeleteQueued={async () => {}}
+          onRetryQueued={async () => {}}
+        />
+      </I18nProvider>
+    </SettingsProvider>
   ));
   return {
     first,
@@ -509,7 +524,10 @@ it("blocks request navigation while responding or without a live subscription", 
 it.each(["light", "dark"])(
   "hides only displayed plan approval details in %s theme",
   (theme) => {
-    localStorage.setItem("atte.theme", theme);
+    settings = createMemorySettings({
+      ...settings.values(),
+      theme: theme === "dark" ? "dark" : "light",
+    });
     const content = "# Greeting CLI\n- Add the command";
     const [thread, setThread] = createSignal<Thread>({
       ...readyThread(),
@@ -531,28 +549,32 @@ it.each(["light", "dark"])(
     });
     const onAnswer = vi.fn();
     render(() => (
-      <ThemeProvider>
-        <I18nProvider>
-          <ThreadComposer
-            active={false}
-            thread={thread()}
-            draft=""
-            answerPending={false}
-            cancelPending={false}
-            showStop={false}
-            stopping={false}
-            actionsEnabled={true}
-            canSend={true}
-            onDraftChange={() => {}}
-            onSend={() => {}}
-            onCancel={() => {}}
-            onAnswer={onAnswer}
-            onConfigure={() => {}}
-            onDeleteQueued={async () => {}}
-            onRetryQueued={async () => {}}
-          />
-        </I18nProvider>
-      </ThemeProvider>
+      <SettingsProvider settings={settings}>
+        <ThemeProvider>
+          <SettingsProvider settings={settings}>
+            <I18nProvider>
+              <ThreadComposer
+                active={false}
+                thread={thread()}
+                draft=""
+                answerPending={false}
+                cancelPending={false}
+                showStop={false}
+                stopping={false}
+                actionsEnabled={true}
+                canSend={true}
+                onDraftChange={() => {}}
+                onSend={() => {}}
+                onCancel={() => {}}
+                onAnswer={onAnswer}
+                onConfigure={() => {}}
+                onDeleteQueued={async () => {}}
+                onRetryQueued={async () => {}}
+              />
+            </I18nProvider>
+          </SettingsProvider>
+        </ThemeProvider>
+      </SettingsProvider>
     ));
 
     expect(document.documentElement.dataset.theme).toBe(theme);
@@ -653,26 +675,28 @@ it("submits PromptInput with Enter", () => {
   const onSend = vi.fn();
 
   render(() => (
-    <I18nProvider>
-      <ThreadComposer
-        active={false}
-        thread={readyThread()}
-        draft="Run tests"
-        answerPending={false}
-        cancelPending={false}
-        showStop={false}
-        stopping={false}
-        actionsEnabled={true}
-        canSend={true}
-        onDraftChange={() => {}}
-        onSend={onSend}
-        onCancel={() => {}}
-        onAnswer={() => {}}
-        onConfigure={() => {}}
-        onDeleteQueued={async () => {}}
-        onRetryQueued={async () => {}}
-      />
-    </I18nProvider>
+    <SettingsProvider settings={settings}>
+      <I18nProvider>
+        <ThreadComposer
+          active={false}
+          thread={readyThread()}
+          draft="Run tests"
+          answerPending={false}
+          cancelPending={false}
+          showStop={false}
+          stopping={false}
+          actionsEnabled={true}
+          canSend={true}
+          onDraftChange={() => {}}
+          onSend={onSend}
+          onCancel={() => {}}
+          onAnswer={() => {}}
+          onConfigure={() => {}}
+          onDeleteQueued={async () => {}}
+          onRetryQueued={async () => {}}
+        />
+      </I18nProvider>
+    </SettingsProvider>
   ));
 
   fireEvent.keyDown(screen.getByRole("combobox", { name: "Message" }), {
@@ -685,41 +709,43 @@ it("selects files and renders removable duplicate basename chips without paths",
   const onSelectFiles = vi.fn();
   const onRemoveAttachment = vi.fn();
   render(() => (
-    <I18nProvider>
-      <ThreadComposer
-        active={false}
-        thread={readyThread()}
-        draft=""
-        draftAttachments={[
-          {
-            id: "one",
-            name: "notes.txt",
-            uri: "file:///private/one/notes.txt",
-          },
-          {
-            id: "two",
-            name: "notes.txt",
-            uri: "file:///private/two/notes.txt",
-          },
-        ]}
-        attachmentErrors={["folder"]}
-        answerPending={false}
-        cancelPending={false}
-        showStop={false}
-        stopping={false}
-        actionsEnabled={true}
-        canSend={true}
-        onDraftChange={() => {}}
-        onSelectFiles={onSelectFiles}
-        onRemoveAttachment={onRemoveAttachment}
-        onSend={() => {}}
-        onCancel={() => {}}
-        onAnswer={() => {}}
-        onConfigure={() => {}}
-        onDeleteQueued={async () => {}}
-        onRetryQueued={async () => {}}
-      />
-    </I18nProvider>
+    <SettingsProvider settings={settings}>
+      <I18nProvider>
+        <ThreadComposer
+          active={false}
+          thread={readyThread()}
+          draft=""
+          draftAttachments={[
+            {
+              id: "one",
+              name: "notes.txt",
+              uri: "file:///private/one/notes.txt",
+            },
+            {
+              id: "two",
+              name: "notes.txt",
+              uri: "file:///private/two/notes.txt",
+            },
+          ]}
+          attachmentErrors={["folder"]}
+          answerPending={false}
+          cancelPending={false}
+          showStop={false}
+          stopping={false}
+          actionsEnabled={true}
+          canSend={true}
+          onDraftChange={() => {}}
+          onSelectFiles={onSelectFiles}
+          onRemoveAttachment={onRemoveAttachment}
+          onSend={() => {}}
+          onCancel={() => {}}
+          onAnswer={() => {}}
+          onConfigure={() => {}}
+          onDeleteQueued={async () => {}}
+          onRetryQueued={async () => {}}
+        />
+      </I18nProvider>
+    </SettingsProvider>
   ));
 
   await userEvent.click(screen.getByRole("button", { name: "Add attachment" }));
@@ -749,27 +775,29 @@ it("shows media choices only for advertised prompt capabilities", async () => {
   current.promptCapabilities = { image: true, audio: false };
   const [thread, setThread] = createSignal(current);
   render(() => (
-    <I18nProvider>
-      <ThreadComposer
-        active={false}
-        thread={thread()}
-        draft=""
-        answerPending={false}
-        cancelPending={false}
-        showStop={false}
-        stopping={false}
-        actionsEnabled={true}
-        canSend={true}
-        onDraftChange={() => {}}
-        onSelectMedia={onSelectMedia}
-        onSend={() => {}}
-        onCancel={() => {}}
-        onAnswer={() => {}}
-        onConfigure={() => {}}
-        onDeleteQueued={async () => {}}
-        onRetryQueued={async () => {}}
-      />
-    </I18nProvider>
+    <SettingsProvider settings={settings}>
+      <I18nProvider>
+        <ThreadComposer
+          active={false}
+          thread={thread()}
+          draft=""
+          answerPending={false}
+          cancelPending={false}
+          showStop={false}
+          stopping={false}
+          actionsEnabled={true}
+          canSend={true}
+          onDraftChange={() => {}}
+          onSelectMedia={onSelectMedia}
+          onSend={() => {}}
+          onCancel={() => {}}
+          onAnswer={() => {}}
+          onConfigure={() => {}}
+          onDeleteQueued={async () => {}}
+          onRetryQueued={async () => {}}
+        />
+      </I18nProvider>
+    </SettingsProvider>
   ));
 
   await userEvent.click(screen.getByRole("button", { name: "Add attachment" }));
@@ -815,26 +843,28 @@ it("disables every thread mutation while the subscription is unavailable", () =>
   };
 
   render(() => (
-    <I18nProvider>
-      <ThreadComposer
-        active={false}
-        thread={current}
-        draft="draft"
-        answerPending={false}
-        cancelPending={false}
-        showStop={true}
-        stopping={false}
-        actionsEnabled={false}
-        canSend={false}
-        onDraftChange={() => {}}
-        onSend={() => {}}
-        onCancel={() => {}}
-        onAnswer={() => {}}
-        onConfigure={() => {}}
-        onDeleteQueued={async () => {}}
-        onRetryQueued={async () => {}}
-      />
-    </I18nProvider>
+    <SettingsProvider settings={settings}>
+      <I18nProvider>
+        <ThreadComposer
+          active={false}
+          thread={current}
+          draft="draft"
+          answerPending={false}
+          cancelPending={false}
+          showStop={true}
+          stopping={false}
+          actionsEnabled={false}
+          canSend={false}
+          onDraftChange={() => {}}
+          onSend={() => {}}
+          onCancel={() => {}}
+          onAnswer={() => {}}
+          onConfigure={() => {}}
+          onDeleteQueued={async () => {}}
+          onRetryQueued={async () => {}}
+        />
+      </I18nProvider>
+    </SettingsProvider>
   ));
 
   expect(screen.getByRole("button", { name: "Allow" })).toHaveProperty(
@@ -878,26 +908,28 @@ it("sizes the slash popup to the composer without an intrinsic minimum width", a
   ];
   const [draft, setDraft] = createSignal("");
   render(() => (
-    <I18nProvider>
-      <ThreadComposer
-        active={false}
-        thread={current}
-        draft={draft()}
-        answerPending={false}
-        cancelPending={false}
-        showStop={false}
-        stopping={false}
-        actionsEnabled={true}
-        canSend={true}
-        onDraftChange={setDraft}
-        onSend={() => {}}
-        onCancel={() => {}}
-        onAnswer={() => {}}
-        onConfigure={() => {}}
-        onDeleteQueued={async () => {}}
-        onRetryQueued={async () => {}}
-      />
-    </I18nProvider>
+    <SettingsProvider settings={settings}>
+      <I18nProvider>
+        <ThreadComposer
+          active={false}
+          thread={current}
+          draft={draft()}
+          answerPending={false}
+          cancelPending={false}
+          showStop={false}
+          stopping={false}
+          actionsEnabled={true}
+          canSend={true}
+          onDraftChange={setDraft}
+          onSend={() => {}}
+          onCancel={() => {}}
+          onAnswer={() => {}}
+          onConfigure={() => {}}
+          onDeleteQueued={async () => {}}
+          onRetryQueued={async () => {}}
+        />
+      </I18nProvider>
+    </SettingsProvider>
   ));
   try {
     await userEvent.type(

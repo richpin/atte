@@ -24,6 +24,12 @@ import { NewThreadPage } from "pages/new-thread";
 import { SkillsPage } from "pages/skills";
 import { ThreadPage } from "pages/thread";
 import { I18nProvider, useI18n } from "shared/i18n";
+import {
+  createMemorySettings,
+  type SettingsModel,
+  SettingsProvider,
+  useSettings,
+} from "shared/settings";
 import { ThemeProvider } from "shared/theme";
 import {
   AgentIcon,
@@ -68,19 +74,21 @@ const SIDEBAR_MIN_SIZE = "224px";
 const SIDEBAR_MAX_SIZE = "480px";
 const CONTENT_MIN_SIZE = "320px";
 
-export default function App() {
+export default function App(props: { settings?: SettingsModel } = {}) {
   const queryClient = new QueryClient();
   return (
-    <ThemeProvider>
-      <I18nProvider>
-        <QueryClientProvider client={queryClient}>
-          <AgentAuthenticationProvider>
-            <AppShell />
-            <ToastHost />
-          </AgentAuthenticationProvider>
-        </QueryClientProvider>
-      </I18nProvider>
-    </ThemeProvider>
+    <SettingsProvider settings={props.settings ?? createMemorySettings()}>
+      <ThemeProvider>
+        <I18nProvider>
+          <QueryClientProvider client={queryClient}>
+            <AgentAuthenticationProvider>
+              <AppShell />
+              <ToastHost />
+            </AgentAuthenticationProvider>
+          </QueryClientProvider>
+        </I18nProvider>
+      </ThemeProvider>
+    </SettingsProvider>
   );
 }
 
@@ -243,6 +251,7 @@ function ShellSidebar(props: { shell: AppShellModel }) {
 
 function ShellContent(props: { shell: AppShellModel }) {
   const updates = createAppUpdates();
+  const settings = useSettings();
   const shell = props.shell;
   const { threads } = shell;
   const { t, content } = useI18n();
@@ -429,6 +438,26 @@ function ShellContent(props: { shell: AppShellModel }) {
           </div>
         </Show>
       </header>
+      <Show when={settings.error()}>
+        {(error) => (
+          <div
+            role="alert"
+            class="flex items-center gap-4 border-b border-line bg-input-surface px-6 py-3 text-sm text-ink"
+          >
+            <div class="min-w-0 flex-1">
+              <p>{t("settings.fileError")}</p>
+              <p class="break-words text-muted">{error()}</p>
+            </div>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => void settings.retry()}
+            >
+              {t("common.retry")}
+            </Button>
+          </div>
+        )}
+      </Show>
       <div hidden={shell.view() !== "new-thread"} class="min-h-0 flex-1">
         <NewThreadPage
           agents={shell.agents()}

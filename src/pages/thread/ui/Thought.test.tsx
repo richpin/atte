@@ -7,11 +7,20 @@ import {
 } from "@solidjs/testing-library";
 import userEvent from "@testing-library/user-event";
 import { I18nProvider } from "shared/i18n";
+import { createMemorySettings, SettingsProvider } from "shared/settings";
 import { createSignal } from "solid-js";
 import { afterEach, beforeEach, expect, it } from "vitest";
 import { Thought } from "./Thought";
 
-beforeEach(() => localStorage.setItem("atte.locale", "en"));
+let settings = createMemorySettings();
+beforeEach(() => {
+  settings = createMemorySettings();
+});
+
+beforeEach(
+  () =>
+    (settings = createMemorySettings({ ...settings.values(), locale: "en" })),
+);
 afterEach(cleanup);
 
 it("renders Markdown only when expanded and keeps the user's choice through updates and completion", async () => {
@@ -20,12 +29,14 @@ it("renders Markdown only when expanded and keeps the user's choice through upda
   );
   const [active, setActive] = createSignal(true);
   const { container } = render(() => (
-    <I18nProvider>
-      <Thought
-        part={{ kind: "thought", id: "one", text: text() }}
-        active={active()}
-      />
-    </I18nProvider>
+    <SettingsProvider settings={settings}>
+      <I18nProvider>
+        <Thought
+          part={{ kind: "thought", id: "one", text: text() }}
+          active={active()}
+        />
+      </I18nProvider>
+    </SettingsProvider>
   ));
   const trigger = screen.getByRole("button", { name: "Thinking" });
   expect(trigger.getAttribute("aria-expanded")).toBe("false");
@@ -56,15 +67,17 @@ it("renders Markdown only when expanded and keeps the user's choice through upda
 });
 
 it("supports keyboard toggling and Korean labels without translating the body", async () => {
-  localStorage.setItem("atte.locale", "ko");
+  settings = createMemorySettings({ ...settings.values(), locale: "ko" });
   const user = userEvent.setup();
   render(() => (
-    <I18nProvider>
-      <Thought
-        part={{ kind: "thought", id: "one", text: "English source" }}
-        active={false}
-      />
-    </I18nProvider>
+    <SettingsProvider settings={settings}>
+      <I18nProvider>
+        <Thought
+          part={{ kind: "thought", id: "one", text: "English source" }}
+          active={false}
+        />
+      </I18nProvider>
+    </SettingsProvider>
   ));
   await user.tab();
   const trigger = screen.getByRole("button", { name: "생각 중" });

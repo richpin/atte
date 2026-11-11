@@ -6,11 +6,17 @@ import {
   waitFor,
 } from "@solidjs/testing-library";
 import { I18nProvider } from "shared/i18n";
+import { createMemorySettings, SettingsProvider } from "shared/settings";
 import { createSignal } from "solid-js";
 import { createStore } from "solid-js/store";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { Turn } from "../model/types";
 import { Message } from "./Message";
+
+let settings = createMemorySettings();
+beforeEach(() => {
+  settings = createMemorySettings();
+});
 
 let resize!: () => void;
 let animationFrames: Map<number, FrameRequestCallback>;
@@ -26,7 +32,7 @@ beforeEach(() => {
   vi.stubGlobal("cancelAnimationFrame", (id: number) => {
     animationFrames.delete(id);
   });
-  localStorage.setItem("atte.locale", "en");
+  settings = createMemorySettings({ ...settings.values(), locale: "en" });
   vi.stubGlobal(
     "ResizeObserver",
     class {
@@ -56,9 +62,11 @@ function turn(message: string): Turn {
 
 function renderMessage(message: string) {
   render(() => (
-    <I18nProvider>
-      <Message turns={[turn(message)]} />
-    </I18nProvider>
+    <SettingsProvider settings={settings}>
+      <I18nProvider>
+        <Message turns={[turn(message)]} />
+      </I18nProvider>
+    </SettingsProvider>
   ));
 }
 
@@ -82,9 +90,11 @@ it("renders user and agent message bodies through distinct Markdown variants", (
   ];
   markdownTurn.stopReason = "end_turn";
   render(() => (
-    <I18nProvider>
-      <Message turns={[markdownTurn]} />
-    </I18nProvider>
+    <SettingsProvider settings={settings}>
+      <I18nProvider>
+        <Message turns={[markdownTurn]} />
+      </I18nProvider>
+    </SettingsProvider>
   ));
 
   const user = screen.getByText("User").closest("[data-markdown-body]");
@@ -109,9 +119,11 @@ it("renders sent resource links as non-clickable basename chips", () => {
     { id: "one", name: "diagram.png", uri: "file:///secret/diagram.png" },
   ];
   render(() => (
-    <I18nProvider>
-      <Message turns={[attached]} />
-    </I18nProvider>
+    <SettingsProvider settings={settings}>
+      <I18nProvider>
+        <Message turns={[attached]} />
+      </I18nProvider>
+    </SettingsProvider>
   ));
 
   expect(screen.getByText("diagram.png")).toBeTruthy();
@@ -136,9 +148,11 @@ it("shows a Pierre file icon before a sent file mention's basename", async () =>
     },
   ];
   render(() => (
-    <I18nProvider>
-      <Message turns={[sent]} />
-    </I18nProvider>
+    <SettingsProvider settings={settings}>
+      <I18nProvider>
+        <Message turns={[sent]} />
+      </I18nProvider>
+    </SettingsProvider>
   ));
   const chip = screen
     .getByText("index.ts")
@@ -168,9 +182,11 @@ it("renders sent media as basename-only read-only typed chips", () => {
     },
   ];
   render(() => (
-    <I18nProvider>
-      <Message turns={[attached]} />
-    </I18nProvider>
+    <SettingsProvider settings={settings}>
+      <I18nProvider>
+        <Message turns={[attached]} />
+      </I18nProvider>
+    </SettingsProvider>
   ));
 
   expect(screen.getByText("Image")).toBeTruthy();
@@ -205,13 +221,15 @@ it("updates only the actively streaming message body", () => {
     string | undefined
   >("turn-2");
   const { container } = render(() => (
-    <I18nProvider>
-      <Message
-        turns={turns}
-        streamingTurnId={streamingTurnId()}
-        respondingTurnId={streamingTurnId()}
-      />
-    </I18nProvider>
+    <SettingsProvider settings={settings}>
+      <I18nProvider>
+        <Message
+          turns={turns}
+          streamingTurnId={streamingTurnId()}
+          respondingTurnId={streamingTurnId()}
+        />
+      </I18nProvider>
+    </SettingsProvider>
   ));
   const completedBody = container.querySelectorAll<HTMLElement>(
     '[data-markdown-body][data-variant="agent"]',
@@ -324,14 +342,16 @@ it("renders tools between text parts and keeps the response indicator after them
     ],
   };
   const { container } = render(() => (
-    <I18nProvider>
-      <Message
-        turns={[current]}
-        streamingTurnId={current.id}
-        respondingTurnId={current.id}
-        permissionToolIds={["call"]}
-      />
-    </I18nProvider>
+    <SettingsProvider settings={settings}>
+      <I18nProvider>
+        <Message
+          turns={[current]}
+          streamingTurnId={current.id}
+          respondingTurnId={current.id}
+          permissionToolIds={["call"]}
+        />
+      </I18nProvider>
+    </SettingsProvider>
   ));
   const text = container.textContent ?? "";
   expect(text.indexOf("Before tool")).toBeLessThan(text.indexOf("Read file"));
@@ -350,13 +370,15 @@ it("keeps plan expansion and the response indicator when snapshots change", () =
     },
   ]);
   render(() => (
-    <I18nProvider>
-      <Message
-        turns={turns}
-        respondingTurnId={current.id}
-        streamingTurnId={current.id}
-      />
-    </I18nProvider>
+    <SettingsProvider settings={settings}>
+      <I18nProvider>
+        <Message
+          turns={turns}
+          respondingTurnId={current.id}
+          streamingTurnId={current.id}
+        />
+      </I18nProvider>
+    </SettingsProvider>
   ));
   const indicator = screen.getByRole("status", { name: "Responding…" });
   setTurns(0, "responseParts", 0, {
@@ -386,14 +408,16 @@ it("keeps the response indicator with thoughts and stops thinking at the next re
   const [turns, setTurns] = createStore<Turn[]>([turn("Inspect")]);
   const [thinking, setThinking] = createSignal<string | undefined>("turn-1");
   render(() => (
-    <I18nProvider>
-      <Message
-        turns={turns}
-        respondingTurnId="turn-1"
-        thinkingTurnId={thinking()}
-        streamingTurnId={thinking()}
-      />
-    </I18nProvider>
+    <SettingsProvider settings={settings}>
+      <I18nProvider>
+        <Message
+          turns={turns}
+          respondingTurnId="turn-1"
+          thinkingTurnId={thinking()}
+          streamingTurnId={thinking()}
+        />
+      </I18nProvider>
+    </SettingsProvider>
   ));
   const indicator = screen.getByRole("status", { name: "Responding…" });
   setTurns(0, "responseParts", [
@@ -452,9 +476,11 @@ it("renders plan documents in a persistent card without reclassifying ordinary t
     },
   ]);
   const { container } = render(() => (
-    <I18nProvider>
-      <Message turns={turns} />
-    </I18nProvider>
+    <SettingsProvider settings={settings}>
+      <I18nProvider>
+        <Message turns={turns} />
+      </I18nProvider>
+    </SettingsProvider>
   ));
   const card = container.querySelector("[data-plan-content]");
   expect(card?.querySelector("h3")?.textContent).toBe("Proposed changes");
@@ -516,9 +542,11 @@ it("shows item plans and file references without loading or linking files", () =
     },
   ];
   const { container } = render(() => (
-    <I18nProvider>
-      <Message turns={[current]} />
-    </I18nProvider>
+    <SettingsProvider settings={settings}>
+      <I18nProvider>
+        <Message turns={[current]} />
+      </I18nProvider>
+    </SettingsProvider>
   ));
   expect(container.querySelectorAll("[data-plan-content]")).toHaveLength(2);
   expect(screen.getByText("1/1 completed")).toBeTruthy();
@@ -529,9 +557,15 @@ it("shows item plans and file references without loading or linking files", () =
 it("folds a growing work log at a content boundary and preserves nested expansion across snapshots", () => {
   const [turns, setTurns] = createStore<Turn[]>([turn("Inspect")]);
   render(() => (
-    <I18nProvider>
-      <Message turns={turns} streamingTurnId="turn-1" thinkingTurnId="turn-1" />
-    </I18nProvider>
+    <SettingsProvider settings={settings}>
+      <I18nProvider>
+        <Message
+          turns={turns}
+          streamingTurnId="turn-1"
+          thinkingTurnId="turn-1"
+        />
+      </I18nProvider>
+    </SettingsProvider>
   ));
   setTurns(0, "responseParts", [
     { kind: "thought", id: "thought", text: "Inspect carefully" },
@@ -598,9 +632,11 @@ it("folds the final run on completion and uses the same label for failed and int
     },
   ];
   render(() => (
-    <I18nProvider>
-      <Message turns={[current]} streamingTurnId={active()} interrupted />
-    </I18nProvider>
+    <SettingsProvider settings={settings}>
+      <I18nProvider>
+        <Message turns={[current]} streamingTurnId={active()} interrupted />
+      </I18nProvider>
+    </SettingsProvider>
   ));
   expect(screen.getByRole("button", { name: /Run command/ })).toBeTruthy();
   setActive(undefined);
@@ -624,13 +660,15 @@ it("keeps a closed run exposed while its tool needs input and folds it when the 
     { kind: "text", id: "text", text: "Waiting" },
   ];
   render(() => (
-    <I18nProvider>
-      <Message
-        turns={[current]}
-        streamingTurnId="turn-1"
-        permissionToolIds={pending()}
-      />
-    </I18nProvider>
+    <SettingsProvider settings={settings}>
+      <I18nProvider>
+        <Message
+          turns={[current]}
+          streamingTurnId="turn-1"
+          permissionToolIds={pending()}
+        />
+      </I18nProvider>
+    </SettingsProvider>
   ));
   const log = screen.getByRole("button", { name: "Work log · 1 item" });
   fireEvent.click(log);
@@ -653,9 +691,11 @@ it("starts historical runs collapsed and never merges work across turns", () => 
   const second = { ...turn("Second"), id: "turn-2" };
   second.responseParts = [{ kind: "thought", id: "second", text: "Two" }];
   render(() => (
-    <I18nProvider>
-      <Message turns={[first, second]} />
-    </I18nProvider>
+    <SettingsProvider settings={settings}>
+      <I18nProvider>
+        <Message turns={[first, second]} />
+      </I18nProvider>
+    </SettingsProvider>
   ));
   expect(
     screen.getAllByRole("button", { name: "Work log · 1 item" }),

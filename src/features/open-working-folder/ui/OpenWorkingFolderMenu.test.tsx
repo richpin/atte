@@ -7,6 +7,7 @@ import {
 } from "@solidjs/testing-library";
 import userEvent from "@testing-library/user-event";
 import { I18nProvider } from "shared/i18n";
+import { createMemorySettings, SettingsProvider } from "shared/settings";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -17,6 +18,11 @@ import {
 import { createSignal } from "solid-js";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { OpenWorkingFolderMenu } from "./OpenWorkingFolderMenu";
+
+let settings = createMemorySettings();
+beforeEach(() => {
+  settings = createMemorySettings();
+});
 
 const invoke = vi.hoisted(() => vi.fn());
 vi.mock("@tauri-apps/api/core", () => ({ invoke }));
@@ -42,7 +48,7 @@ beforeEach(() => {
       }
     },
   );
-  localStorage.setItem("atte.locale", "en");
+  settings = createMemorySettings({ ...settings.values(), locale: "en" });
   vi.spyOn(navigator, "platform", "get").mockReturnValue("MacIntel");
   invoke.mockImplementation((command: string) =>
     Promise.resolve(
@@ -61,16 +67,18 @@ afterEach(() => {
 function setup() {
   const [threadId, setThreadId] = createSignal<string | undefined>("thread-a");
   render(() => (
-    <I18nProvider>
-      <DropdownMenu>
-        <DropdownMenuTrigger>Thread menu</DropdownMenuTrigger>
-        <DropdownMenuContent>
-          <DropdownMenuItem disabled>Reconnect</DropdownMenuItem>
-          <OpenWorkingFolderMenu threadId={threadId()} />
-        </DropdownMenuContent>
-      </DropdownMenu>
-      <ToastHost />
-    </I18nProvider>
+    <SettingsProvider settings={settings}>
+      <I18nProvider>
+        <DropdownMenu>
+          <DropdownMenuTrigger>Thread menu</DropdownMenuTrigger>
+          <DropdownMenuContent>
+            <DropdownMenuItem disabled>Reconnect</DropdownMenuItem>
+            <OpenWorkingFolderMenu threadId={threadId()} />
+          </DropdownMenuContent>
+        </DropdownMenu>
+        <ToastHost />
+      </I18nProvider>
+    </SettingsProvider>
   ));
   return { setThreadId };
 }

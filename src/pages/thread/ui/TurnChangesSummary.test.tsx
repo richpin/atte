@@ -6,10 +6,16 @@ import {
   waitFor,
 } from "@solidjs/testing-library";
 import { I18nProvider } from "shared/i18n";
+import { createMemorySettings, SettingsProvider } from "shared/settings";
 import { createSignal } from "solid-js";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { Turn } from "../model/types";
 import { TurnChangesSummary } from "./TurnChangesSummary";
+
+let settings = createMemorySettings();
+beforeEach(() => {
+  settings = createMemorySettings();
+});
 
 afterEach(() => {
   cleanup();
@@ -41,13 +47,19 @@ function fixture(): Turn {
 }
 
 it("shows one summary after completion and opens the exact reported versions", async () => {
-  localStorage.setItem("atte.locale", "en");
+  settings = createMemorySettings({ ...settings.values(), locale: "en" });
   const [active, setActive] = createSignal(true);
   const onOpen = vi.fn();
   render(() => (
-    <I18nProvider>
-      <TurnChangesSummary turn={fixture()} active={active()} onOpen={onOpen} />
-    </I18nProvider>
+    <SettingsProvider settings={settings}>
+      <I18nProvider>
+        <TurnChangesSummary
+          turn={fixture()}
+          active={active()}
+          onOpen={onOpen}
+        />
+      </I18nProvider>
+    </SettingsProvider>
   ));
   expect(screen.queryByRole("button")).toBeNull();
   setActive(false);
@@ -67,7 +79,7 @@ it("shows one summary after completion and opens the exact reported versions", a
 });
 
 it("shows totals for replayed discontinuous edits without requiring a stop reason", async () => {
-  localStorage.setItem("atte.locale", "en");
+  settings = createMemorySettings({ ...settings.values(), locale: "en" });
   const value = fixture();
   value.responseParts.push({
     kind: "tool",
@@ -80,9 +92,11 @@ it("shows totals for replayed discontinuous edits without requiring a stop reaso
     },
   });
   render(() => (
-    <I18nProvider>
-      <TurnChangesSummary turn={value} active={false} />
-    </I18nProvider>
+    <SettingsProvider settings={settings}>
+      <I18nProvider>
+        <TurnChangesSummary turn={value} active={false} />
+      </I18nProvider>
+    </SettingsProvider>
   ));
   const summary = await screen.findByRole("button", {
     name: /1 files changed.*View changes/,
@@ -93,12 +107,14 @@ it("shows totals for replayed discontinuous edits without requiring a stop reaso
 });
 
 it("replaces a tool's partial update without double counting and hides a reverted result", async () => {
-  localStorage.setItem("atte.locale", "en");
+  settings = createMemorySettings({ ...settings.values(), locale: "en" });
   const [value, setValue] = createSignal(fixture());
   render(() => (
-    <I18nProvider>
-      <TurnChangesSummary turn={value()} active={false} />
-    </I18nProvider>
+    <SettingsProvider settings={settings}>
+      <I18nProvider>
+        <TurnChangesSummary turn={value()} active={false} />
+      </I18nProvider>
+    </SettingsProvider>
   ));
   await screen.findByRole("button", { name: /View changes/ });
   setValue({ ...fixture(), responseParts: [] });

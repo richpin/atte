@@ -1,32 +1,43 @@
 import { cleanup, fireEvent, render, screen } from "@solidjs/testing-library";
 import userEvent from "@testing-library/user-event";
 import { I18nProvider } from "shared/i18n";
+import { createMemorySettings, SettingsProvider } from "shared/settings";
 import { createSignal } from "solid-js";
 import { afterEach, beforeEach, expect, it } from "vitest";
 import { findThreadMatches } from "../lib/thread-search";
 import { Thought } from "./Thought";
 import { WorkLog } from "./WorkLog";
 
-beforeEach(() => localStorage.setItem("atte.locale", "en"));
+let settings = createMemorySettings();
+beforeEach(() => {
+  settings = createMemorySettings();
+});
+
+beforeEach(
+  () =>
+    (settings = createMemorySettings({ ...settings.values(), locale: "en" })),
+);
 afterEach(cleanup);
 
 it("excludes folded content from search while preserving the nested disclosure", () => {
   const [collecting, setCollecting] = createSignal(true);
   const view = render(() => (
-    <I18nProvider>
-      <WorkLog count={1} collecting={collecting()}>
-        {() => (
-          <Thought
-            part={{
-              kind: "thought",
-              id: "thought",
-              text: "Searchable reasoning",
-            }}
-            active={false}
-          />
-        )}
-      </WorkLog>
-    </I18nProvider>
+    <SettingsProvider settings={settings}>
+      <I18nProvider>
+        <WorkLog count={1} collecting={collecting()}>
+          {() => (
+            <Thought
+              part={{
+                kind: "thought",
+                id: "thought",
+                text: "Searchable reasoning",
+              }}
+              active={false}
+            />
+          )}
+        </WorkLog>
+      </I18nProvider>
+    </SettingsProvider>
   ));
   fireEvent.click(screen.getByRole("button", { name: "Thinking" }));
   expect(findThreadMatches(view.container, "Searchable")).toHaveLength(1);
@@ -50,15 +61,20 @@ it.each([
 ])(
   "supports keyboard toggling and item counts in %s",
   async (locale, singular, plural) => {
-    localStorage.setItem("atte.locale", locale);
+    settings = createMemorySettings({
+      ...settings.values(),
+      locale: locale === "ko" ? "ko" : "en",
+    });
     const user = userEvent.setup();
     const [count, setCount] = createSignal(1);
     render(() => (
-      <I18nProvider>
-        <WorkLog count={count()} collecting={false}>
-          {() => <p>Activity</p>}
-        </WorkLog>
-      </I18nProvider>
+      <SettingsProvider settings={settings}>
+        <I18nProvider>
+          <WorkLog count={count()} collecting={false}>
+            {() => <p>Activity</p>}
+          </WorkLog>
+        </I18nProvider>
+      </SettingsProvider>
     ));
     await user.tab();
     const trigger = screen.getByRole("button", { name: singular });

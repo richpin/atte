@@ -9,6 +9,7 @@ import {
   type TranslationKey,
   useI18n,
 } from "shared/i18n";
+import { useSettings } from "shared/settings";
 import {
   isThemePreference,
   type ThemePreference,
@@ -49,6 +50,7 @@ export function GeneralPage(props: {
     setPreference: setLanguagePreference,
   } = useI18n();
   const { preference, setPreference } = useTheme();
+  const settings = useSettings();
 
   return (
     <main class="h-full min-h-0 overflow-y-auto bg-canvas text-ink">
@@ -60,6 +62,7 @@ export function GeneralPage(props: {
           </div>
           <SegmentedControl
             aria-label={t("theme.label")}
+            disabled={Boolean(settings.error())}
             value={preference()}
             onChange={(value) => {
               if (isThemePreference(value)) setPreference(value);
@@ -90,6 +93,7 @@ export function GeneralPage(props: {
           </div>
           <Select<LocalePreference>
             class="w-44 shrink-0"
+            disabled={Boolean(settings.error())}
             options={languageOptions}
             optionTextValue={(option) => t(languageLabels[option])}
             value={languagePreference()}

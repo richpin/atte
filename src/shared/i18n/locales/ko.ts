@@ -138,6 +138,8 @@ export const ko = {
     error: "업데이트에 실패했습니다. 연결을 확인하고 다시 시도해주세요.",
   },
   settings: {
+    fileError:
+      "~/.atte/settings.json을 읽거나 저장할 수 없습니다. 마지막 정상 설정을 유지합니다. 파일을 수정한 뒤 다시 시도하세요.",
     general: "일반",
     agents: "에이전트",
     skills: "스킬",

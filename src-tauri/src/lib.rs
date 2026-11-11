@@ -17,6 +17,7 @@ mod notifications;
 mod open_working_folder;
 mod platform;
 mod response_content;
+mod settings;
 mod skills;
 pub mod storage;
 mod tab_menu;
@@ -546,7 +547,10 @@ pub fn run() {
                 })?;
             }
             lifecycle::install(app.handle())?;
+            settings::install(app.handle())?;
             notifications::install(app.handle())?;
+            settings::observe_notifications(app.handle())?;
+            settings::watch(app.handle());
             Ok(())
         })
         .manage(Subscriptions::default())
@@ -655,7 +659,8 @@ pub fn run() {
                 notifications::subscribe_notifications,
                 notifications::set_notification_context,
                 notifications::request_notification_permission,
-                notifications::set_notification_preferences,
+                settings::subscribe_settings,
+                settings::update_settings,
                 notifications::acknowledge_notification_navigation,
                 notifications::open_notification_settings,
                 subscribe_thread_list,

@@ -7,9 +7,15 @@ import {
 } from "@solidjs/testing-library";
 import { invoke } from "@tauri-apps/api/core";
 import { I18nProvider } from "shared/i18n";
+import { createMemorySettings, SettingsProvider } from "shared/settings";
 import { createSignal } from "solid-js";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { SkillsPage } from "./SkillsPage";
+
+let settings = createMemorySettings();
+beforeEach(() => {
+  settings = createMemorySettings();
+});
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 
@@ -30,14 +36,16 @@ const skill = {
 
 function renderPage(items = projects) {
   return render(() => (
-    <I18nProvider>
-      <SkillsPage active projects={items} />
-    </I18nProvider>
+    <SettingsProvider settings={settings}>
+      <I18nProvider>
+        <SkillsPage active projects={items} />
+      </I18nProvider>
+    </SettingsProvider>
   ));
 }
 
 beforeEach(() => {
-  localStorage.setItem("atte.locale", "en");
+  settings = createMemorySettings({ ...settings.values(), locale: "en" });
   vi.mocked(invoke).mockImplementation(async (command) => {
     if (command === "list_skills") return [skill];
     if (command === "read_skill_document")
@@ -229,9 +237,11 @@ it("keeps a successful uninstall result separate from a failed list reload", asy
 it("returns to Global when the sidebar project disappears", async () => {
   const [available, setAvailable] = createSignal(projects);
   render(() => (
-    <I18nProvider>
-      <SkillsPage active projects={available()} />
-    </I18nProvider>
+    <SettingsProvider settings={settings}>
+      <I18nProvider>
+        <SkillsPage active projects={available()} />
+      </I18nProvider>
+    </SettingsProvider>
   ));
   await screen.findByText("review-work");
   fireEvent.click(

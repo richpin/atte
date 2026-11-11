@@ -1,12 +1,18 @@
 import { cleanup, render, screen } from "@solidjs/testing-library";
 import userEvent from "@testing-library/user-event";
 import { I18nProvider } from "shared/i18n";
+import { createMemorySettings, SettingsProvider } from "shared/settings";
 import { ThemeProvider } from "shared/theme";
 import { createSignal } from "solid-js";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { formAnswer, formDefaults } from "../model/elicitation";
 import type { ElicitationRequest, FormValues } from "../model/types";
 import { ElicitationInput } from "./ElicitationInput";
+
+let settings = createMemorySettings();
+beforeEach(() => {
+  settings = createMemorySettings();
+});
 
 const request: ElicitationRequest = {
   kind: "elicitation",
@@ -43,7 +49,10 @@ const request: ElicitationRequest = {
   },
 };
 
-beforeEach(() => localStorage.setItem("atte.locale", "en"));
+beforeEach(
+  () =>
+    (settings = createMemorySettings({ ...settings.values(), locale: "en" })),
+);
 afterEach(() => {
   cleanup();
   localStorage.clear();
@@ -78,33 +87,35 @@ function setup(disabled = false, errors: Record<string, string> = {}) {
   const answer = vi.fn();
   const [values, setValues] = createSignal<FormValues>(formDefaults(request));
   render(() => (
-    <ThemeProvider>
-      <I18nProvider>
-        <form
-          onSubmit={(event) => {
-            event.preventDefault();
-            answer(formAnswer(request, values()));
-          }}
-        >
-          <ElicitationInput
-            request={request}
-            agentName="Fixture Agent"
-            values={values()}
-            errors={errors}
-            disabled={disabled}
-            onChange={(name, value) =>
-              setValues((previous) => {
-                const next = { ...previous };
-                if (value === undefined) delete next[name];
-                else next[name] = value;
-                return next;
-              })
-            }
-            onAnswer={(action) => answer({ action })}
-          />
-        </form>
-      </I18nProvider>
-    </ThemeProvider>
+    <SettingsProvider settings={settings}>
+      <ThemeProvider>
+        <I18nProvider>
+          <form
+            onSubmit={(event) => {
+              event.preventDefault();
+              answer(formAnswer(request, values()));
+            }}
+          >
+            <ElicitationInput
+              request={request}
+              agentName="Fixture Agent"
+              values={values()}
+              errors={errors}
+              disabled={disabled}
+              onChange={(name, value) =>
+                setValues((previous) => {
+                  const next = { ...previous };
+                  if (value === undefined) delete next[name];
+                  else next[name] = value;
+                  return next;
+                })
+              }
+              onAnswer={(action) => answer({ action })}
+            />
+          </form>
+        </I18nProvider>
+      </ThemeProvider>
+    </SettingsProvider>
   ));
   return { answer, values };
 }

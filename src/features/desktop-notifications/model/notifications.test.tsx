@@ -7,6 +7,12 @@ import {
 } from "@solidjs/testing-library";
 import { invoke } from "@tauri-apps/api/core";
 import { I18nProvider } from "shared/i18n";
+import {
+  initializeSettings,
+  type SettingsModel,
+  SettingsProvider,
+  type SettingsSnapshot,
+} from "shared/settings";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { NotificationState } from "../api/notifications";
 import { NotificationSettings } from "../ui/NotificationSettings";
@@ -17,6 +23,7 @@ import {
 
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: vi.fn(),
+  isTauri: () => true,
   Channel: class {
     onmessage = (_state: NotificationState) => {};
   },
@@ -33,11 +40,28 @@ const initial = (): NotificationState => ({
 let receive: (state: NotificationState) => void;
 let model: DesktopNotifications;
 let snapshot: NotificationState;
+let settings: SettingsModel;
+let settingsReceive: (snapshot: SettingsSnapshot) => void;
+const settingsSnapshot = (): SettingsSnapshot => ({
+  values: {
+    theme: "system",
+    locale: "en",
+    notifications: { completion: true, permission: true },
+  },
+  error: null,
+  migrated: true,
+});
 
-beforeEach(() => {
+beforeEach(async () => {
   snapshot = initial();
-  localStorage.setItem("atte.locale", "en");
   vi.mocked(invoke).mockImplementation(async (command, args) => {
+    if (command === "subscribe_settings") {
+      settingsReceive = (
+        args as { channel: { onmessage: typeof settingsReceive } }
+      ).channel.onmessage;
+      settingsReceive(settingsSnapshot());
+      return "settings-subscription";
+    }
     if (command === "subscribe_notifications") {
       receive = (args as { channel: { onmessage: typeof receive } }).channel
         .onmessage;
@@ -45,6 +69,7 @@ beforeEach(() => {
       return "notification-subscription";
     }
   });
+  settings = await initializeSettings();
 });
 afterEach(() => {
   cleanup();
@@ -54,9 +79,11 @@ afterEach(() => {
 
 function mount() {
   render(() => (
-    <I18nProvider>
-      <Settings />
-    </I18nProvider>
+    <SettingsProvider settings={settings}>
+      <I18nProvider>
+        <Settings />
+      </I18nProvider>
+    </SettingsProvider>
   ));
   function Settings() {
     model = createDesktopNotifications();
@@ -86,7 +113,7 @@ it("uses backend snapshots for confirmation without optimistic acknowledgements"
   });
 });
 
-it("saves separate settings and waits for the subscription before displaying changes", async () => {
+it("saves a partial notification setting and waits for the settings subscription", async () => {
   mount();
   const toggle = await screen.findByRole("switch", {
     name: "Response completion notifications",
@@ -94,15 +121,14 @@ it("saves separate settings and waits for the subscription before displaying cha
   await waitFor(() => expect(toggle).toHaveProperty("disabled", false));
   fireEvent.click(toggle);
   await waitFor(() =>
-    expect(invoke).toHaveBeenCalledWith("set_notification_preferences", {
-      preferences: { completion: false, permission: true },
+    expect(invoke).toHaveBeenCalledWith("update_settings", {
+      patch: { notifications: { completion: false } },
     }),
   );
-  expect(model.state()?.preferences.completion).toBe(true);
-  receive({
-    ...snapshot,
-    preferences: { completion: false, permission: true },
-  });
+  expect(model.preferences().completion).toBe(true);
+  const next = settingsSnapshot();
+  next.values.notifications.completion = false;
+  settingsReceive(next);
   await waitFor(() =>
     expect(toggle.getAttribute("aria-checked")).toBe("false"),
   );
@@ -112,13 +138,13 @@ it("keeps settings on save failure", async () => {
   mount();
   const original = vi.mocked(invoke).getMockImplementation();
   vi.mocked(invoke).mockImplementation((command, args) =>
-    command === "set_notification_preferences"
+    command === "update_settings"
       ? Promise.reject(new Error("disk full"))
       : (original?.(command, args) ?? Promise.resolve()),
   );
   await waitFor(() => expect(model.loading()).toBe(false));
   await model.save({ completion: false, permission: true });
-  expect(model.state()?.preferences.completion).toBe(true);
+  expect(model.preferences().completion).toBe(true);
   expect(model.error()).toBe(true);
 });
 

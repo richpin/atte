@@ -1,10 +1,16 @@
 import { cleanup, render, screen, waitFor } from "@solidjs/testing-library";
 import userEvent from "@testing-library/user-event";
 import { I18nProvider } from "shared/i18n";
+import { createMemorySettings, SettingsProvider } from "shared/settings";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createAppUpdates } from "../model/updates";
 import { AppUpdateNotice } from "./AppUpdateNotice";
 import { AppUpdateSettings } from "./AppUpdateSettings";
+
+let settings = createMemorySettings();
+beforeEach(() => {
+  settings = createMemorySettings();
+});
 
 const { invoke } = vi.hoisted(() => ({ invoke: vi.fn() }));
 vi.mock("@tauri-apps/api/core", () => ({
@@ -26,17 +32,19 @@ function mount(withSettings = false) {
   render(() => {
     const updates = createAppUpdates();
     return (
-      <I18nProvider>
-        <AppUpdateNotice updates={updates} />
-        {withSettings && <AppUpdateSettings updates={updates} />}
-      </I18nProvider>
+      <SettingsProvider settings={settings}>
+        <I18nProvider>
+          <AppUpdateNotice updates={updates} />
+          {withSettings && <AppUpdateSettings updates={updates} />}
+        </I18nProvider>
+      </SettingsProvider>
     );
   });
 }
 
 beforeEach(() => {
   localStorage.clear();
-  localStorage.setItem("atte.locale", "en");
+  settings = createMemorySettings({ ...settings.values(), locale: "en" });
   invoke.mockReset();
   invoke.mockImplementation((command) =>
     Promise.resolve(command === "check_app_update" ? available : undefined),

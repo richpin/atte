@@ -1,36 +1,47 @@
 import { cleanup, fireEvent, render, screen } from "@solidjs/testing-library";
 import { I18nProvider } from "shared/i18n";
+import { createMemorySettings, SettingsProvider } from "shared/settings";
 import { createSignal } from "solid-js";
 import { afterEach, beforeEach, expect, it } from "vitest";
 import type { ToolCall as ToolData } from "../model/types";
 import { ToolCall } from "./ToolCall";
 
-beforeEach(() => localStorage.setItem("atte.locale", "en"));
+let settings = createMemorySettings();
+beforeEach(() => {
+  settings = createMemorySettings();
+});
+
+beforeEach(
+  () =>
+    (settings = createMemorySettings({ ...settings.values(), locale: "en" })),
+);
 afterEach(cleanup);
 
 it("shows resource-link-only results inside expanded details", () => {
   const view = render(() => (
-    <I18nProvider>
-      <ToolCall
-        tool={{
-          title: "View Image /project/result.png",
-          status: "completed",
-          content: [
-            {
-              type: "content",
-              content: {
-                type: "resource_link",
-                name: "Result file",
-                uri: "file:///project/result.png",
-                mimeType: "image/png",
+    <SettingsProvider settings={settings}>
+      <I18nProvider>
+        <ToolCall
+          tool={{
+            title: "View Image /project/result.png",
+            status: "completed",
+            content: [
+              {
+                type: "content",
+                content: {
+                  type: "resource_link",
+                  name: "Result file",
+                  uri: "file:///project/result.png",
+                  mimeType: "image/png",
+                },
               },
-            },
-          ],
-        }}
-        active={false}
-        approvalPending={false}
-      />
-    </I18nProvider>
+            ],
+          }}
+          active={false}
+          approvalPending={false}
+        />
+      </I18nProvider>
+    </SettingsProvider>
   ));
   expect(screen.queryByText("Result file")).toBeNull();
   expect(view.container.querySelector("[data-thread-search-root]")).toBeNull();
@@ -55,9 +66,11 @@ it("keeps details expanded as a tool finishes and displays output literally", as
     locations: [{ path: "/project/test.ts", line: 3 }],
   });
   render(() => (
-    <I18nProvider>
-      <ToolCall tool={tool()} active approvalPending={false} />
-    </I18nProvider>
+    <SettingsProvider settings={settings}>
+      <I18nProvider>
+        <ToolCall tool={tool()} active approvalPending={false} />
+      </I18nProvider>
+    </SettingsProvider>
   ));
   expect(screen.queryByText(/"command"/)).toBeNull();
   fireEvent.click(screen.getByRole("button", { name: /Run tests/ }));
@@ -86,14 +99,16 @@ it("distinguishes approval, interrupted and unknown completion without guessing 
   const [approval, setApproval] = createSignal(false);
   const [interrupted, setInterrupted] = createSignal(false);
   render(() => (
-    <I18nProvider>
-      <ToolCall
-        tool={{}}
-        active={active()}
-        approvalPending={approval()}
-        interrupted={interrupted()}
-      />
-    </I18nProvider>
+    <SettingsProvider settings={settings}>
+      <I18nProvider>
+        <ToolCall
+          tool={{}}
+          active={active()}
+          approvalPending={approval()}
+          interrupted={interrupted()}
+        />
+      </I18nProvider>
+    </SettingsProvider>
   ));
   expect(screen.getByText("Waiting")).toBeTruthy();
   setApproval(true);
@@ -107,21 +122,27 @@ it("distinguishes approval, interrupted and unknown completion without guessing 
 
 it("shows failure details only when expanded and marks unsupported result types", () => {
   render(() => (
-    <I18nProvider>
-      <ToolCall
-        tool={{
-          title: "Edit",
-          status: "failed",
-          rawOutput: "Permission denied\nTry again",
-          content: [
-            { type: "diff", path: "/project/file.ts", newText: "new content" },
-            { type: "terminal", terminalId: "term-1" },
-          ],
-        }}
-        active={false}
-        approvalPending={false}
-      />
-    </I18nProvider>
+    <SettingsProvider settings={settings}>
+      <I18nProvider>
+        <ToolCall
+          tool={{
+            title: "Edit",
+            status: "failed",
+            rawOutput: "Permission denied\nTry again",
+            content: [
+              {
+                type: "diff",
+                path: "/project/file.ts",
+                newText: "new content",
+              },
+              { type: "terminal", terminalId: "term-1" },
+            ],
+          }}
+          active={false}
+          approvalPending={false}
+        />
+      </I18nProvider>
+    </SettingsProvider>
   ));
   expect(screen.getByText("Failed")).toBeTruthy();
   expect(screen.queryByText(/Permission denied/)).toBeNull();

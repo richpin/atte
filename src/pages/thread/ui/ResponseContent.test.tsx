@@ -6,6 +6,7 @@ import {
   waitFor,
 } from "@solidjs/testing-library";
 import { I18nProvider } from "shared/i18n";
+import { createMemorySettings, SettingsProvider } from "shared/settings";
 import { WebLinkProvider } from "shared/ui";
 import { createSignal } from "solid-js";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
@@ -18,6 +19,11 @@ import type { ResponseContent } from "../model/types";
 import { ResponseContentView } from "./ResponseContent";
 import { ToolCall } from "./ToolCall";
 
+let settings = createMemorySettings();
+beforeEach(() => {
+  settings = createMemorySettings();
+});
+
 vi.mock("../api/threads", () => ({
   readResponseContent: vi.fn(),
   openResponseFile: vi.fn(),
@@ -29,7 +35,7 @@ const writeClipboard = vi.fn();
 beforeEach(() => {
   vi.spyOn(HTMLMediaElement.prototype, "pause").mockImplementation(() => {});
   vi.spyOn(HTMLMediaElement.prototype, "load").mockImplementation(() => {});
-  localStorage.setItem("atte.locale", "en");
+  settings = createMemorySettings({ ...settings.values(), locale: "en" });
   let next = 0;
   createUrl.mockImplementation(() => `blob:content-${++next}`);
   vi.stubGlobal("URL", {
@@ -63,13 +69,15 @@ it("enlarges received images, releases hidden and replaced previews, and saves t
   });
   const [visible, setVisible] = createSignal(true);
   const view = render(() => (
-    <I18nProvider>
-      <ResponseContentView
-        content={content()}
-        threadId="thread"
-        visible={visible()}
-      />
-    </I18nProvider>
+    <SettingsProvider settings={settings}>
+      <I18nProvider>
+        <ResponseContentView
+          content={content()}
+          threadId="thread"
+          visible={visible()}
+        />
+      </I18nProvider>
+    </SettingsProvider>
   ));
   const image = await screen.findByAltText("result.png");
   fireEvent.load(image);
@@ -106,9 +114,11 @@ it("shows failed reads and failed image decoding without losing the save action"
     mimeType: "image/png",
   });
   render(() => (
-    <I18nProvider>
-      <ResponseContentView content={content()} threadId="thread" />
-    </I18nProvider>
+    <SettingsProvider settings={settings}>
+      <I18nProvider>
+        <ResponseContentView content={content()} threadId="thread" />
+      </I18nProvider>
+    </SettingsProvider>
   ));
   expect(await screen.findByRole("alert")).toBeTruthy();
   expect(screen.getByRole("button", { name: "Save as…" })).toBeTruthy();
@@ -122,18 +132,20 @@ it("shows failed reads and failed image decoding without losing the save action"
 it("uses manual audio controls and removes the source when hidden", async () => {
   const [visible, setVisible] = createSignal(true);
   const view = render(() => (
-    <I18nProvider>
-      <ResponseContentView
-        threadId="thread"
-        visible={visible()}
-        content={{
-          type: "audio",
-          id: "sound",
-          mimeType: "audio/wav",
-          hasData: true,
-        }}
-      />
-    </I18nProvider>
+    <SettingsProvider settings={settings}>
+      <I18nProvider>
+        <ResponseContentView
+          threadId="thread"
+          visible={visible()}
+          content={{
+            type: "audio",
+            id: "sound",
+            mimeType: "audio/wav",
+            hasData: true,
+          }}
+        />
+      </I18nProvider>
+    </SettingsProvider>
   ));
   await waitFor(() =>
     expect(view.container.querySelector("audio")).toBeTruthy(),
@@ -153,28 +165,30 @@ it("uses manual audio controls and removes the source when hidden", async () => 
 it("displays resource text literally and does not fetch links or unsupported blobs", async () => {
   const source = "<script>unsafe()</script> **literal**";
   const view = render(() => (
-    <I18nProvider>
-      <ResponseContentView
-        threadId="thread"
-        content={{
-          type: "resource",
-          id: "text",
-          name: "source.html",
-          uri: "file:///old.html",
-          text: source,
-          hasData: true,
-        }}
-      />
-      <ResponseContentView
-        content={{
-          type: "resource",
-          id: "pdf",
-          mimeType: "application/pdf",
-          hasData: true,
-        }}
-        threadId="thread"
-      />
-    </I18nProvider>
+    <SettingsProvider settings={settings}>
+      <I18nProvider>
+        <ResponseContentView
+          threadId="thread"
+          content={{
+            type: "resource",
+            id: "text",
+            name: "source.html",
+            uri: "file:///old.html",
+            text: source,
+            hasData: true,
+          }}
+        />
+        <ResponseContentView
+          content={{
+            type: "resource",
+            id: "pdf",
+            mimeType: "application/pdf",
+            hasData: true,
+          }}
+          threadId="thread"
+        />
+      </I18nProvider>
+    </SettingsProvider>
   ));
   expect(view.container.querySelector("script")).toBeNull();
   expect(view.container.querySelector("details")?.open).toBe(false);
@@ -198,15 +212,17 @@ it("renders compact hyperlinks and opens web and local links through their exist
     uri: "https://example.com/report",
   });
   render(() => (
-    <I18nProvider>
-      <WebLinkProvider onOpen={openWeb}>
-        <ResponseContentView
-          content={content()}
-          threadId="thread"
-          onOpenFile={openFile}
-        />
-      </WebLinkProvider>
-    </I18nProvider>
+    <SettingsProvider settings={settings}>
+      <I18nProvider>
+        <WebLinkProvider onOpen={openWeb}>
+          <ResponseContentView
+            content={content()}
+            threadId="thread"
+            onOpenFile={openFile}
+          />
+        </WebLinkProvider>
+      </I18nProvider>
+    </SettingsProvider>
   ));
   expect(openWeb).not.toHaveBeenCalled();
   expect(readResponseContent).not.toHaveBeenCalled();
@@ -253,41 +269,43 @@ it("renders compact hyperlinks and opens web and local links through their exist
 
 it("keeps previews visible while text and resource links follow the tool details toggle", async () => {
   const view = render(() => (
-    <I18nProvider>
-      <ToolCall
-        tool={{
-          title: "Results",
-          rawInput: { prompt: "Generate an image" },
-          rawOutput: { execution: "done" },
-          content: [
-            { type: "content", content: { type: "text", text: "First" } },
-            {
-              type: "content",
-              content: {
-                type: "resource_link",
-                name: "Result file",
-                uri: "file:///project/result.png",
-                mimeType: "image/png",
+    <SettingsProvider settings={settings}>
+      <I18nProvider>
+        <ToolCall
+          tool={{
+            title: "Results",
+            rawInput: { prompt: "Generate an image" },
+            rawOutput: { execution: "done" },
+            content: [
+              { type: "content", content: { type: "text", text: "First" } },
+              {
+                type: "content",
+                content: {
+                  type: "resource_link",
+                  name: "Result file",
+                  uri: "file:///project/result.png",
+                  mimeType: "image/png",
+                },
               },
-            },
-            {
-              type: "content",
-              content: {
-                type: "image",
-                id: "screenshot",
-                name: "Between.png",
-                mimeType: "image/png",
-                hasData: true,
+              {
+                type: "content",
+                content: {
+                  type: "image",
+                  id: "screenshot",
+                  name: "Between.png",
+                  mimeType: "image/png",
+                  hasData: true,
+                },
               },
-            },
-            { type: "content", content: { type: "text", text: "Last" } },
-          ],
-        }}
-        threadId="thread"
-        active={false}
-        approvalPending={false}
-      />
-    </I18nProvider>
+              { type: "content", content: { type: "text", text: "Last" } },
+            ],
+          }}
+          threadId="thread"
+          active={false}
+          approvalPending={false}
+        />
+      </I18nProvider>
+    </SettingsProvider>
   ));
   await screen.findByAltText("Between.png");
   expect(
@@ -338,9 +356,11 @@ it("confirms copying only after clipboard success, resets feedback, and keeps fa
     hasData: true,
   });
   render(() => (
-    <I18nProvider>
-      <ResponseContentView content={content()} threadId="thread" />
-    </I18nProvider>
+    <SettingsProvider settings={settings}>
+      <I18nProvider>
+        <ResponseContentView content={content()} threadId="thread" />
+      </I18nProvider>
+    </SettingsProvider>
   ));
   fireEvent.click(screen.getByRole("button", { name: "Copy" }));
   expect(screen.queryByRole("button", { name: "Copied" })).toBeNull();

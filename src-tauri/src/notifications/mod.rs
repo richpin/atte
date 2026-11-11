@@ -12,12 +12,9 @@ mod state;
 use crate::thread::Threads;
 pub(crate) use state::Preferences;
 use state::{Authorization, Effect, Failure, Policy, Snapshot};
-use std::{
-    path::{Path, PathBuf},
-    sync::{
-        atomic::{AtomicBool, Ordering},
-        Arc, Mutex,
-    },
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc, Mutex,
 };
 use tauri::{ipc::Channel, AppHandle, Manager, State};
 use tokio::sync::{mpsc, oneshot};
@@ -27,8 +24,6 @@ pub(crate) struct Notifications {
     policy: Mutex<Policy>,
     subscribers: Mutex<Vec<mpsc::UnboundedSender<Snapshot>>>,
     activity: Arc<AtomicBool>,
-    preference_path: PathBuf,
-    preference_write: tokio::sync::Mutex<()>,
 }
 
 impl Notifications {
@@ -51,36 +46,14 @@ impl Notifications {
 }
 
 pub(crate) fn install(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
-    let path = app
-        .path()
-        .app_data_dir()?
-        .join("notification-preferences.json");
-    let (preferences, failure) = match std::fs::read(&path) {
-        Ok(bytes) => match serde_json::from_slice(&bytes) {
-            Ok(value) => (value, None),
-            Err(error) => {
-                eprintln!("notification preferences: {error}");
-                (Preferences::default(), Some(Failure::Preferences))
-            }
-        },
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            (Preferences::default(), None)
-        }
-        Err(error) => {
-            eprintln!("notification preferences: {error}");
-            (Preferences::default(), Some(Failure::Preferences))
-        }
-    };
     app.manage(Notifications {
         policy: Mutex::new(Policy::new(
             cfg!(any(target_os = "macos", windows)),
-            preferences,
-            failure,
+            Preferences::default(),
+            None,
         )),
         subscribers: Mutex::default(),
         activity: Arc::new(AtomicBool::new(!cfg!(any(target_os = "macos", windows)))),
-        preference_path: path,
-        preference_write: tokio::sync::Mutex::new(()),
     });
     #[cfg(any(target_os = "macos", windows))]
     if let Err(error) = native::install(app) {
@@ -308,47 +281,10 @@ pub(crate) async fn request_notification_permission(app: AppHandle) -> Result<()
     .await
 }
 
-fn save_preferences(path: &Path, preferences: Preferences) -> Result<(), String> {
-    let parent = path
-        .parent()
-        .ok_or("Notification preferences directory unavailable")?;
-    std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
-    let mut file = tempfile::NamedTempFile::new_in(parent).map_err(|error| error.to_string())?;
-    serde_json::to_writer(file.as_file_mut(), &preferences).map_err(|error| error.to_string())?;
-    file.as_file()
-        .sync_all()
-        .map_err(|error| error.to_string())?;
-    file.persist(path).map_err(|error| error.to_string())?;
-    Ok(())
-}
-
-#[tauri::command]
-pub(crate) async fn set_notification_preferences(
-    app: AppHandle,
-    preferences: Preferences,
-) -> Result<(), String> {
-    let service = app.state::<Notifications>();
-    let _write = service.preference_write.lock().await;
-    let path = service.preference_path.clone();
-    let saved = tauri::async_runtime::spawn_blocking(move || save_preferences(&path, preferences))
-        .await
-        .map_err(|error| error.to_string())?;
-    on_main(&app, move |app| match saved {
-        Ok(()) => {
-            update(app, |policy| {
-                if policy.snapshot.failure == Some(Failure::Preferences) {
-                    policy.snapshot.failure = None;
-                }
-                policy.preferences(preferences)
-            });
-            Ok(())
-        }
-        Err(error) => {
-            fail(app, Failure::Preferences, &error);
-            Err(error)
-        }
-    })
-    .await?
+pub(crate) fn apply_preferences(app: &AppHandle, preferences: Preferences) {
+    schedule(app, move |app| {
+        update(app, |policy| policy.preferences(preferences))
+    });
 }
 
 #[tauri::command]

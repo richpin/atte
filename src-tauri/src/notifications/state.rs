@@ -35,7 +35,6 @@ pub(crate) enum Authorization {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) enum Failure {
-    Preferences,
     Permission,
     Delivery,
     Unavailable,

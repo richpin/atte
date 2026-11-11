@@ -1,19 +1,30 @@
 import { cleanup, fireEvent, render, screen } from "@solidjs/testing-library";
 import { I18nProvider } from "shared/i18n";
+import { createMemorySettings, SettingsProvider } from "shared/settings";
 import { createSignal } from "solid-js";
 import { afterEach, beforeEach, expect, it } from "vitest";
 import type { ContextUsage } from "../model/types";
 import { ThreadInfoCard } from "./ThreadInfoCard";
 
-beforeEach(() => localStorage.setItem("atte.locale", "en"));
+let settings = createMemorySettings();
+beforeEach(() => {
+  settings = createMemorySettings();
+});
+
+beforeEach(
+  () =>
+    (settings = createMemorySettings({ ...settings.values(), locale: "en" })),
+);
 afterEach(cleanup);
 
 it("reacts to replacement and compaction with exact accessible usage", () => {
   const [usage, setUsage] = createSignal<ContextUsage | null>(null);
   render(() => (
-    <I18nProvider>
-      <ThreadInfoCard usage={usage()} onClose={() => undefined} />
-    </I18nProvider>
+    <SettingsProvider settings={settings}>
+      <I18nProvider>
+        <ThreadInfoCard usage={usage()} onClose={() => undefined} />
+      </I18nProvider>
+    </SettingsProvider>
   ));
   expect(screen.getByText("Usage unavailable")).toBeTruthy();
   expect(screen.queryByRole("progressbar", { hidden: true })).toBeNull();
@@ -38,12 +49,14 @@ it("reacts to replacement and compaction with exact accessible usage", () => {
 
 it("keeps raw counts below K and bounds the progress without altering reported usage", () => {
   render(() => (
-    <I18nProvider>
-      <ThreadInfoCard
-        usage={{ used: 999, size: 900 }}
-        onClose={() => undefined}
-      />
-    </I18nProvider>
+    <SettingsProvider settings={settings}>
+      <I18nProvider>
+        <ThreadInfoCard
+          usage={{ used: 999, size: 900 }}
+          onClose={() => undefined}
+        />
+      </I18nProvider>
+    </SettingsProvider>
   ));
   expect(screen.getByText("111% (999/900)")).toBeTruthy();
   expect(
@@ -56,9 +69,11 @@ it("keeps raw counts below K and bounds the progress without altering reported u
 it("closes from the top-right action", () => {
   let closed = false;
   render(() => (
-    <I18nProvider>
-      <ThreadInfoCard usage={null} onClose={() => (closed = true)} />
-    </I18nProvider>
+    <SettingsProvider settings={settings}>
+      <I18nProvider>
+        <ThreadInfoCard usage={null} onClose={() => (closed = true)} />
+      </I18nProvider>
+    </SettingsProvider>
   ));
 
   fireEvent.click(

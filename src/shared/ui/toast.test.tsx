@@ -1,6 +1,7 @@
 import { cleanup, fireEvent, render, screen } from "@solidjs/testing-library";
 import { afterEach, expect, it, vi } from "vitest";
 import { I18nProvider } from "../i18n";
+import { createMemorySettings, SettingsProvider } from "../settings";
 import { showErrorToast, ToastHost } from "./toast";
 
 afterEach(() => {
@@ -11,11 +12,12 @@ afterEach(() => {
 });
 
 function mount(locale: "en" | "ko") {
-  localStorage.setItem("atte.locale", locale);
   render(() => (
-    <I18nProvider>
-      <ToastHost />
-    </I18nProvider>
+    <SettingsProvider settings={createMemorySettings({ locale })}>
+      <I18nProvider>
+        <ToastHost />
+      </I18nProvider>
+    </SettingsProvider>
   ));
 }
 

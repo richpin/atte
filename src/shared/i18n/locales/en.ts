@@ -132,6 +132,8 @@ export const en = {
     error: "Update failed. Check your connection and try again.",
   },
   settings: {
+    fileError:
+      "Cannot load or save ~/.atte/settings.json. Your last settings are kept. Fix the file and retry.",
     general: "General",
     agents: "Agents",
     skills: "Skills",

@@ -45,12 +45,15 @@ export function NotificationSettings(props: {
           {(kind) => (
             <Switch
               class="flex items-center justify-between gap-4"
-              checked={state()?.preferences[kind] ?? true}
-              disabled={model().saving() || model().loading() || !state()}
+              checked={model().preferences()[kind]}
+              disabled={
+                model().saving() ||
+                model().loading() ||
+                !state() ||
+                Boolean(model().settingsError())
+              }
               onChange={(checked) => {
-                const preferences = state()?.preferences;
-                if (preferences)
-                  void model().save({ ...preferences, [kind]: checked });
+                void model().save({ [kind]: checked });
               }}
             >
               <SwitchLabel>{t(`desktopNotifications.${kind}`)}</SwitchLabel>

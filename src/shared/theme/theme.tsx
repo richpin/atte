@@ -1,35 +1,15 @@
-import { makePersisted } from "@solid-primitives/storage";
+import { createPrefersDark } from "@solid-primitives/media";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import {
-  createContext,
-  createEffect,
-  createSignal,
-  type JSX,
-  onCleanup,
-  type Signal,
-  useContext,
-} from "solid-js";
+import { createContext, createEffect, type JSX, useContext } from "solid-js";
+import { useSettings } from "../settings";
 
 export type ThemePreference = "system" | "light" | "dark";
 export type ResolvedTheme = Exclude<ThemePreference, "system">;
 
-const storageKey = "atte.theme";
 const darkModeQuery = "(prefers-color-scheme: dark)";
 
 export function isThemePreference(value: string): value is ThemePreference {
   return value === "system" || value === "light" || value === "dark";
-}
-
-function readPreference(): ThemePreference {
-  if (typeof localStorage === "undefined") return "system";
-  try {
-    const stored = localStorage.getItem(storageKey);
-    if (stored === null || isThemePreference(stored)) return stored ?? "system";
-    localStorage.setItem(storageKey, "system");
-  } catch {
-    return "system";
-  }
-  return "system";
 }
 
 function systemTheme(): ResolvedTheme {
@@ -50,8 +30,8 @@ function applyDocumentTheme(theme: ResolvedTheme) {
   document.documentElement.style.colorScheme = theme;
 }
 
-export function initializeTheme() {
-  applyDocumentTheme(resolveTheme(readPreference()));
+export function initializeTheme(preference: ThemePreference = "system") {
+  applyDocumentTheme(resolveTheme(preference));
 }
 
 interface ThemeContextValue {
@@ -67,15 +47,11 @@ const ThemeContext = createContext<ThemeContextValue>({
 });
 
 export function ThemeProvider(props: { children: JSX.Element }) {
-  const [system, setSystem] = createSignal(systemTheme());
-  const [preference, setPreference] = makePersisted<
-    ThemePreference,
-    Signal<ThemePreference>
-  >(createSignal<ThemePreference>(readPreference()), {
-    name: storageKey,
-    serialize: (value) => value,
-    deserialize: (value) => (isThemePreference(value) ? value : "system"),
-  });
+  const prefersDark =
+    typeof window.matchMedia === "function" ? createPrefersDark() : () => false;
+  const system = (): ResolvedTheme => (prefersDark() ? "dark" : "light");
+  const settings = useSettings();
+  const preference = () => settings.values().theme;
   const resolvedTheme = (): ResolvedTheme =>
     preference() === "system" ? system() : (preference() as ResolvedTheme);
 
@@ -91,23 +67,12 @@ export function ThemeProvider(props: { children: JSX.Element }) {
     }
   });
 
-  if (
-    typeof window !== "undefined" &&
-    typeof window.matchMedia === "function"
-  ) {
-    const media = window.matchMedia(darkModeQuery);
-    const updateSystemTheme = (event: MediaQueryListEvent) =>
-      setSystem(event.matches ? "dark" : "light");
-    media.addEventListener("change", updateSystemTheme);
-    onCleanup(() => media.removeEventListener("change", updateSystemTheme));
-  }
-
   return (
     <ThemeContext.Provider
       value={{
         preference,
         resolvedTheme,
-        setPreference: (value) => setPreference(value),
+        setPreference: (theme) => void settings.update({ theme }),
       }}
     >
       {props.children}

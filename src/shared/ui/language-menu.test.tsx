@@ -2,9 +2,18 @@ import { cleanup, render, screen } from "@solidjs/testing-library";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, expect, test } from "vitest";
 import { I18nProvider, useI18n } from "../i18n";
+import {
+  createMemorySettings,
+  type SettingsModel,
+  SettingsProvider,
+} from "../settings";
 import { LanguageMenu } from "./language-menu";
 
-beforeEach(() => localStorage.clear());
+let settings: SettingsModel;
+beforeEach(() => {
+  localStorage.clear();
+  settings = createMemorySettings();
+});
 afterEach(cleanup);
 
 test("changes the app language from the menu", async () => {
@@ -15,11 +24,12 @@ test("changes the app language from the menu", async () => {
 
   expect(await screen.findByRole("button", { name: "Language" })).toBeTruthy();
   expect(screen.getByText("What do you want to build?")).toBeTruthy();
-  expect(localStorage.getItem("atte.locale")).toBe("en");
+  expect(settings.values().locale).toBe("en");
+  expect(localStorage.getItem("atte.locale")).toBeNull();
 });
 
 test("restores a saved language and can return to the system setting", async () => {
-  localStorage.setItem("atte.locale", "en");
+  settings = createMemorySettings({ locale: "en" });
   renderApp();
 
   expect(screen.getByText("What do you want to build?")).toBeTruthy();
@@ -30,15 +40,17 @@ test("restores a saved language and can return to the system setting", async () 
 
   expect(await screen.findByRole("button", { name: "언어" })).toBeTruthy();
   expect(screen.getByText("무엇을 만들고 싶으세요?")).toBeTruthy();
-  expect(localStorage.getItem("atte.locale")).toBe("system");
+  expect(settings.values().locale).toBe("system");
 });
 
 function renderApp() {
   render(() => (
-    <I18nProvider>
-      <LanguageMenu />
-      <Probe />
-    </I18nProvider>
+    <SettingsProvider settings={settings}>
+      <I18nProvider>
+        <LanguageMenu />
+        <Probe />
+      </I18nProvider>
+    </SettingsProvider>
   ));
 }
 
