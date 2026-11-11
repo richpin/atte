@@ -7,6 +7,7 @@ settings:
 packageExtensionsChecksum: sha256-M8fihjQgjUsljbQKrXW3Z22E0XxmyzpUFOGKY0TXgrc=
 
 patchedDependencies:
+  '@pierre/diffs@1.5.2': b594e3a51167e76157f3629a7bef59e9f5c48328142b01c7805825d1bebcf53f
   '@pierre/trees@1.0.0-beta.6': 1174988acbb00e4cd76b3267c0b1b6784490a6e86082c6bd4322ae6678aeadf2
 
 importers:
@@ -21,7 +22,7 @@ importers:
         version: 0.13.14(solid-js@1.9.15)
       '@pierre/diffs':
         specifier: 1.5.2
-        version: 1.5.2(@shikijs/themes@4.5.0)
+        version: 1.5.2(patch_hash=b594e3a51167e76157f3629a7bef59e9f5c48328142b01c7805825d1bebcf53f)(@shikijs/themes@4.5.0)
       '@pierre/trees':
         specifier: 1.0.0-beta.6
         version: 1.0.0-beta.6(patch_hash=1174988acbb00e4cd76b3267c0b1b6784490a6e86082c6bd4322ae6678aeadf2)(@pierre/theme@2.0.0)(@shikijs/themes@4.5.0)(shiki@4.5.0)
@@ -2363,7 +2364,7 @@ snapshots:
 
   '@oxc-project/types@0.149.0': {}
 
-  '@pierre/diffs@1.5.2(@shikijs/themes@4.5.0)':
+  '@pierre/diffs@1.5.2(patch_hash=b594e3a51167e76157f3629a7bef59e9f5c48328142b01c7805825d1bebcf53f)(@shikijs/themes@4.5.0)':
     dependencies:
       '@pierre/theme': 2.0.0
       '@pierre/theming': 1.0.1(@pierre/theme@2.0.0)(@shikijs/themes@4.5.0)(shiki@4.5.0)

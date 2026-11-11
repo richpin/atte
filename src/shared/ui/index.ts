@@ -35,6 +35,7 @@ export {
   DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from "./dropdown-menu";
+export { bindEditHistory } from "./edit-history";
 export { EditableFile } from "./editable-file";
 export { FileDiff } from "./file-diff";
 export { FileIcon } from "./file-icon";

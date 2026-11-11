@@ -5,7 +5,7 @@ import { keymap } from "prosemirror-keymap";
 import { Slice } from "prosemirror-model";
 import { EditorState, TextSelection } from "prosemirror-state";
 import { EditorView } from "prosemirror-view";
-import { createFileMentionChip } from "shared/ui";
+import { bindEditHistory, createFileMentionChip } from "shared/ui";
 import { createEffect, on, onCleanup, onMount } from "solid-js";
 import { mentionFileName } from "../model/file-mentions";
 import {
@@ -246,6 +246,12 @@ export function PromptEditor(props: {
         return true;
       },
     });
+    onCleanup(
+      bindEditHistory(view.dom, (action) => {
+        if (!view || props.disabled) return;
+        (action === "undo" ? undo : redo)(view.state, view.dispatch, view);
+      }),
+    );
     handle = {
       dom: view.dom,
       get value() {

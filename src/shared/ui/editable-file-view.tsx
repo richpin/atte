@@ -4,9 +4,14 @@ import {
   VirtualizedFile,
   Virtualizer,
 } from "@pierre/diffs";
-import { Editor, type EditorViewState } from "@pierre/diffs/edit";
+import {
+  Editor,
+  type EditorViewState,
+  EditStateManager,
+} from "@pierre/diffs/edit";
 import { createEffect, createMemo, onCleanup, untrack } from "solid-js";
 import { useTheme } from "../theme";
+import { bindEditHistory } from "./edit-history";
 
 export function EditableFile(props: {
   path: string;
@@ -24,9 +29,20 @@ export function EditableFile(props: {
   let mount!: HTMLDivElement;
   let active: { file: VirtualizedFile; virtualizer: Virtualizer } | undefined;
   let view: EditorViewState | undefined;
+  const editStateKey = crypto.randomUUID();
+  let revision = untrack(() => props.revision);
+  let disposeActive: (() => void) | undefined;
+  onCleanup(() => {
+    disposeActive?.();
+    EditStateManager.clear("file", editStateKey);
+  });
   createEffect(() => {
     const path = props.path;
-    props.revision;
+    const nextRevision = props.revision;
+    if (revision !== nextRevision) {
+      EditStateManager.clear("file", editStateKey);
+      revision = nextRevision;
+    }
     const text = untrack(() => props.text);
     const readOnly = readOnlyValue();
     let dead = false;
@@ -64,9 +80,11 @@ export function EditableFile(props: {
       );
       let editor: Editor<"file"> | undefined;
       let cleaned = false;
+      let unbindHistory: (() => void) | undefined;
       dispose = () => {
         if (cleaned) return;
         cleaned = true;
+        unbindHistory?.();
         if (editor) {
           view = editor.getViewState();
           editor.cleanUp("discard");
@@ -75,22 +93,30 @@ export function EditableFile(props: {
         virtualizer.cleanUp();
         active = undefined;
       };
+      disposeActive = dispose;
       file.render({
         file: { name: path, contents: text, lang },
         containerWrapper: mount,
       });
       if (!readOnly) {
-        editor = new Editor("file", {
-          ownsVerticalViewport: true,
-          onAttach: (instance) => {
-            if (view) {
-              instance.setViewState(view);
-              view = undefined;
-            }
+        editor = new Editor(
+          "file",
+          {
+            ownsVerticalViewport: true,
+            onAttach: (instance) => {
+              if (view) {
+                instance.setViewState(view);
+                view = undefined;
+              }
+            },
+            onChange: (event) => props.onChange(event.file.contents),
           },
-          onChange: (event) => props.onChange(event.file.contents),
-        });
+          editStateKey,
+        );
         editor.edit(file);
+        unbindHistory = bindEditHistory(scrollRoot, (action) =>
+          editor?.[action](),
+        );
       }
       active = { file, virtualizer };
     })().catch((error) => {

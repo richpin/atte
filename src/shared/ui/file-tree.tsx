@@ -216,7 +216,19 @@ export function FileTree(props: {
           search: true,
           searchBlurBehavior: "retain",
           onSearchChange: (query) => props.onSearchChange?.(query ?? ""),
-          unsafeCSS: "[data-file-tree-search-input] { min-width: 0; }",
+          unsafeCSS: `
+            [data-file-tree-search-input] { min-width: 0; }
+            [data-item-section="decoration"]:has([data-icon-name="file-tree-icon-dot"]) {
+              min-width: 8px;
+            }
+            [data-item-section="decoration"] > span:has([data-icon-name="file-tree-icon-dot"]) {
+              padding-inline: 1px;
+            }
+            [data-item-section="decoration"] [data-icon-name="file-tree-icon-dot"] {
+              fill: currentColor;
+              flex-shrink: 0;
+            }
+          `,
           icons: { set: "complete", colored: true },
           density: "compact",
           onSelectionChange: (paths) => {
@@ -269,7 +281,15 @@ export function FileTree(props: {
             if (status === "error")
               return { text: "!", title: props.errorLabel };
             return dirtyPaths().has(item.path)
-              ? { text: "●", title: props.dirtyLabel }
+              ? {
+                  icon: {
+                    name: "file-tree-icon-dot",
+                    width: 6,
+                    height: 6,
+                    viewBox: "0 0 6 6",
+                  },
+                  title: props.dirtyLabel,
+                }
               : null;
           },
           composition: {
@@ -399,6 +419,7 @@ export function FileTree(props: {
         "--trees-search-bg-override": "var(--color-input-surface)",
         "--trees-search-fg-override": "var(--color-ink)",
         "--trees-scrollbar-gutter-override": "4px",
+        "--trees-padding-inline-override": "8px",
         "--trees-scrollbar-thumb-override":
           "color-mix(in srgb, var(--color-ink) 22%, transparent)",
         "--trees-accent-override": "var(--color-accent)",

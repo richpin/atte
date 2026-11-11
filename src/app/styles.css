@@ -147,7 +147,6 @@
 }
 
 :root {
-  --diffs-font-family: var(--font-sans);
   --diffs-header-font-family: var(--font-sans);
   --trees-font-family-override: var(--font-sans);
   color-scheme: light;

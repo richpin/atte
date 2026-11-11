@@ -4,6 +4,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { EditableFile } from "./editable-file-view";
 
 const fixtures = vi.hoisted(() => ({
+  clear: vi.fn(),
   editors: [] as {
     options: {
       onAttach?: (editor: unknown) => void;
@@ -13,6 +14,7 @@ const fixtures = vi.hoisted(() => ({
     restored: unknown;
     cleanUp: ReturnType<typeof vi.fn>;
     setViewState: (view: unknown) => void;
+    key?: string;
   }[],
 }));
 vi.mock("@pierre/diffs", () => ({
@@ -30,6 +32,7 @@ vi.mock("@pierre/diffs", () => ({
   },
 }));
 vi.mock("@pierre/diffs/edit", () => ({
+  EditStateManager: { clear: fixtures.clear },
   Editor: class {
     ready = false;
     restored: unknown;
@@ -37,6 +40,7 @@ vi.mock("@pierre/diffs/edit", () => ({
     constructor(
       _type: unknown,
       readonly options: (typeof fixtures.editors)[number]["options"],
+      readonly key?: string,
     ) {
       fixtures.editors.push(this);
     }
@@ -77,7 +81,33 @@ it("restores the cursor and viewport only after the new editor has attached", as
   editor.options.onAttach?.(editor);
   expect(editor.restored).toEqual({ view: { scrollTop: 20, scrollLeft: 3 } });
   expect(fixtures.editors[0].cleanUp).toHaveBeenCalledWith("discard");
+  expect(editor.key).toBe(fixtures.editors[0].key);
+  expect(fixtures.clear).not.toHaveBeenCalled();
   expect(onError).not.toHaveBeenCalled();
+});
+
+it("drops retained history on disk replacement and on unmount", async () => {
+  const [revision, setRevision] = createSignal(0);
+  const screen = render(() => (
+    <EditableFile
+      path="file"
+      text="disk"
+      revision={revision()}
+      readOnly={false}
+      visible
+      onChange={() => undefined}
+      onError={() => undefined}
+    />
+  ));
+  await waitFor(() => expect(fixtures.editors).toHaveLength(1));
+  const key = fixtures.editors[0].key;
+  setRevision(1);
+  await waitFor(() => expect(fixtures.editors).toHaveLength(2));
+  expect(fixtures.clear).toHaveBeenCalledWith("file", key);
+  fixtures.clear.mockClear();
+  screen.unmount();
+  expect(fixtures.editors[1].cleanUp).toHaveBeenCalledWith("discard");
+  expect(fixtures.clear).toHaveBeenCalledWith("file", key);
 });
 it("does not recreate an editor when saving replaces metadata without changing read-only status", async () => {
   const [disk, setDisk] = createSignal({ readOnly: false, version: "first" });

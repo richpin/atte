@@ -353,9 +353,19 @@ export function WorkspaceFiles(props: {
             {(draft) => (
               <>
                 <div class="flex min-h-9 shrink-0 items-center gap-1 border-b border-line px-2 text-xs">
-                  <span class="min-w-0 flex-1 truncate" title={draft().path}>
-                    {dirty(draft()) ? "● " : ""}
-                    {draft().path}
+                  <span
+                    class="flex min-w-0 flex-1 items-center gap-1.5"
+                    title={draft().path}
+                  >
+                    <span class="truncate">{draft().path}</span>
+                    <Show when={dirty(draft())}>
+                      <span
+                        role="img"
+                        aria-label={t("files.unsavedTitle")}
+                        title={t("files.unsavedTitle")}
+                        class="size-1.5 shrink-0 rounded-full bg-muted"
+                      />
+                    </Show>
                   </span>
                   <Show when={isSvg(draft().path)}>
                     <Button

@@ -1,0 +1,22 @@
+diff --git a/dist/editor/editor.js b/dist/editor/editor.js
+index 8f04a6f92221c796a2636c203f739f94786c2df3..c1d26218d3a0c1bd4aad3e32a2a0b0069a373bad 100644
+--- a/dist/editor/editor.js
++++ b/dist/editor/editor.js
+@@ -252,6 +252,17 @@ var Editor = class {
+ 			previousSession
+ 		});
+ 		const previousDiffSession = editSession.diffSession;
++		// A retained draft follows its application identity across file renames.
++		// Refresh metadata before File adopts the retained document for rendering.
++		if (editStateKey != null && this.type === "file" && fileInstance.type === "file") {
++			const file = fileInstance.getLatestFile();
++			const document = editSession.document;
++			const languageId = file?.lang ?? (file != null ? getFiletypeFromFileName(file.name) : void 0);
++			if (file != null && document != null && (editSession.fileInfo?.name !== file.name || document.languageId !== languageId)) {
++				editSession.document = new TextDocument(file.name, document.getText(), languageId, document.version, EditStack.fromState(document.history), document.eol);
++				editSession.fileInfo = { name: file.name, lang: file.lang };
++			}
++		}
+ 		this.#initialState = void 0;
+ 		this.#editSession = editSession;
+ 		this.#fileInstance = fileInstance;

@@ -11,9 +11,14 @@ pub(crate) use windows::install as install_windows_shortcuts;
 
 const PREFIX: &str = "project-tab:";
 
+#[cfg(target_os = "macos")]
+mod history;
+
 pub fn menu(app: &AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
     #[cfg(not(windows))]
     let menu = Menu::default(app)?;
+    #[cfg(target_os = "macos")]
+    history::install(app, &menu)?;
     // WebView2 input is forwarded by the controller. Registering a Win32 HACCEL
     // would consume child-HWND messages before WebView2 can forward them.
     #[cfg(windows)]
@@ -88,6 +93,13 @@ pub fn menu(app: &AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
 }
 
 pub fn on_menu_event(app: &AppHandle, event: tauri::menu::MenuEvent) {
+    #[cfg(target_os = "macos")]
+    if let Some(action) = event.id().as_ref().strip_prefix(history::PREFIX) {
+        if let Some(action) = history::Action::parse(action) {
+            history::dispatch(app, action);
+        }
+        return;
+    }
     let Some(action) = event.id().as_ref().strip_prefix(PREFIX) else {
         return;
     };
