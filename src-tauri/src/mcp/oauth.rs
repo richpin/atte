@@ -5,6 +5,7 @@ use rmcp::transport::auth::{
     AuthError, AuthorizationManager, AuthorizationRequest, AuthorizationSession, CredentialStore,
     StoredCredentials,
 };
+use std::sync::atomic::{AtomicU64, Ordering};
 use tokio::sync::Mutex as AsyncMutex;
 use tokio_util::sync::CancellationToken;
 
@@ -34,6 +35,7 @@ pub(super) struct Authorizations(Mutex<BTreeMap<String, Arc<Authorization>>>);
 pub(super) struct Authorization {
     pub url: String,
     owner: String,
+    revision: AtomicU64,
     config: OAuthConfig,
     store: Store,
     manager: AsyncMutex<Option<AuthorizationManager>>,
@@ -48,7 +50,8 @@ struct Store {
     account: String,
     // Blocking keychain work may outlive a cancelled async operation. A generation
     // checked while holding this gate prevents a late write after logout/cancel.
-    generation: Arc<Mutex<u64>>,
+    generation: Arc<AtomicU64>,
+    write: Arc<Mutex<()>>,
 }
 #[async_trait::async_trait]
 impl CredentialStore for Store {
@@ -68,10 +71,10 @@ impl CredentialStore for Store {
     async fn save(&self, credentials: StoredCredentials) -> Result<(), AuthError> {
         // All manager operations and logout share Authorization::manager.
         let store = self.clone();
-        let generation = *self.generation.lock().map_err(|_| storage_error())?;
+        let generation = self.generation.load(Ordering::SeqCst);
         tokio::task::spawn_blocking(move || {
-            let current = store.generation.lock().map_err(|_| storage_error())?;
-            if *current != generation {
+            let _guard = store.write.lock().map_err(|_| storage_error())?;
+            if store.generation.load(Ordering::SeqCst) != generation {
                 return Err(storage_error());
             }
             let value = serde_json::to_string(&credentials).map_err(|_| storage_error())?;
@@ -86,7 +89,7 @@ impl CredentialStore for Store {
     async fn clear(&self) -> Result<(), AuthError> {
         let store = self.clone();
         tokio::task::spawn_blocking(move || {
-            let _guard = store.generation.lock().map_err(|_| storage_error())?;
+            let _guard = store.write.lock().map_err(|_| storage_error())?;
             store
                 .credentials
                 .delete(&store.account)
@@ -99,7 +102,37 @@ impl CredentialStore for Store {
 fn storage_error() -> AuthError {
     AuthError::CredentialStoreError("OS credential store unavailable".into())
 }
+fn identity_account(
+    path: &Path,
+    name: &str,
+    url: &str,
+    config: &OAuthConfig,
+) -> Result<String, String> {
+    let identity =
+        serde_json::to_string(&(url, config)).map_err(|_| "Invalid OAuth configuration")?;
+    Ok(credentials::account(
+        path,
+        name,
+        &format!("oauth:{identity}"),
+    ))
+}
 impl Authorizations {
+    pub fn revision(
+        &self,
+        path: &Path,
+        name: &str,
+        url: &str,
+        config: &OAuthConfig,
+    ) -> Result<u64, String> {
+        let account = identity_account(path, name, url, config)?;
+        Ok(self
+            .0
+            .lock()
+            .map_err(|_| "OAuth unavailable")?
+            .get(&account)
+            .map(|entry| entry.revision.load(Ordering::SeqCst))
+            .unwrap_or(0))
+    }
     pub fn entry(
         &self,
         path: &Path,
@@ -109,12 +142,15 @@ impl Authorizations {
         credentials: Arc<dyn Credentials>,
     ) -> Result<Arc<Authorization>, String> {
         validate_url(url)?;
-        let identity =
-            serde_json::to_string(&(url, config)).map_err(|_| "Invalid OAuth configuration")?;
-        let account = credentials::account(path, name, &format!("oauth:{identity}"));
-        let mut entries = self.0.lock().map_err(|_| "OAuth unavailable")?;
-        if let Some(entry) = entries.get(&account) {
-            return Ok(entry.clone());
+        let account = identity_account(path, name, url, config)?;
+        if let Some(entry) = self
+            .0
+            .lock()
+            .map_err(|_| "OAuth unavailable")?
+            .get(&account)
+            .cloned()
+        {
+            return Ok(entry);
         }
         let saved = credentials.get(&account)?;
         let status = if saved.is_some() {
@@ -125,11 +161,13 @@ impl Authorizations {
         let entry = Arc::new(Authorization {
             url: url.into(),
             owner: credentials::account(path, name, "oauth-owner"),
+            revision: AtomicU64::new(0),
             config: config.clone(),
             store: Store {
                 credentials,
                 account: account.clone(),
-                generation: Arc::new(Mutex::new(0)),
+                generation: Arc::new(AtomicU64::new(0)),
+                write: Arc::new(Mutex::new(())),
             },
             manager: AsyncMutex::new(None),
             status: Mutex::new(status),
@@ -137,8 +175,8 @@ impl Authorizations {
             revocation: Mutex::new(CancellationToken::new()),
             challenge: Mutex::new(None),
         });
-        entries.insert(account, entry.clone());
-        Ok(entry)
+        let mut entries = self.0.lock().map_err(|_| "OAuth unavailable")?;
+        Ok(entries.entry(account).or_insert(entry).clone())
     }
 }
 impl Authorizations {
@@ -184,26 +222,22 @@ impl Authorization {
     }
     pub async fn logout(&self) -> Result<(), String> {
         self.cancel();
+        self.revision.fetch_add(1, Ordering::SeqCst);
         self.revocation()?.cancel();
         self.set_status(Status::Required);
-        self.invalidate_writes()?;
+        self.invalidate_writes();
         let mut manager = self.manager.lock().await;
         *manager = None;
-        self.invalidate_writes()?;
+        self.invalidate_writes();
         self.revocation()?.cancel();
         self.set_status(Status::Required);
         self.store.clear().await.map_err(|_| {
+            self.set_status(Status::ReauthorizationRequired);
             "Cannot delete OAuth credentials; unlock the OS credential store and retry".to_string()
         })
     }
-    fn invalidate_writes(&self) -> Result<(), String> {
-        let mut generation = self
-            .store
-            .generation
-            .lock()
-            .map_err(|_| "OAuth unavailable")?;
-        *generation = generation.wrapping_add(1);
-        Ok(())
+    fn invalidate_writes(&self) {
+        self.store.generation.fetch_add(1, Ordering::SeqCst);
     }
     async fn new_manager(&self) -> Result<AuthorizationManager, String> {
         let mut manager = AuthorizationManager::new(&self.url)
@@ -267,7 +301,7 @@ impl Authorization {
             *login = Some(cancel.clone());
         }
         self.set_status(Status::SigningIn);
-        // Do not drop a credential write on cancellation: logout waits for this guard.
+        // Serialize SDK operations; the store generation fences writes that outlive cancellation.
         let mut manager = self.manager.lock().await;
         let result = tokio::select! {
             biased;
@@ -284,11 +318,12 @@ impl Authorization {
                 let mut revocation = self.revocation.lock().map_err(|_| "OAuth unavailable")?;
                 revocation.cancel();
                 *revocation = CancellationToken::new();
+                self.revision.fetch_add(1, Ordering::SeqCst);
                 self.set_status(Status::Authorized);
                 Ok(())
             }
             Err(error) => {
-                self.invalidate_writes()?;
+                self.invalidate_writes();
                 *manager = None;
                 self.set_status(Status::Required);
                 // An interrupted exchange must not leave a newly persisted session.
@@ -382,23 +417,37 @@ impl Mcp {
         let entries = tokio::task::spawn_blocking(move || {
             // Include the persisted current identity even after a restart. Existing
             // connections may still own older settings until their next reconnect.
-            service.authorization(&target, &name)?;
-            service
-                .authorizations
-                .for_server(&service.path(&target)?, &name)
+            let path = service.path(&target)?;
+            let mut entries = service.authorizations.for_server(&path, &name)?;
+            match service.authorization(&target, &name) {
+                Ok(current) => {
+                    if !entries.iter().any(|entry| Arc::ptr_eq(entry, &current)) {
+                        entries.push(current);
+                    }
+                }
+                Err(error) if entries.is_empty() => return Err(error),
+                // An invalid file cannot prevent revocation of live identities.
+                Err(_) => {}
+            }
+            Ok::<_, String>(entries)
         })
         .await
         .map_err(|_| "OAuth unavailable")??;
+        let mut error = None;
         // Revoke every connection before awaiting any keychain operation.
         for entry in &entries {
             entry.cancel();
             entry.revocation()?.cancel();
             entry.set_status(Status::Required);
         }
-        let mut error = None;
-        for entry in entries {
+        for entry in &entries {
             if let Err(failure) = entry.logout().await {
                 error = Some(failure);
+            }
+        }
+        if error.is_some() {
+            for entry in entries {
+                entry.set_status(Status::ReauthorizationRequired);
             }
         }
         error.map_or(Ok(()), Err)
@@ -450,8 +499,9 @@ pub(crate) async fn cancel_mcp_login(
 ) -> Result<(), String> {
     let service = app.state::<Arc<Mcp>>().inner().clone();
     tokio::task::spawn_blocking(move || {
-        service.authorization(&target, &name)?.cancel();
-        Ok(())
+        service
+            .authorizations
+            .cancel_logins(&service.path(&target)?, &name)
     })
     .await
     .map_err(|_| "OAuth unavailable")?

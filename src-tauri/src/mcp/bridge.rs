@@ -1,5 +1,5 @@
 //! Headless stdio adapter. This entry point runs before Tauri is initialized.
-use futures_util::StreamExt;
+use futures_util::{stream::FuturesUnordered, StreamExt};
 use rmcp::{
     service::RoleClient,
     transport::{
@@ -51,6 +51,7 @@ pub async fn run(url: String) -> Result<(), &'static str> {
     );
     let mut lines = tokio::io::BufReader::new(tokio::io::stdin()).lines();
     let mut output = tokio::io::stdout();
+    let mut pending = FuturesUnordered::new();
     let result = loop {
         tokio::select! {
             _ = &mut lifetime => break Err("MCP relay disconnected"),
@@ -61,17 +62,27 @@ pub async fn run(url: String) -> Result<(), &'static str> {
                             Ok(message) => message,
                             Err(_) => break Err("Invalid MCP message"),
                         };
-                        if transport.send(message).await.is_err() { break Err("MCP relay disconnected"); }
+                        pending.push(transport.send(message));
                     }
                     Ok(None) => break Ok(()),
                     Err(_) => break Err("Cannot read MCP input"),
                 }
             }
+            result = pending.next(), if !pending.is_empty() => {
+                if result.is_some_and(|result| result.is_err()) { break Err("MCP relay disconnected"); }
+            }
             message = transport.receive() => {
                 let Some(message) = message else { break Ok(()); };
                 let mut bytes = serde_json::to_vec(&message).map_err(|_| "Invalid MCP message")?;
                 bytes.push(b'\n');
-                if output.write_all(&bytes).await.is_err() || output.flush().await.is_err() { break Err("Cannot write MCP output"); }
+                let write = async {
+                    output.write_all(&bytes).await?;
+                    output.flush().await
+                };
+                tokio::select! {
+                    _ = &mut lifetime => break Err("MCP relay disconnected"),
+                    result = write => if result.is_err() { break Err("Cannot write MCP output"); },
+                }
             }
         }
     };

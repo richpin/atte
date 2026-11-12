@@ -33,6 +33,10 @@ pub struct PeerState {
     pub deletions: AtomicUsize,
     pub notifications: AtomicUsize,
     pub stream: AtomicBool,
+    pub hold_calls: AtomicBool,
+    pub large_response: AtomicBool,
+    pub call_started: tokio::sync::Notify,
+    pub cancel_received: tokio::sync::Notify,
     pub issuer_changed: AtomicBool,
 }
 impl Drop for Peer {
@@ -56,6 +60,10 @@ impl Peer {
             deletions: AtomicUsize::new(0),
             notifications: AtomicUsize::new(0),
             stream: AtomicBool::new(false),
+            hold_calls: AtomicBool::new(false),
+            large_response: AtomicBool::new(false),
+            call_started: tokio::sync::Notify::new(),
+            cancel_received: tokio::sync::Notify::new(),
             issuer_changed: AtomicBool::new(false),
         });
         let router = Router::new()
@@ -235,6 +243,9 @@ async fn handle(State(state): State<Arc<PeerState>>, request: Request<Body>) -> 
     let message: Value = serde_json::from_slice(&bytes).unwrap();
     if message.get("id").is_none() {
         state.notifications.fetch_add(1, Ordering::SeqCst);
+        if message["method"] == "notifications/cancelled" {
+            state.cancel_received.notify_one();
+        }
         return Response::builder().status(202).body(Body::empty()).unwrap();
     }
     let mut session_id = None;
@@ -245,8 +256,16 @@ async fn handle(State(state): State<Arc<PeerState>>, request: Request<Body>) -> 
             session_id = Some(id);
             json!({"protocolVersion":"2025-03-26","capabilities":{"tools":{}},"serverInfo":{"name":"oauth-fixture","version":"1"}})
         }
-        "tools/list" => json!({"tools":[{"name":"where","inputSchema":{"type":"object"}}]}),
+        "tools/list" => {
+            json!({"tools":[{"name":"where","description":if state.large_response.load(Ordering::SeqCst) { "x".repeat(512*1024) } else { "Fixture tool".into() },"inputSchema":{"type":"object"}}]})
+        }
         "tools/call" => {
+            if state.hold_calls.load(Ordering::SeqCst) {
+                state.call_started.notify_one();
+                state.cancel_received.notified().await;
+                // The test also observes the received cancellation without racing this waiter.
+                state.cancel_received.notify_one();
+            }
             let id = parts
                 .headers
                 .get("mcp-session-id")

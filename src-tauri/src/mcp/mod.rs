@@ -10,7 +10,7 @@ use agent_client_protocol::schema::v1::{
     EnvVariable, HttpHeader, McpServer, McpServerHttp, McpServerStdio,
 };
 pub use credentials::{Credentials, NativeCredentials};
-pub use model::{Server, Transport, ValueSource};
+pub use model::{OAuthConfig, Server, Transport, ValueSource};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
@@ -50,6 +50,8 @@ pub struct Snapshot {
     pub path: PathBuf,
     pub authentication: BTreeMap<String, oauth::Status>,
 }
+
+type Configuration = BTreeMap<String, (PathBuf, Value)>;
 
 pub struct Mcp {
     executable: PathBuf,
@@ -126,12 +128,6 @@ impl Mcp {
                 for (name, value) in servers {
                     match serde_json::from_value::<Server>(value) {
                         Ok(server) => {
-                            if let Server { transport: Transport::Http { url, oauth: Some(config), .. }, .. } = &server {
-                                match self.authorizations.entry(&snapshot.path, &name, url, config, self.credentials.clone()) {
-                                    Ok(auth) => { snapshot.authentication.insert(name.clone(), auth.status()); }
-                                    Err(reason) => snapshot.issues.push(Issue { name: name.clone(), reason }),
-                                }
-                            }
                             snapshot.servers.insert(name, server);
                         }
                         Err(_) => snapshot.issues.push(Issue { name, reason: "Unsupported or invalid server configuration; edit the settings file".into() }),
@@ -139,13 +135,44 @@ impl Mcp {
                 }
             }
         }
-        if let Ok(mut snapshots) = self.snapshots.lock() {
-            if snapshot.error.is_some() {
-                if let Some(previous) = snapshots.get(&snapshot.path) {
-                    snapshot.servers = previous.servers.clone();
-                    snapshot.issues = previous.issues.clone();
+        if snapshot.error.is_some() {
+            if let Some(previous) = self
+                .snapshots
+                .lock()
+                .ok()
+                .and_then(|snapshots| snapshots.get(&snapshot.path).cloned())
+            {
+                snapshot.servers = previous.servers;
+                snapshot.issues = previous.issues;
+            }
+        }
+        // Authentication remains actionable even while the file needs repair.
+        for (name, server) in &snapshot.servers {
+            if let Transport::Http {
+                url,
+                oauth: Some(config),
+                ..
+            } = &server.transport
+            {
+                match self.authorizations.entry(
+                    &snapshot.path,
+                    name,
+                    url,
+                    config,
+                    self.credentials.clone(),
+                ) {
+                    Ok(auth) => {
+                        snapshot.authentication.insert(name.clone(), auth.status());
+                    }
+                    Err(reason) => snapshot.issues.push(Issue {
+                        name: name.clone(),
+                        reason,
+                    }),
                 }
-            } else {
+            }
+        }
+        if snapshot.error.is_none() {
+            if let Ok(mut snapshots) = self.snapshots.lock() {
                 snapshots.insert(snapshot.path.clone(), snapshot.clone());
             }
         }
@@ -352,7 +379,7 @@ impl Mcp {
             .map_err(|_| "Cannot save project MCP settings")?;
         Ok(())
     }
-    fn combined(&self, folder: &Path) -> Result<BTreeMap<String, (PathBuf, Value)>, String> {
+    fn combined(&self, folder: &Path) -> Result<Configuration, String> {
         let mut result = BTreeMap::new();
         for target in [
             Target::Global,
@@ -368,13 +395,33 @@ impl Mcp {
         Ok(result)
     }
     pub fn revision(&self, folder: &Path) -> String {
-        match self.combined(folder) {
-            Ok(combined) => format!(
-                "{:x}",
-                Sha256::digest(serde_json::to_vec(&combined).unwrap_or_default())
-            ),
-            Err(_) => "invalid".into(),
+        self.combined(folder)
+            .and_then(|combined| self.configuration_revision(&combined))
+            .unwrap_or_else(|_| "invalid".into())
+    }
+    fn configuration_revision(&self, combined: &Configuration) -> Result<String, String> {
+        let mut authentication = Vec::new();
+        for (name, (path, value)) in combined {
+            if let Ok(Server {
+                enabled: true,
+                transport:
+                    Transport::Http {
+                        url,
+                        oauth: Some(config),
+                        ..
+                    },
+            }) = serde_json::from_value::<Server>(value.clone())
+            {
+                authentication.push(self.authorizations.revision(path, name, &url, &config)?);
+            }
         }
+        Ok(format!(
+            "{:x}",
+            Sha256::digest(
+                serde_json::to_vec(&(combined, authentication))
+                    .map_err(|_| "Invalid MCP settings")?
+            )
+        ))
     }
     pub fn resolve(
         &self,
@@ -387,10 +434,16 @@ impl Mcp {
         let combined = self
             .combined(folder)
             .map_err(|_| "Correct the global or project MCP settings file before reconnecting")?;
-        let revision = format!(
-            "{:x}",
-            Sha256::digest(serde_json::to_vec(&combined).map_err(|_| "Invalid MCP settings")?)
-        );
+        self.resolve_configuration(&combined, working_folder, http, environment)
+    }
+    fn resolve_configuration(
+        &self,
+        combined: &Configuration,
+        working_folder: &Path,
+        http: bool,
+        environment: &BTreeMap<String, String>,
+    ) -> Result<(Vec<McpServer>, SessionState), String> {
+        let revision = self.configuration_revision(combined)?;
         let mut state = SessionState {
             revision,
             ..Default::default()
@@ -398,41 +451,13 @@ impl Mcp {
         let mut servers = Vec::new();
         for (name, (path, value)) in combined {
             let result = (|| {
-                let server: Server = serde_json::from_value(value)
+                let server: Server = serde_json::from_value(value.clone())
                     .map_err(|_| "Unsupported or invalid server configuration".to_string())?;
                 if !server.enabled {
                     return Ok(None);
                 }
                 server.validate()?;
-                let values = || -> Result<Vec<(String, String)>, String> {
-                    server
-                        .values()
-                        .iter()
-                        .map(|(key, source)| {
-                            let value = match source {
-                                ValueSource::Literal(value) => value.clone(),
-                                ValueSource::Environment(variable) => {
-                                    environment.get(variable).cloned().ok_or_else(|| {
-                                        format!("Environment variable for {key} is missing")
-                                    })?
-                                }
-                                ValueSource::Secret(reference) => self
-                                    .credentials
-                                    .get(&credentials::account(&path, &name, reference))?
-                                    .ok_or("Credential missing; replace the secret")?,
-                            };
-                            if value.contains('\0') {
-                                return Err(format!("Invalid value for {key}"));
-                            }
-                            if value.is_empty() && !matches!(source, ValueSource::Literal(_)) {
-                                return Err(format!(
-                                    "Credential or environment value for {key} is empty"
-                                ));
-                            }
-                            Ok((key.clone(), value))
-                        })
-                        .collect()
-                };
+                let values = || self.resolve_values(&server, path, name, environment);
                 match &server.transport {
                     Transport::Stdio { command, args, .. } => {
                         let values = values()?;
@@ -444,7 +469,7 @@ impl Mcp {
                         let command = executable(command, working_folder, path.as_deref())
                             .ok_or("Executable not found or not executable")?;
                         Ok(Some(McpServer::Stdio(
-                            McpServerStdio::new(&name, command).args(args.clone()).env(
+                            McpServerStdio::new(name, command).args(args.clone()).env(
                                 values
                                     .into_iter()
                                     .map(|(key, value)| EnvVariable::new(key, value))
@@ -468,7 +493,7 @@ impl Mcp {
                             })
                             .collect::<Result<Vec<_>, String>>()?;
                         Ok(Some(McpServer::Http(
-                            McpServerHttp::new(&name, url).headers(headers),
+                            McpServerHttp::new(name, url).headers(headers),
                         )))
                     }
                 }
@@ -476,10 +501,47 @@ impl Mcp {
             match result {
                 Ok(Some(server)) => servers.push(server),
                 Ok(None) => {}
-                Err(reason) => state.issues.push(Issue { name, reason }),
+                Err(reason) => state.issues.push(Issue {
+                    name: name.clone(),
+                    reason,
+                }),
             }
         }
         Ok((servers, state))
+    }
+    fn resolve_values(
+        &self,
+        server: &Server,
+        path: &Path,
+        name: &str,
+        environment: &BTreeMap<String, String>,
+    ) -> Result<Vec<(String, String)>, String> {
+        server
+            .values()
+            .iter()
+            .map(|(key, source)| {
+                let value = match source {
+                    ValueSource::Literal(value) => value.clone(),
+                    ValueSource::Environment(variable) => environment
+                        .get(variable)
+                        .cloned()
+                        .ok_or_else(|| format!("Environment variable for {key} is missing"))?,
+                    ValueSource::Secret(reference) => self
+                        .credentials
+                        .get(&credentials::account(path, name, reference))?
+                        .ok_or("Credential missing; replace the secret")?,
+                };
+                if value.contains('\0') {
+                    return Err(format!("Invalid value for {key}"));
+                }
+                if value.is_empty() && !matches!(source, ValueSource::Literal(_)) {
+                    return Err(format!(
+                        "Credential or environment value for {key} is empty"
+                    ));
+                }
+                Ok((key.clone(), value))
+            })
+            .collect()
     }
 }
 fn read_project(path: &Path) -> Result<(Option<Vec<u8>>, Value), String> {

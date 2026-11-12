@@ -34,7 +34,7 @@ struct Upstream {
     credential: String,
     cancel: CancellationToken,
     revoked: CancellationToken,
-    session: Mutex<reqwest::header::HeaderMap>,
+    sessions: Mutex<BTreeMap<String, reqwest::header::HeaderMap>>,
 }
 impl Lease {
     pub(super) async fn start(
@@ -77,7 +77,7 @@ impl Lease {
             credential: format!("Bearer {credential}"),
             cancel: cancel.clone(),
             revoked: revoked.clone(),
-            session: Mutex::new(reqwest::header::HeaderMap::new()),
+            sessions: Mutex::new(BTreeMap::new()),
         });
         let router = Router::new()
             .route("/mcp", any(forward))
@@ -118,23 +118,25 @@ impl Upstream {
         if self.revoked.is_cancelled() {
             return;
         }
-        let headers = self
-            .session
+        let sessions = self
+            .sessions
             .lock()
-            .map(|headers| headers.clone())
+            .map(|sessions| sessions.values().cloned().collect::<Vec<_>>())
             .unwrap_or_default();
-        if !headers.contains_key("mcp-session-id") {
+        if sessions.is_empty() {
             return;
         }
         if let Ok(token) = self.auth.token().await {
-            let _ = self
-                .client
-                .delete(&self.auth.url)
-                .headers(self.headers.clone())
-                .headers(headers)
-                .bearer_auth(token)
-                .send()
-                .await;
+            for headers in sessions {
+                let _ = self
+                    .client
+                    .delete(&self.auth.url)
+                    .headers(self.headers.clone())
+                    .headers(headers)
+                    .bearer_auth(&token)
+                    .send()
+                    .await;
+            }
         }
     }
 }
@@ -199,6 +201,22 @@ async fn forward(
         return Err(StatusCode::METHOD_NOT_ALLOWED);
     }
     let (parts, body) = request.into_parts();
+    let session_id = parts
+        .headers
+        .get("mcp-session-id")
+        .map(|value| value.to_str().map(str::to_owned))
+        .transpose()
+        .map_err(|_| StatusCode::BAD_REQUEST)?;
+    if let Some(id) = &session_id {
+        let mut sessions = upstream
+            .sessions
+            .lock()
+            .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
+        let session = sessions.get_mut(id).ok_or(StatusCode::NOT_FOUND)?;
+        if let Some(version) = parts.headers.get("mcp-protocol-version") {
+            session.insert("mcp-protocol-version", version.clone());
+        }
+    }
     let work = async {
         let token = upstream
             .auth
@@ -212,11 +230,6 @@ async fn forward(
             }
         }
         let deleting = parts.method == axum::http::Method::DELETE;
-        if let Some(version) = parts.headers.get("mcp-protocol-version") {
-            if let Ok(mut session) = upstream.session.lock() {
-                session.insert("mcp-protocol-version", version.clone());
-            }
-        }
         let response = upstream
             .client
             .request(parts.method, &upstream.auth.url)
@@ -239,11 +252,18 @@ async fn forward(
             );
             return Err(StatusCode::UNAUTHORIZED);
         }
-        if let Ok(mut session) = upstream.session.lock() {
+        if let Ok(mut sessions) = upstream.sessions.lock() {
             if deleting && response.status().is_success() {
-                session.clear();
+                if let Some(id) = &session_id {
+                    sessions.remove(id);
+                }
             } else if let Some(id) = response.headers().get("mcp-session-id") {
+                let id_text = id.to_str().map_err(|_| StatusCode::BAD_GATEWAY)?;
+                let session = sessions.entry(id_text.to_string()).or_default();
                 session.insert("mcp-session-id", id.clone());
+                if let Some(version) = parts.headers.get("mcp-protocol-version") {
+                    session.insert("mcp-protocol-version", version.clone());
+                }
             }
         }
         let mut builder = Response::builder().status(response.status());
@@ -292,9 +312,15 @@ impl Mcp {
     ) -> Result<(Vec<McpServer>, SessionState, Vec<Lease>), String> {
         let service = self.clone();
         let (mut servers, mut state, oauth) = tokio::task::spawn_blocking(move || {
-            let (servers, state) = service.resolve(&folder, &working, http, &environment)?;
+            let _guard = service
+                .lock
+                .lock()
+                .map_err(|_| "MCP settings unavailable")?;
+            let combined = service.combined(&folder)?;
+            let (servers, state) =
+                service.resolve_configuration(&combined, &working, http, &environment)?;
             let mut oauth = Vec::new();
-            for (name, (path, value)) in service.combined(&folder)? {
+            for (name, (path, value)) in combined {
                 let Ok(server) = serde_json::from_value::<Server>(value) else {
                     continue;
                 };
@@ -304,7 +330,7 @@ impl Mcp {
                 if let Transport::Http {
                     url,
                     oauth: Some(config),
-                    headers,
+                    ..
                 } = &server.transport
                 {
                     let prepared = (|| {
@@ -316,23 +342,7 @@ impl Mcp {
                             config,
                             service.credentials.clone(),
                         )?;
-                        let values = headers
-                            .iter()
-                            .map(|(key, source)| {
-                                let value = match source {
-                                    ValueSource::Literal(value) => value.clone(),
-                                    ValueSource::Environment(variable) => environment
-                                        .get(variable)
-                                        .cloned()
-                                        .ok_or("Missing header environment variable")?,
-                                    ValueSource::Secret(reference) => service
-                                        .credentials
-                                        .get(&credentials::account(&path, &name, reference))?
-                                        .ok_or("Missing header credential")?,
-                                };
-                                Ok((key.clone(), value))
-                            })
-                            .collect::<Result<Vec<_>, String>>()?;
+                        let values = service.resolve_values(&server, &path, &name, &environment)?;
                         Ok((auth, values))
                     })();
                     oauth.push((name, prepared));

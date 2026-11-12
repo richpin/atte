@@ -14,7 +14,10 @@ fn main() {
             Ok(runtime) => runtime,
             Err(_) => std::process::exit(1),
         };
-        if runtime.block_on(atte_lib::mcp::bridge::run(url)).is_err() {
+        let result = runtime.block_on(atte_lib::mcp::bridge::run(url));
+        // Tokio's standard input uses blocking reads which cannot be cancelled.
+        runtime.shutdown_timeout(std::time::Duration::from_secs(1));
+        if result.is_err() {
             std::process::exit(1);
         }
         return;

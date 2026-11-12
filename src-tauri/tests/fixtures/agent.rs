@@ -519,6 +519,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         &mut output,
                         json!({"jsonrpc":"2.0","method":"session/update","params":{"sessionId":request["params"]["sessionId"],"update":{"sessionUpdate":"tool_call_update","toolCallId":"mcp-call","status":"completed","content":[{"type":"content","content":{"type":"text","text":text}}]}}}),
                     )?;
+                    // MCP fixtures support multiple sessions on this shared process.
+                    send(
+                        &mut output,
+                        json!({"jsonrpc":"2.0","id":request["id"],"result":{"stopReason":"end_turn"}}),
+                    )?;
+                    continue;
                 }
                 send_session_updates(
                     &mut output,
