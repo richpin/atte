@@ -1,15 +1,15 @@
 <div align="center">
-  <img src="src-tauri/icons/128x128@2x.png" alt="Atte app icon" width="112" height="112" style="display: block; margin: 0 auto;">
+  <img src="src-tauri/icons/128x128@2x.png" alt="Atte app icon" width="112" height="112">
 
 <h1 align="center">Atte</h1>
 
 <p align="center">
-  A lightweight desktop app for coding agents.
+  A minimal, lightweight coding agent app for developers tired of complex ADEs.
 </p>
 
 <p align="center">
+  <a href="#download">Download</a> ·
   <a href="#features">Features</a> ·
-  <a href="#getting-started">Getting started</a> ·
   <a href="#development">Development</a>
 </p>
 
@@ -19,13 +19,34 @@
 
 Atte brings your coding agents together in a minimal desktop interface. Choose an agent, open a local folder, and start a thread.
 
-Currently in development, with macOS as the first target.
+## Download
+
+**[Download the latest release for macOS →](https://github.com/richpin/atte/releases/latest)**
+
+Currently available for **Apple Silicon Macs (ARM64) only**.
+
+1. Download the `.dmg` file from the latest release.
+2. Open it and drag Atte to **Applications**.
+3. Launch Atte and open **Settings → Agents** to install an agent. Complete sign-in when prompted.
+4. Create a thread, choose a working folder and an agent, and start working.
+
+Check for updates in **Settings → General**.
+
+## Features
+
+- Work across projects with multiple agents and parallel threads.
+- Keep tasks separate with Git worktrees.
+- Review Git changes and create commits in the side panel.
+- Browse files, edit code, and open web pages beside your conversation.
+- Queue follow-ups and add context with file mentions and attachments.
+- Light, dark, and system themes, with English and Korean interfaces.
 
 ## Supported agents
 
 Atte connects to agents through the **Agent Client Protocol (ACP)**. Available agents include:
 
 <p align="center">
+  <kbd><img src="src/shared/ui/agent-icon/assets/agoragentic-acp.svg" alt="" width="16" height="16" valign="middle"> Agoragentic</kbd> &nbsp;
   <kbd><img src="src/shared/ui/agent-icon/assets/amp-acp.svg" alt="" width="16" height="16" valign="middle"> Amp</kbd> &nbsp;
   <kbd><img src="src/shared/ui/agent-icon/assets/antigravity-acp.svg" alt="" width="16" height="16" valign="middle"> Google&nbsp;Antigravity</kbd> &nbsp;
   <kbd><img src="src/shared/ui/agent-icon/assets/auggie.svg" alt="" width="16" height="16" valign="middle"> Auggie&nbsp;CLI</kbd> &nbsp;
@@ -36,6 +57,7 @@ Atte connects to agents through the **Agent Client Protocol (ACP)**. Available a
   <kbd><img src="src/shared/ui/agent-icon/assets/codex-acp.svg" alt="" width="16" height="16" valign="middle"> Codex</kbd> &nbsp;
   <kbd><img src="src/shared/ui/agent-icon/assets/cortex-code.svg" alt="" width="16" height="16" valign="middle"> Cortex&nbsp;Code</kbd> &nbsp;
   <kbd><img src="src/shared/ui/agent-icon/assets/corust-agent.svg" alt="" width="16" height="16" valign="middle"> Corust&nbsp;Agent</kbd> &nbsp;
+  <kbd><img src="src/shared/ui/agent-icon/assets/crow-cli.svg" alt="" width="16" height="16" valign="middle"> crow-cli</kbd> &nbsp;
   <kbd><img src="src/shared/ui/agent-icon/assets/cursor.svg" alt="" width="16" height="16" valign="middle"> Cursor</kbd> &nbsp;
   <kbd><img src="src/shared/ui/agent-icon/assets/deepagents.svg" alt="" width="16" height="16" valign="middle"> DeepAgents</kbd> &nbsp;
   <kbd><img src="src/shared/ui/agent-icon/assets/devin.svg" alt="" width="16" height="16" valign="middle"> Devin</kbd> &nbsp;
@@ -47,6 +69,7 @@ Atte connects to agents through the **Agent Client Protocol (ACP)**. Available a
   <kbd><img src="src/shared/ui/agent-icon/assets/glm-acp-agent.svg" alt="" width="16" height="16" valign="middle"> GLM&nbsp;Agent</kbd> &nbsp;
   <kbd><img src="src/shared/ui/agent-icon/assets/goose.svg" alt="" width="16" height="16" valign="middle"> goose</kbd> &nbsp;
   <kbd><img src="src/shared/ui/agent-icon/assets/grok-build.svg" alt="" width="16" height="16" valign="middle"> Grok&nbsp;Build</kbd> &nbsp;
+  <kbd><img src="src/shared/ui/agent-icon/assets/harn.svg" alt="" width="16" height="16" valign="middle"> Harn</kbd> &nbsp;
   <kbd><img src="src/shared/ui/agent-icon/assets/junie.svg" alt="" width="16" height="16" valign="middle"> Junie</kbd> &nbsp;
   <kbd><img src="src/shared/ui/agent-icon/assets/kilo.svg" alt="" width="16" height="16" valign="middle"> Kilo</kbd> &nbsp;
   <kbd><img src="src/shared/ui/agent-icon/assets/kimchi.svg" alt="" width="16" height="16" valign="middle"> Kimchi</kbd> &nbsp;
@@ -66,39 +89,28 @@ Atte connects to agents through the **Agent Client Protocol (ACP)**. Available a
 
 Install agents in **Settings → Agents**, powered by the [ACP registry](https://github.com/agentclientprotocol/registry). Availability depends on your platform and the agent's distribution; features and sign-in requirements vary by agent.
 
-Goose requires a configured provider, model, and credentials. Pi ACP requires a separately installed and configured `pi` CLI available on Atte's `PATH`. Existing CLI setups must be accessible to the app; installing the Registry adapter alone does not complete this setup.
+## Development
 
-## Features
-
-- **Your choice of agent.** Browse and install agents from the Agent Client Protocol (ACP) registry.
-- **Work across projects.** Keep threads organized by working folder and run multiple threads at once.
-- **Follow the work.** Read streaming responses, inspect tool calls and file changes, and respond to permission requests.
-- **Keep the conversation going.** Queue follow-up messages and resume threads with agents that support it.
-- **Make it yours.** Light, dark, and system themes, with English and Korean interfaces.
-
-## Getting started
+Built with **Tauri 2**, **SolidJS**, and **Rust**. Active development happens on `develop`; `main` tracks releases.
 
 To run from source, install Node.js (22.12+), pnpm, Rust, and the [Tauri prerequisites for macOS](https://v2.tauri.app/start/prerequisites/#macos).
 
 ```sh
 git clone https://github.com/richpin/atte.git
 cd atte
+git switch develop
 pnpm install
 pnpm tauri dev
 ```
 
-In the app, open **Settings → Agents** to install an agent. Create a new thread, choose a working folder and an agent, and complete sign-in when prompted.
-
-## Development
-
-Built with **Tauri 2**, **SolidJS**, and **Rust**.
+Run the checks:
 
 ```sh
 pnpm validate
 cargo test --manifest-path src-tauri/Cargo.toml --all-features --locked
 ```
 
-Build the macOS app with `pnpm tauri build`.
+Build locally with `pnpm tauri build`. For signed and notarized distribution builds, see the [macOS release guide](docs/release-macos.md).
 
 ## License
 
