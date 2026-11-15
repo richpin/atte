@@ -55,6 +55,8 @@ export {
   useResizable,
 } from "./resizable";
 export { ResponseStatus } from "./response-status";
+export { ScopeSelector } from "./scope-selector";
+export { SearchInput } from "./search-input";
 export {
   Select,
   SelectContent,

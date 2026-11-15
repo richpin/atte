@@ -2,9 +2,10 @@ import type { PolymorphicProps } from "@kobalte/core/polymorphic";
 import * as SelectPrimitive from "@kobalte/core/select";
 import { cva } from "class-variance-authority";
 import type { JSX, ValidComponent } from "solid-js";
-import { splitProps } from "solid-js";
+import { splitProps, useContext } from "solid-js";
 
 import { cn } from "./cn";
+import { OverlayMountContext } from "./overlay-mount";
 
 const Select = SelectPrimitive.Root;
 const SelectValue = SelectPrimitive.Value;
@@ -58,9 +59,10 @@ type SelectContentProps<T extends ValidComponent = "div"> =
 const SelectContent = <T extends ValidComponent = "div">(
   props: PolymorphicProps<T, SelectContentProps<T>>,
 ) => {
+  const overlayMount = useContext(OverlayMountContext);
   const [local, others] = splitProps(props as SelectContentProps, ["class"]);
   return (
-    <SelectPrimitive.Portal>
+    <SelectPrimitive.Portal mount={overlayMount?.()}>
       <SelectPrimitive.Content
         class={cn(
           "relative min-w-32 overflow-hidden rounded-xl border bg-popover text-popover-foreground shadow-md animate-in fade-in-80",

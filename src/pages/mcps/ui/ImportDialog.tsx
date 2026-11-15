@@ -8,47 +8,41 @@ import {
   DialogHeader,
   DialogTitle,
 } from "shared/ui";
-import { createEffect, createSignal, For, onCleanup, Show } from "solid-js";
-import { createStore } from "solid-js/store";
+import {
+  createEffect,
+  createSignal,
+  createUniqueId,
+  onCleanup,
+  Show,
+} from "solid-js";
 import {
   clearMcpImports,
-  discoverMcps,
   importMcps,
   previewMcpImport,
   selectMcpImport,
   subscribeMcp,
 } from "../api/mcps";
-import type { ImportFormat, ImportSource, Target } from "../model/types";
+import type { ImportFormat, ImportSelection, Target } from "../model/types";
+import { SelectField } from "./SelectField";
 
-const inputClass =
-  "w-full rounded-md border border-input bg-background px-3 py-2";
-
-export function ImportDialog(props: {
-  target: Target;
-  projects: { folder: string; name: string }[];
-  onClose: () => void;
-}) {
+export function ImportDialog(props: { target: Target; onClose: () => void }) {
   const { t } = useI18n();
-  const [folder, setFolder] = createSignal(
-    props.target.scope === "project" ? props.target.folder : "",
-  );
-  const [sources, setSources] = createSignal<ImportSource[]>([]);
+  const configurationId = createUniqueId();
+  const errorId = createUniqueId();
   const [format, setFormat] = createSignal<ImportFormat>("json");
   const [text, setText] = createSignal("");
   const [busy, setBusy] = createSignal(false);
   const [error, setError] = createSignal<string>();
-  const [done, setDone] = createSignal(false);
-  const [choices, setChoices] = createStore<
-    Record<string, { selected: boolean; name: string; overwrite: boolean }>
-  >({});
   const [names, setNames] = createSignal<string[]>([]);
-  const [scopeError, setScopeError] = createSignal(false);
+  const [scopeError, setScopeError] = createSignal(true);
+  let pending: ImportSelection[] | undefined;
+  let disposed = false;
+
   createEffect(() => {
-    const target: Target = folder()
-      ? { scope: "project", folder: folder() }
-      : { scope: "global" };
+    const target = props.target;
     let stopped = false;
     let unsubscribe: (() => void) | undefined;
+    pending = undefined;
     setNames([]);
     setScopeError(true);
     void subscribeMcp(target, (snapshot) => {
@@ -72,86 +66,108 @@ export function ImportDialog(props: {
       unsubscribe?.();
     });
   });
-  let disposed = false;
   onCleanup(() => {
     disposed = true;
     void clearMcpImports().catch(() => {});
   });
-  async function review(load: () => Promise<ImportSource[]>) {
+
+  function reset() {
+    pending = undefined;
+    setError(undefined);
+  }
+
+  async function choose() {
+    if (busy()) return;
     setBusy(true);
     setError(undefined);
-    setDone(false);
     try {
-      await clearMcpImports();
-      const values = await load();
-      if (disposed) {
-        await clearMcpImports();
-        return;
+      const contents = await selectMcpImport();
+      if (!disposed && contents !== null) {
+        reset();
+        setText(contents);
       }
-      setSources(values);
-      for (const source of values)
-        for (const candidate of source.candidates)
-          if (candidate.id)
-            setChoices(candidate.id, {
-              selected: false,
-              name: candidate.name,
-              overwrite: false,
-            });
     } catch {
-      if (!disposed) setError(t("mcps.reviewFailed"));
+      if (!disposed) setError(t("mcps.fileFailed"));
     } finally {
       if (!disposed) setBusy(false);
     }
   }
-  const selected = () =>
-    sources()
-      .flatMap((source) => source.candidates)
-      .flatMap((candidate) =>
-        candidate.id && choices[candidate.id]?.selected
-          ? [
-              {
-                id: candidate.id,
-                name: choices[candidate.id].name,
-                overwrite: choices[candidate.id].overwrite,
-              },
-            ]
-          : [],
-      );
+
   async function save() {
+    if (busy() || scopeError() || !text().trim()) return;
     setBusy(true);
     setError(undefined);
     try {
-      const result = await importMcps(
-        folder() ? { scope: "project", folder: folder() } : { scope: "global" },
-        selected(),
-      );
+      if (!pending) {
+        await clearMcpImports();
+        if (disposed) return;
+        const source = await previewMcpImport(text(), format());
+        if (disposed) {
+          await clearMcpImports();
+          return;
+        }
+        const errors = source.candidates.flatMap((candidate) =>
+          candidate.reason || !candidate.id
+            ? [
+                `${candidate.name}: ${candidate.reason ?? t("mcps.unsupported")}`,
+              ]
+            : [],
+        );
+        if (source.status !== "ready" || source.error) {
+          setError(source.error ?? t("mcps.reviewFailed"));
+          return;
+        }
+        if (errors.length) {
+          setError(errors.join("\n"));
+          return;
+        }
+        if (!source.candidates.length) {
+          setError(t("mcps.noDiscovered"));
+          return;
+        }
+        pending = source.candidates.flatMap((candidate) =>
+          candidate.id
+            ? [{ id: candidate.id, name: candidate.name, overwrite: false }]
+            : [],
+        );
+      }
+      const conflicts = pending.filter((entry) => names().includes(entry.name));
+      if (conflicts.length) {
+        setError(
+          conflicts
+            .map((entry) => `${entry.name}: ${t("mcps.conflict")}`)
+            .join("\n"),
+        );
+        return;
+      }
+      const result = await importMcps(props.target, pending);
       if (disposed) return;
       const succeeded = new Set(
         result.filter((entry) => !entry.error).map((entry) => entry.id),
       );
-      setSources((sources) =>
-        sources.map((source) => ({
-          ...source,
-          candidates: source.candidates.filter(
-            (candidate) => !candidate.id || !succeeded.has(candidate.id),
-          ),
-        })),
-      );
-      const failures = result.filter((entry) => entry.error);
-      if (failures.length)
+      pending = pending.filter((entry) => !succeeded.has(entry.id));
+      if (pending.length) {
+        const failures = result.filter((entry) => entry.error);
         setError(
-          failures.map((entry) => `${entry.name}: ${entry.error}`).join("\n"),
+          failures.length
+            ? failures
+                .map((entry) => `${entry.name}: ${entry.error}`)
+                .join("\n")
+            : t("mcps.importFailed"),
         );
-      else {
-        setDone(true);
-        setSources([]);
+      } else {
+        props.onClose();
       }
     } catch {
-      if (!disposed) setError(t("mcps.importFailed"));
+      if (!disposed) {
+        pending = undefined;
+        setError(t("mcps.importFailed"));
+      }
     } finally {
       if (!disposed) setBusy(false);
     }
   }
+
   return (
     <Dialog
       open
@@ -159,222 +175,78 @@ export function ImportDialog(props: {
         if (!open && !busy()) props.onClose();
       }}
     >
-      <DialogContent class="max-w-2xl">
-        <DialogHeader>
+      <DialogContent class="flex max-h-[calc(100dvh-2rem)] w-[calc(100%-2rem)] max-w-2xl flex-col gap-6 overflow-hidden">
+        <DialogHeader class="shrink-0 space-y-3">
           <DialogTitle>{t("mcps.importTitle")}</DialogTitle>
           <DialogDescription>{t("mcps.importHelp")}</DialogDescription>
         </DialogHeader>
-        <div class="max-h-[65vh] space-y-4 overflow-y-auto p-1">
-          <label class="block space-y-1 text-sm">
-            {t("skills.scope")}
-            <select
-              class={inputClass}
-              value={folder()}
-              disabled={busy()}
-              onChange={(event) => setFolder(event.currentTarget.value)}
-            >
-              <option value="">{t("skills.global")}</option>
-              <For each={props.projects}>
-                {(project) => (
-                  <option value={project.folder}>
-                    {project.name} · {project.folder}
-                  </option>
-                )}
-              </For>
-            </select>
-          </label>
-          <Button
-            variant="outline"
+        <div class="min-h-0 min-w-0 flex-1 space-y-4 overflow-y-auto p-1">
+          <SelectField<ImportFormat>
+            label={t("mcps.importFormat")}
+            options={["json", "jsonc", "codex", "zed"]}
+            value={format()}
             disabled={busy()}
-            onClick={() => void review(discoverMcps)}
-          >
-            {t("mcps.discover")}
-          </Button>
-          <label class="block space-y-1 text-sm">
-            {t("mcps.importFormat")}
-            <select
-              class={inputClass}
-              value={format()}
-              disabled={busy()}
-              onChange={(event) =>
-                setFormat(event.currentTarget.value as ImportFormat)
-              }
-            >
-              <option value="json">mcpServers JSON</option>
-              <option value="jsonc">mcpServers JSONC</option>
-              <option value="codex">Codex TOML</option>
-              <option value="zed">Zed JSONC</option>
-            </select>
-          </label>
-          <Button
-            variant="outline"
-            disabled={busy()}
-            onClick={() =>
-              void review(async () => {
-                const value = await selectMcpImport(format());
-                return value ? [value] : [];
-              })
+            labelFor={(value) =>
+              ({
+                json: "mcpServers JSON",
+                jsonc: "mcpServers JSONC",
+                codex: "Codex TOML",
+                zed: "Zed JSONC",
+              })[value]
             }
-          >
-            {t("mcps.selectFile")}
-          </Button>
-          <label class="block space-y-1 text-sm">
-            {t("mcps.pasteJson")}
+            onChange={(value) => {
+              reset();
+              setFormat(value);
+            }}
+          />
+          <div class="flex min-w-0 flex-col gap-2">
+            <div class="flex items-center justify-between gap-3">
+              <label for={configurationId} class="text-sm">
+                {t("mcps.configuration")}
+              </label>
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={busy()}
+                onClick={() => void choose()}
+              >
+                {t("mcps.choose")}
+              </Button>
+            </div>
             <textarea
-              class={inputClass}
+              id={configurationId}
+              class="min-h-48 w-full resize-y rounded-xl border border-input bg-background px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
               autocomplete="off"
               spellcheck={false}
               value={text()}
               disabled={busy()}
-              onInput={(event) => setText(event.currentTarget.value)}
+              aria-invalid={Boolean(error())}
+              aria-describedby={error() ? errorId : undefined}
+              onInput={(event) => {
+                reset();
+                setText(event.currentTarget.value);
+              }}
             />
-          </label>
-          <Button
-            variant="outline"
-            disabled={busy() || !text().trim()}
-            onClick={() => {
-              const value = text();
-              setText("");
-              void review(async () => [
-                await previewMcpImport(value, format()),
-              ]);
-            }}
-          >
-            {t("mcps.review")}
-          </Button>
-          <For each={sources()}>
-            {(source) => (
-              <section class="space-y-2 rounded-lg border border-line p-3">
-                <h3 class="font-medium">{source.tool}</h3>
-                <p class="break-all text-xs text-muted-foreground">
-                  {source.path}
-                </p>
-                <Show when={source.error}>
-                  <p class="text-sm text-muted-foreground">{source.error}</p>
-                </Show>
-                <Show
-                  when={
-                    source.status === "ready" && source.candidates.length === 0
-                  }
-                >
-                  <p class="text-sm text-muted-foreground">
-                    {t("mcps.noDiscovered")}
-                  </p>
-                </Show>
-                <For each={source.candidates}>
-                  {(candidate) => (
-                    <div class="space-y-2 border-t border-line pt-2">
-                      <label class="flex gap-2 text-sm">
-                        <input
-                          type="checkbox"
-                          disabled={busy() || !candidate.id}
-                          checked={
-                            candidate.id
-                              ? choices[candidate.id]?.selected
-                              : false
-                          }
-                          onChange={(event) => {
-                            if (candidate.id)
-                              setChoices(
-                                candidate.id,
-                                "selected",
-                                event.currentTarget.checked,
-                              );
-                          }}
-                        />
-                        {candidate.name} ·{" "}
-                        {candidate.transport ?? t("mcps.unsupported")}
-                      </label>
-                      <Show when={candidate.reason}>
-                        <p class="text-sm text-danger">{candidate.reason}</p>
-                      </Show>
-                      <Show
-                        when={candidate.id && choices[candidate.id]?.selected}
-                      >
-                        <label class="block space-y-1 text-sm">
-                          {t("mcps.importName")}
-                          <input
-                            class={inputClass}
-                            value={
-                              candidate.id ? choices[candidate.id]?.name : ""
-                            }
-                            disabled={busy()}
-                            onInput={(event) => {
-                              if (candidate.id)
-                                setChoices(
-                                  candidate.id,
-                                  "name",
-                                  event.currentTarget.value,
-                                );
-                            }}
-                          />
-                        </label>
-                        <Show
-                          when={
-                            candidate.id &&
-                            names().includes(choices[candidate.id]?.name)
-                          }
-                        >
-                          <p class="text-sm text-danger">
-                            {t("mcps.conflict")}
-                          </p>
-                        </Show>
-                        <label class="flex gap-2 text-sm">
-                          <input
-                            type="checkbox"
-                            disabled={busy()}
-                            checked={
-                              candidate.id
-                                ? choices[candidate.id]?.overwrite
-                                : false
-                            }
-                            onChange={(event) => {
-                              if (candidate.id)
-                                setChoices(
-                                  candidate.id,
-                                  "overwrite",
-                                  event.currentTarget.checked,
-                                );
-                            }}
-                          />
-                          {t("mcps.overwrite")}
-                        </label>
-                      </Show>
-                    </div>
-                  )}
-                </For>
-              </section>
-            )}
-          </For>
-          <Show when={done()}>
-            <p role="status" class="text-sm">
-              {t("mcps.importDone")}
-            </p>
-          </Show>
+          </div>
           <Show when={error()}>
-            <p role="alert" class="whitespace-pre-wrap text-sm text-danger">
+            <p
+              id={errorId}
+              role="alert"
+              class="whitespace-pre-wrap break-words text-sm text-danger"
+            >
               {error()}
             </p>
           </Show>
         </div>
-        <DialogFooter>
+        <DialogFooter class="shrink-0">
           <Button variant="outline" disabled={busy()} onClick={props.onClose}>
             {t("common.cancel")}
           </Button>
           <Button
-            disabled={
-              busy() ||
-              scopeError() ||
-              selected().length === 0 ||
-              selected().some(
-                (choice) =>
-                  !choice.name.trim() ||
-                  (names().includes(choice.name) && !choice.overwrite),
-              )
-            }
+            disabled={busy() || scopeError() || !text().trim()}
             onClick={() => void save()}
           >
-            {t("mcps.importSelected")}
+            {t("mcps.save")}
           </Button>
         </DialogFooter>
       </DialogContent>

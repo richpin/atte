@@ -158,16 +158,12 @@ export const en = {
 
     importTitle: "Import servers",
     importHelp:
-      "Review global settings from other tools, select servers and a destination. Sources stay unchanged. Imported servers start disabled; plain environment and header values go to the OS credential store. OAuth credentials are not imported.",
-    discover: "Discover global settings",
+      "Choose a configuration file or paste its contents, then save to import the servers into the current scope. Sources stay unchanged. Imported servers start disabled; plain environment and header values go to the OS credential store. OAuth credentials are not imported.",
     importFormat: "Source format",
-    selectFile: "Choose configuration file",
-    pasteJson: "Paste configuration",
-    review: "Review",
-    importName: "Destination name (rename to avoid a conflict)",
-    overwrite: "Explicitly replace the existing server with this name",
-    importSelected: "Import selected",
-    importDone: "Servers imported disabled. Review them before enabling.",
+    configuration: "Configuration",
+    choose: "Choose",
+    fileFailed:
+      "Could not read the configuration file. Choose a UTF-8 file up to 1 MiB.",
     reviewFailed:
       "Could not review configuration. Check the selected format and try again.",
     importFailed:
@@ -175,17 +171,19 @@ export const en = {
     noDiscovered: "No servers found in this source.",
     unsupported: "Unsupported",
     check: "Check connection",
+    tools: "Tools",
+    checking: "Checking connection…",
+    toolsUnchecked: "Check the connection to discover tools.",
+    uninstall: "Uninstall",
     cancelCheck: "Cancel check",
     checkFailed: "Connection check failed. Try again.",
-    conflict:
-      "This name already exists. Rename it or explicitly choose replacement.",
+    conflict: "This name already exists. Rename the server in Configuration.",
     checkStatus: {
-      connected:
-        "Connected. Tools listed below. Enable separately to use in new conversations.",
+      connected: "Connected.",
       noTools:
         "Connected, but no tools are available. Check the server’s tool configuration.",
       authenticationRequired:
-        "Authentication required. Sign in for OAuth, or replace the credentials in Details / Edit.",
+        "Authentication required. Refresh to sign in with OAuth, or update credentials in Edit server.",
       networkError:
         "Network error. Check the URL, network and server availability.",
       executionFailed:
@@ -228,8 +226,6 @@ export const en = {
     empty: "No matching servers in this scope.",
     enable: "Forward server",
     registered: "Registered · connection unverified",
-    forwardingHelp:
-      "The toggle controls servers Atte forwards on new conversations or reconnection. Agents may also load their own MCP configuration. Project entries replace global entries with the same name, including disabled entries.",
     deleteTitle: "Delete this MCP server?",
     reconnect:
       "MCP settings changed. Reconnect after the current task finishes to apply them.",

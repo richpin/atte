@@ -164,16 +164,12 @@ export const ko = {
 
     importTitle: "서버 가져오기",
     importHelp:
-      "기존 도구의 전역 설정을 검토하고 서버와 대상 범위를 선택하세요. 원본은 보존됩니다. 가져온 서버는 비활성으로 등록되며 환경변수·헤더의 평문값은 OS 자격 증명 저장소로 옮깁니다. OAuth 자격 증명은 가져오지 않습니다.",
-    discover: "전역 설정 탐색",
+      "설정 파일을 선택하거나 내용을 붙여넣고 저장하면 현재 범위로 서버를 가져옵니다. 원본은 보존됩니다. 가져온 서버는 비활성으로 등록되며 환경변수·헤더의 평문값은 OS 자격 증명 저장소로 옮깁니다. OAuth 자격 증명은 가져오지 않습니다.",
     importFormat: "원본 형식",
-    selectFile: "설정 파일 선택",
-    pasteJson: "설정 붙여넣기",
-    review: "검토",
-    importName: "대상 이름 (충돌 시 이름 변경)",
-    overwrite: "같은 이름의 기존 서버를 명시적으로 덮어쓰기",
-    importSelected: "선택한 서버 가져오기",
-    importDone: "비활성 서버로 가져왔습니다. 검토 후 활성화하세요.",
+    configuration: "설정",
+    choose: "선택",
+    fileFailed:
+      "설정 파일을 읽지 못했습니다. 1 MiB 이하의 UTF-8 파일을 선택하세요.",
     reviewFailed:
       "설정을 검토하지 못했습니다. 원본 형식을 확인하고 다시 시도하세요.",
     importFailed:
@@ -181,15 +177,18 @@ export const ko = {
     noDiscovered: "이 원본에 서버가 없습니다.",
     unsupported: "지원하지 않음",
     check: "연결 확인",
+    tools: "도구",
+    checking: "연결 확인 중…",
+    toolsUnchecked: "연결을 확인하면 도구 목록이 표시됩니다.",
+    uninstall: "제거",
     cancelCheck: "확인 취소",
     checkFailed: "연결을 확인하지 못했습니다. 다시 시도하세요.",
-    conflict: "이미 있는 이름입니다. 이름을 변경하거나 덮어쓰기를 선택하세요.",
+    conflict: "이미 있는 이름입니다. 설정에서 서버 이름을 변경하세요.",
     checkStatus: {
-      connected:
-        "연결되었습니다. 아래 도구를 확인하고 새 대화에서 사용할 때 별도로 활성화하세요.",
+      connected: "연결되었습니다.",
       noTools: "연결되었지만 도구가 없습니다. 서버의 도구 설정을 확인하세요.",
       authenticationRequired:
-        "인증이 필요합니다. OAuth 서버에 로그인하거나 상세 편집에서 자격 증명을 교체하세요.",
+        "인증이 필요합니다. 새로고침으로 OAuth에 로그인하거나 서버 편집에서 자격 증명을 변경하세요.",
       networkError: "네트워크 오류입니다. URL·네트워크·서버 상태를 확인하세요.",
       executionFailed:
         "서버를 실행하지 못했습니다. 실행 파일·인자·환경변수를 확인하세요.",
@@ -230,8 +229,6 @@ export const ko = {
     empty: "이 범위에 일치하는 서버가 없습니다.",
     enable: "서버 전달",
     registered: "등록됨 · 연결 확인 안 됨",
-    forwardingHelp:
-      "토글은 새 대화·재연결 시 Atte가 전달하는 목록을 제어합니다. 에이전트 자체 MCP 설정은 별도로 적용될 수 있습니다. 같은 이름의 프로젝트 항목은 비활성 항목을 포함해 전역 항목 전체를 대체합니다.",
     deleteTitle: "MCP 서버를 삭제할까요?",
     reconnect:
       "MCP 설정이 변경되었습니다. 현재 작업이 끝난 뒤 재연결하면 적용됩니다.",

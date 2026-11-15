@@ -12,6 +12,7 @@ import {
   Ellipsis,
   List,
   PanelRight,
+  Plug,
   RotateCcw,
   Search,
   Settings,
@@ -347,6 +348,9 @@ function ShellContent(props: { shell: AppShellModel }) {
             </Show>
             <Show when={shell.view() === "skills"}>
               <Sparkles aria-hidden="true" class="size-4" />
+            </Show>
+            <Show when={shell.view() === "mcps"}>
+              <Plug aria-hidden="true" class="size-4" />
             </Show>
             <span class="truncate">{title()}</span>
           </h1>

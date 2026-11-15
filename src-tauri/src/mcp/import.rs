@@ -495,10 +495,7 @@ pub(crate) async fn preview_mcp_import(
     .map_err(|_| "Import review failed".into())
 }
 #[tauri::command]
-pub(crate) async fn select_mcp_import(
-    app: AppHandle,
-    format: Format,
-) -> Result<Option<Source>, String> {
+pub(crate) async fn select_mcp_import(app: AppHandle) -> Result<Option<String>, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let Some(file) = app
             .dialog()
@@ -511,13 +508,7 @@ pub(crate) async fn select_mcp_import(
         let path = file
             .into_path()
             .map_err(|_| "Select a local configuration file")?;
-        let text = read_source(&path)?;
-        Ok(Some(app.state::<Arc<Mcp>>().preview_import(
-            &text,
-            format,
-            "Selected file",
-            &path.to_string_lossy(),
-        )))
+        read_source(&path).map(Some).map_err(String::from)
     })
     .await
     .map_err(|_| "File selection failed")?

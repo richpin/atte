@@ -1,4 +1,4 @@
-import { Plus, RotateCcw, Search } from "lucide-solid";
+import { Plus, RotateCcw } from "lucide-solid";
 import { useI18n } from "shared/i18n";
 import {
   Button,
@@ -9,6 +9,8 @@ import {
   DialogHeader,
   DialogTitle,
   Markdown,
+  ScopeSelector,
+  SearchInput,
 } from "shared/ui";
 import {
   createEffect,
@@ -155,9 +157,15 @@ export function SkillsPage(props: {
   return (
     <div class="h-full overflow-y-auto px-6 pb-12">
       <div class="@container mx-auto max-w-4xl space-y-6 pt-6">
-        <div class="flex flex-wrap items-center justify-between gap-3">
-          <p class="text-sm text-muted-foreground">{t("skills.description")}</p>
-          <div class="flex gap-2">
+        <p class="text-sm text-muted-foreground">{t("skills.description")}</p>
+        <div class="flex flex-wrap items-center gap-2">
+          <ScopeSelector
+            projects={props.projects}
+            folder={folder()}
+            disabled={busy()}
+            onChange={setFolder}
+          />
+          <div class="ml-auto flex gap-2">
             <Button
               variant="outline"
               size="sm"
@@ -182,69 +190,11 @@ export function SkillsPage(props: {
             </Button>
           </div>
         </div>
-        <div class="flex flex-wrap items-center gap-2">
-          <fieldset class="flex flex-wrap items-center gap-x-4 gap-y-2">
-            <legend class="sr-only">{t("skills.scope")}</legend>
-            <div class="rounded-xl border border-line p-1">
-              <Button
-                size="sm"
-                variant={!project() ? "secondary" : "ghost"}
-                aria-pressed={!project()}
-                disabled={busy()}
-                onClick={() => setFolder(undefined)}
-              >
-                {t("skills.global")}
-              </Button>
-            </div>
-            <Show when={props.projects.length > 0}>
-              <fieldset class="flex flex-wrap items-center gap-2">
-                <legend class="sr-only">{t("skills.projects")}</legend>
-                <div class="flex flex-wrap gap-1 rounded-xl border border-line p-1">
-                  <For each={props.projects}>
-                    {(entry) => {
-                      const duplicate = () =>
-                        props.projects.filter(
-                          (item) => item.name === entry.name,
-                        ).length > 1;
-                      return (
-                        <Button
-                          size="sm"
-                          variant={
-                            folder() === entry.folder ? "secondary" : "ghost"
-                          }
-                          aria-pressed={folder() === entry.folder}
-                          aria-label={
-                            duplicate()
-                              ? `${entry.name} · ${entry.folder}`
-                              : entry.name
-                          }
-                          title={entry.folder}
-                          disabled={busy()}
-                          onClick={() => setFolder(entry.folder)}
-                        >
-                          {entry.name}
-                        </Button>
-                      );
-                    }}
-                  </For>
-                </div>
-              </fieldset>
-            </Show>
-          </fieldset>
-        </div>
-        <label class="relative block">
-          <Search
-            aria-hidden="true"
-            class="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground"
-          />
-          <span class="sr-only">{t("skills.search")}</span>
-          <input
-            class="h-10 w-full rounded-xl border border-input bg-background pl-9 pr-3 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
-            value={search()}
-            onInput={(event) => setSearch(event.currentTarget.value)}
-            placeholder={t("skills.search")}
-          />
-        </label>
+        <SearchInput
+          label={t("skills.search")}
+          value={search()}
+          onInput={setSearch}
+        />
         <Show when={operationError()}>
           {(error) => (
             <p role="alert" class="text-sm text-danger">

@@ -5,6 +5,7 @@ import {
   FolderClosed,
   FolderOpen,
   Pencil,
+  Plug,
   Plus,
   Settings,
   Sparkles,
@@ -560,9 +561,10 @@ export function AppSidebar(props: {
                 </DropdownMenuItem>
                 <DropdownMenuItem
                   aria-current={props.view === "mcps" ? "page" : undefined}
+                  class="aria-[current=page]:bg-menu-hover aria-[current=page]:font-medium"
                   onSelect={props.onManageMcps}
                 >
-                  <Settings aria-hidden="true" class="size-4" />
+                  <Plug aria-hidden="true" class="size-4" />
                   {t("settings.mcps")}
                 </DropdownMenuItem>
               </DropdownMenuContent>

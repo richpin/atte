@@ -40,17 +40,14 @@ export function toggleMcp(target: Target, name: string, enabled: boolean) {
   return invoke<void>("toggle_mcp", { target, name, enabled });
 }
 
-export function discoverMcps() {
-  return invoke<ImportSource[]>("discover_mcps");
-}
 export function previewMcpImport(text: string, format: ImportFormat) {
   return invoke<ImportSource>("preview_mcp_import", {
     text,
     format,
   });
 }
-export function selectMcpImport(format: ImportFormat) {
-  return invoke<ImportSource | null>("select_mcp_import", { format });
+export function selectMcpImport() {
+  return invoke<string | null>("select_mcp_import");
 }
 export function importMcps(target: Target, selections: ImportSelection[]) {
   return invoke<{ id: string; name: string; error: string | null }[]>(

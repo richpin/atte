@@ -1,9 +1,10 @@
 import * as DialogPrimitive from "@kobalte/core/dialog";
 import type { PolymorphicProps } from "@kobalte/core/polymorphic";
 import type { Component, ComponentProps, JSX, ValidComponent } from "solid-js";
-import { Show, splitProps } from "solid-js";
+import { createSignal, Show, splitProps } from "solid-js";
 
 import { cn } from "./cn";
+import { OverlayMountContext } from "./overlay-mount";
 
 const Dialog = DialogPrimitive.Root;
 const DialogTrigger = DialogPrimitive.Trigger;
@@ -12,13 +13,19 @@ const DialogPortal: Component<
   DialogPrimitive.DialogPortalProps & { contained?: boolean }
 > = (props) => {
   const [, rest] = splitProps(props, ["children", "contained"]);
+  const [mount, setMount] = createSignal<HTMLDivElement>();
   return (
     <Show
       when={props.contained}
       fallback={
         <DialogPrimitive.Portal {...rest}>
-          <div class="fixed inset-0 z-50 flex items-start justify-center sm:items-center">
-            {props.children}
+          <div
+            ref={setMount}
+            class="fixed inset-0 z-50 flex items-start justify-center sm:items-center"
+          >
+            <OverlayMountContext.Provider value={mount}>
+              {props.children}
+            </OverlayMountContext.Provider>
           </div>
         </DialogPrimitive.Portal>
       }
@@ -45,7 +52,7 @@ const DialogOverlay = <T extends ValidComponent = "div">(
     <DialogPrimitive.Overlay
       class={cn(
         "inset-0 bg-background/80 data-[expanded]:animate-in data-[closed]:animate-out data-[closed]:fade-out-0 data-[expanded]:fade-in-0",
-        props.contained ? "absolute" : "fixed z-50",
+        props.contained ? "absolute" : "fixed",
         props.class,
       )}
       {...rest}
@@ -78,7 +85,7 @@ const DialogContent = <T extends ValidComponent = "div">(
       <DialogPrimitive.Content
         class={cn(
           "left-1/2 top-1/2 grid max-h-screen w-full max-w-lg -translate-x-1/2 -translate-y-1/2 gap-4 overflow-y-auto rounded-2xl border border-line bg-background p-6 shadow-lg duration-200 data-[expanded]:animate-in data-[closed]:animate-out data-[closed]:fade-out-0 data-[expanded]:fade-in-0 data-[closed]:zoom-out-95 data-[expanded]:zoom-in-95 data-[closed]:slide-out-to-left-1/2 data-[closed]:slide-out-to-top-[48%] data-[expanded]:slide-in-from-left-1/2 data-[expanded]:slide-in-from-top-[48%] [&_button]:rounded-xl",
-          props.contained ? "absolute max-h-[calc(100%-2rem)]" : "fixed z-50",
+          props.contained ? "absolute max-h-[calc(100%-2rem)]" : "fixed",
           props.class,
         )}
         {...rest}
