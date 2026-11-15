@@ -17,6 +17,10 @@
 4. 같은 버전의 Windows stable candidate를 생성하고 [정식 manifest 병합](windows.md)의 `pnpm release:manifest`로 두 플랫폼을 포함한 `latest.json`을 만든다. 플랫폼 fragment를 정식 manifest로 게시하지 않는다. `v<version>` 태그의 GitHub Release를 draft로 만들고 DMG, macOS updater archive와 서명, Windows Setup.exe와 서명, 합친 `latest.json`을 모두 업로드한다. 태그는 빌드한 코드와 일치해야 한다. 같은 버전의 파일을 나중에 덮어쓰지 않는다. 최초 릴리스 이후에도 모든 stable Release에는 `latest.json`과 updater 파일을 포함한다.
 5. asset이 모두 준비되면 Release를 공개하고 latest로 지정한다. `latest.json`에는 같은 버전의 `darwin-aarch64`와 `windows-x86_64` 항목을 함께 포함한다. 이전 버전의 다른 플랫폼 파일을 새 버전으로 광고하지 않는다. 다운로드 URL은 정확한 버전 태그에 고정된다. 변경 내용은 GitHub Release 본문에 작성하고, 앱에서도 표시하려면 게시 전 `latest.json`에 선택 필드 `notes`를 넣는다.
 
+## v0.1.1 배포 범위
+
+v0.1.1은 Apple Silicon macOS만 배포한다. Windows 지원 코드는 유지하지만 검증 전이므로 이 버전의 릴리스 설명과 asset에는 포함하지 않는다. 위 4–5단계의 두 플랫폼 병합 대신, 이번 Mac 빌드가 생성한 `update-darwin.json`을 `latest.json`으로 복사한다. `version`이 `0.1.1`이고 `platforms`에는 `darwin-aarch64`만 있는지 확인한 뒤 DMG, updater archive, 서명과 함께 draft에 업로드한다.
+
 ## 앱의 동작
 
 서명 공개키가 주입된 macOS 배포 빌드에서는 시작 시 한 번 새 버전을 확인한다. 일반 설정에서도 수동으로 확인할 수 있다. 새 버전이 있으면 오른쪽 하단에 닫을 수 있는 알림을 표시하고, 일반 설정의 `업데이트 확인` 버튼을 `다운로드 및 설치`로 바꾼다. 알림을 닫으면 이번 실행에서는 다시 표시하지 않는다. 사용자가 다운로드 및 설치를 선택해야 적용하며, 다운로드 진행률과 실패·재시도 상태를 표시한다. Tauri가 HTTPS와 artifact 서명을 검증하고, 서명에 기록된 버전도 manifest와 비교한다. 최초 updater 포함 버전 이전의 설치본은 한 번 수동으로 설치해야 한다.
