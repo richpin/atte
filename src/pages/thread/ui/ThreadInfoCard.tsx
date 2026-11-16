@@ -1,8 +1,15 @@
-import { X } from "lucide-solid";
+import { ArrowRight, CircleAlert, X } from "lucide-solid";
 import { useI18n } from "shared/i18n";
-import { Button, Card, Progress } from "shared/ui";
-import { Show } from "solid-js";
-import type { ContextUsage } from "../model/types";
+import {
+  Button,
+  Card,
+  Progress,
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "shared/ui";
+import { createMemo, For, Show } from "solid-js";
+import type { ContextUsage, Thread } from "../model/types";
 
 function formatTokens(value: number) {
   return value < 1_000
@@ -12,9 +19,14 @@ function formatTokens(value: number) {
 
 export function ThreadInfoCard(props: {
   usage: ContextUsage | null;
+  mcp?: Thread["mcp"];
+  onManageMcps: () => void;
   onClose: () => void;
 }) {
   const { t } = useI18n();
+  const servers = createMemo(() =>
+    [...(props.mcp?.servers ?? [])].sort((a, b) => a.localeCompare(b)),
+  );
   const usage = () =>
     props.usage && props.usage.size > 0 ? props.usage : null;
   const percentage = () => {
@@ -66,6 +78,79 @@ export function ThreadInfoCard(props: {
           </>
         )}
       </Show>
+      <section class="mt-5 border-t border-line pt-4" aria-label="MCP">
+        <div class="flex items-center justify-between">
+          <h2 class="text-sm font-medium">
+            MCP<Show when={props.mcp?.servers}> · {servers().length}</Show>
+          </h2>
+          <Button
+            variant="ghost"
+            size="icon"
+            class="size-6 text-muted hover:text-ink"
+            aria-label={t("thread.manageMcps")}
+            title={t("thread.manageMcps")}
+            onClick={props.onManageMcps}
+          >
+            <ArrowRight aria-hidden="true" class="size-3.5" />
+          </Button>
+        </div>
+        <Show when={props.mcp?.error}>
+          {(error) => (
+            <p class="mt-3 break-words text-xs text-muted">{error()}</p>
+          )}
+        </Show>
+        <Show when={!props.mcp?.error}>
+          <Show
+            when={props.mcp?.servers}
+            fallback={
+              <p class="mt-3 text-xs text-muted">
+                {t("thread.mcpUnavailable")}
+              </p>
+            }
+          >
+            <Show
+              when={servers().length}
+              fallback={
+                <p class="mt-3 text-xs text-muted">{t("thread.mcpEmpty")}</p>
+              }
+            >
+              <ul class="mt-2 max-h-30 overflow-y-auto" aria-label="MCP">
+                <For each={servers()}>
+                  {(name) => {
+                    const issue = () =>
+                      props.mcp?.issues.find((item) => item.name === name);
+                    return (
+                      <li class="flex h-6 items-center gap-1.5 text-xs">
+                        <span class="truncate" title={name}>
+                          {name}
+                        </span>
+                        <Show when={issue()}>
+                          {(problem) => (
+                            <Tooltip placement="left">
+                              <TooltipTrigger
+                                class="shrink-0 text-muted hover:text-ink"
+                                aria-label={t("thread.mcpIssue", { name })}
+                              >
+                                <CircleAlert
+                                  aria-hidden="true"
+                                  class="size-3.5"
+                                />
+                              </TooltipTrigger>
+                              <TooltipContent class="max-w-64 break-words border-line bg-menu text-ink">
+                                {problem().reason}
+                              </TooltipContent>
+                            </Tooltip>
+                          )}
+                        </Show>
+                      </li>
+                    );
+                  }}
+                </For>
+              </ul>
+            </Show>
+          </Show>
+        </Show>
+      </section>
     </Card>
   );
 }

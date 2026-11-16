@@ -368,6 +368,10 @@ export const ko = {
     information: "스레드 정보",
     closeInformation: "스레드 정보 닫기",
     context: "Context",
+    manageMcps: "MCPs 열기",
+    mcpEmpty: "없음",
+    mcpUnavailable: "정보 없음",
+    mcpIssue: "{{name}} 문제",
     contextUsageUnavailable: "사용량 정보 없음",
     contextUsageExact: "{{used}} / {{size}} 토큰",
     workLog: {

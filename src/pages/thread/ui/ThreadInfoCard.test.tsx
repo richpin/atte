@@ -3,7 +3,7 @@ import { I18nProvider } from "shared/i18n";
 import { createMemorySettings, SettingsProvider } from "shared/settings";
 import { createSignal } from "solid-js";
 import { afterEach, beforeEach, expect, it } from "vitest";
-import type { ContextUsage } from "../model/types";
+import type { ContextUsage, Thread } from "../model/types";
 import { ThreadInfoCard } from "./ThreadInfoCard";
 
 let settings = createMemorySettings();
@@ -22,7 +22,11 @@ it("reacts to replacement and compaction with exact accessible usage", () => {
   render(() => (
     <SettingsProvider settings={settings}>
       <I18nProvider>
-        <ThreadInfoCard usage={usage()} onClose={() => undefined} />
+        <ThreadInfoCard
+          usage={usage()}
+          onManageMcps={() => undefined}
+          onClose={() => undefined}
+        />
       </I18nProvider>
     </SettingsProvider>
   ));
@@ -53,6 +57,7 @@ it("keeps raw counts below K and bounds the progress without altering reported u
       <I18nProvider>
         <ThreadInfoCard
           usage={{ used: 999, size: 900 }}
+          onManageMcps={() => undefined}
           onClose={() => undefined}
         />
       </I18nProvider>
@@ -71,7 +76,11 @@ it("closes from the top-right action", () => {
   render(() => (
     <SettingsProvider settings={settings}>
       <I18nProvider>
-        <ThreadInfoCard usage={null} onClose={() => (closed = true)} />
+        <ThreadInfoCard
+          usage={null}
+          onManageMcps={() => undefined}
+          onClose={() => (closed = true)}
+        />
       </I18nProvider>
     </SettingsProvider>
   ));
@@ -80,4 +89,57 @@ it("closes from the top-right action", () => {
     screen.getByRole("button", { name: "Close thread information" }),
   );
   expect(closed).toBe(true);
+});
+
+it("distinguishes unavailable, empty, and populated MCP state reactively", async () => {
+  const [mcp, setMcp] = createSignal<Thread["mcp"]>();
+  render(() => (
+    <SettingsProvider settings={settings}>
+      <I18nProvider>
+        <ThreadInfoCard
+          usage={null}
+          mcp={mcp()}
+          onManageMcps={() => undefined}
+          onClose={() => undefined}
+        />
+      </I18nProvider>
+    </SettingsProvider>
+  ));
+  expect(screen.getByText("Information unavailable")).toBeTruthy();
+  setMcp({
+    servers: [],
+    error: null,
+    issues: [],
+    revision: "1",
+    reconnectRequired: false,
+  });
+  expect(screen.getByText("None")).toBeTruthy();
+  const name = "a-very-long-server-name-that-does-not-fit";
+  setMcp({
+    servers: ["zeta", name, "beta", "delta", "echo", "foxtrot"],
+    error: null,
+    issues: [{ name, reason: "Sign in to this MCP server" }],
+    revision: "2",
+    reconnectRequired: false,
+  });
+  expect(
+    screen.getAllByRole("listitem").map((item) => item.textContent),
+  ).toEqual([name, "beta", "delta", "echo", "foxtrot", "zeta"]);
+  expect(screen.getByTitle(name)).toBeTruthy();
+  const issue = screen.getByRole("button", { name: `Issue with ${name}` });
+  fireEvent.focus(issue);
+  expect(await screen.findByRole("tooltip")).toHaveProperty(
+    "textContent",
+    "Sign in to this MCP server",
+  );
+  setMcp({
+    servers: null,
+    error: "Correct the settings file",
+    issues: [],
+    revision: "invalid",
+    reconnectRequired: false,
+  });
+  expect(screen.getByText("Correct the settings file")).toBeTruthy();
+  expect(screen.queryByRole("list")).toBeNull();
+  expect(screen.queryByText("Information unavailable")).toBeNull();
 });

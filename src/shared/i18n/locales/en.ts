@@ -367,6 +367,10 @@ export const en = {
     information: "Thread information",
     closeInformation: "Close thread information",
     context: "Context",
+    manageMcps: "Open MCPs",
+    mcpEmpty: "None",
+    mcpUnavailable: "Information unavailable",
+    mcpIssue: "Issue with {{name}}",
     contextUsageUnavailable: "Usage unavailable",
     contextUsageExact: "{{used}} / {{size}} tokens",
     workLog: {

@@ -37,6 +37,8 @@ pub struct Issue {
 #[derive(Clone, Debug, Default, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct SessionState {
+    pub servers: Option<Vec<String>>,
+    pub error: Option<String>,
     pub issues: Vec<Issue>,
     pub revision: String,
     pub reconnect_required: bool,
@@ -445,6 +447,7 @@ impl Mcp {
     ) -> Result<(Vec<McpServer>, SessionState), String> {
         let revision = self.configuration_revision(combined)?;
         let mut state = SessionState {
+            servers: Some(Vec::new()),
             revision,
             ..Default::default()
         };
@@ -498,6 +501,9 @@ impl Mcp {
                     }
                 }
             })();
+            if !matches!(&result, Ok(None)) {
+                state.servers.get_or_insert_default().push(name.clone());
+            }
             match result {
                 Ok(Some(server)) => servers.push(server),
                 Ok(None) => {}

@@ -254,6 +254,20 @@ async fn acp_new_load_and_resume_forward_servers_and_call_the_stdio_tool() {
         let restored = ready(&threads, draft.id).await;
         assert!(!restored.mcp.reconnect_required);
         assert_eq!(restored.mcp.issues[0].name, "unsupported-http");
+        assert!(restored
+            .mcp
+            .servers
+            .as_ref()
+            .unwrap()
+            .contains(&"unsupported-http".into()));
+        assert!(!threads
+            .get(other.id)
+            .unwrap()
+            .mcp
+            .servers
+            .as_ref()
+            .unwrap()
+            .contains(&"unsupported-http".into()));
         assert_eq!(
             threads.get(other.id).unwrap().session_id,
             other_connected.session_id
@@ -763,3 +777,34 @@ mod check_http;
 mod import;
 
 mod oauth;
+
+#[test]
+fn session_inventory_includes_enabled_servers_and_keeps_failures_separate() {
+    let root = tempfile::tempdir().unwrap();
+    let service = service(root.path(), Arc::new(MemoryCredentials::default()));
+    for (name, enabled) in [("enabled", true), ("disabled", false)] {
+        let mut server = http();
+        server.enabled = enabled;
+        service
+            .save(&Target::Global, name, server, BTreeMap::new(), true)
+            .unwrap();
+    }
+    let (servers, state) = service
+        .resolve(root.path(), root.path(), true, &BTreeMap::new())
+        .unwrap();
+    assert_eq!(servers.len(), 1);
+    assert_eq!(state.servers, Some(vec!["enabled".into()]));
+    assert!(state.issues.is_empty());
+    let (servers, state) = service
+        .resolve(root.path(), root.path(), false, &BTreeMap::new())
+        .unwrap();
+    assert!(servers.is_empty());
+    assert_eq!(state.servers, Some(vec!["enabled".into()]));
+    assert_eq!(state.issues[0].name, "enabled");
+    service.toggle(&Target::Global, "enabled", false).unwrap();
+    let (_, state) = service
+        .resolve(root.path(), root.path(), true, &BTreeMap::new())
+        .unwrap();
+    assert_eq!(state.servers, Some(vec![]));
+    assert_eq!(SessionState::default().servers, None);
+}

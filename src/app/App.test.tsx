@@ -5742,7 +5742,7 @@ it("keeps the initial theme and language while a settings error blocks saving un
   );
 });
 
-it("shows MCP diagnostics and defers reconnection until the current task finishes", async () => {
+it("shows MCP diagnostics and opens MCP management from thread information", async () => {
   const current = {
     id: "mcp-thread",
     title: "MCP thread",
@@ -5752,6 +5752,8 @@ it("shows MCP diagnostics and defers reconnection until the current task finishe
     sessionId: "remote-1",
     turns: [],
     mcp: {
+      servers: ["remote"],
+      error: null,
       revision: "old",
       reconnectRequired: true,
       issues: [
@@ -5769,26 +5771,16 @@ it("shows MCP diagnostics and defers reconnection until the current task finishe
   await userEvent.click(
     await screen.findByRole("button", { name: current.title }),
   );
-  expect(await screen.findByText(/MCP 설정이 변경되었습니다/)).toBeTruthy();
-  expect(
-    screen.getByText(/Agent does not support HTTP MCP servers/),
-  ).toBeTruthy();
-  expect(screen.getByRole("button", { name: "다시 연결" })).toHaveProperty(
-    "disabled",
-    true,
+  expect(screen.queryByText(/MCP 설정이 변경되었습니다/)).toBeNull();
+  await userEvent.hover(screen.getByRole("button", { name: "remote 문제" }));
+  expect(await screen.findByRole("tooltip")).toHaveProperty(
+    "textContent",
+    "Agent does not support HTTP MCP servers",
   );
-  expect(
-    vi
-      .mocked(invoke)
-      .mock.calls.filter(([command]) => command === "reconnect_thread"),
-  ).toHaveLength(0);
-  receive({ ...current, status: "sessionReady" });
-  await waitFor(() =>
-    expect(screen.getByRole("button", { name: "다시 연결" })).toHaveProperty(
-      "disabled",
-      false,
-    ),
-  );
-  await userEvent.click(screen.getByRole("button", { name: "다시 연결" }));
-  expect(invoke).toHaveBeenCalledWith("reconnect_thread", { id: current.id });
+  expect(screen.queryByRole("button", { name: "다시 연결" })).toBeNull();
+  await userEvent.click(screen.getByRole("button", { name: "MCPs 열기" }));
+  expect(await screen.findByRole("button", { name: "서버 추가" })).toBeTruthy();
+  expect(invoke).not.toHaveBeenCalledWith("reconnect_thread", {
+    id: current.id,
+  });
 });

@@ -26,6 +26,7 @@ export function ThreadPage(props: {
   model: ThreadModel;
   agents: PreparedAgent[];
   onManage: () => void;
+  onManageMcps: () => void;
   onOpenFile?: (path: string) => void;
   onOpenChanges?: (turnId: string, files: PreparedFileChange[]) => void;
 }) {
@@ -224,6 +225,8 @@ export function ThreadPage(props: {
                   <Show when={thread() && props.showInfoCard}>
                     <ThreadInfoCard
                       usage={thread()?.contextUsage ?? null}
+                      mcp={thread()?.mcp}
+                      onManageMcps={props.onManageMcps}
                       onClose={props.onCloseInfoCard}
                     />
                   </Show>

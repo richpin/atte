@@ -60,6 +60,8 @@ export interface Thread {
   contextUsage: ContextUsage | null;
   availableCommands: AvailableCommand[];
   mcp?: {
+    servers: string[] | null;
+    error: string | null;
     issues: { name: string; reason: string }[];
     revision: string;
     reconnectRequired: boolean;

@@ -58,7 +58,6 @@ import {
   createEffect,
   createSignal,
   createUniqueId,
-  For,
   onCleanup,
   onMount,
   Show,
@@ -484,38 +483,6 @@ function ShellContent(props: { shell: AppShellModel }) {
           onManageAgents={shell.showAgents}
         />
       </div>
-      <Show
-        when={
-          shell.view() === "thread" && threads.thread()?.mcp?.reconnectRequired
-        }
-      >
-        <div
-          role="status"
-          class="flex items-center gap-4 border-b border-line px-6 py-3 text-sm"
-        >
-          <p class="flex-1">{t("mcps.reconnect")}</p>
-          <Button
-            size="sm"
-            variant="outline"
-            disabled={!threads.canReconnect()}
-            onClick={() => void threads.reconnect()}
-          >
-            {t("thread.reconnect")}
-          </Button>
-        </div>
-      </Show>
-      <Show when={shell.view() === "thread"}>
-        <For each={threads.thread()?.mcp?.issues}>
-          {(issue) => (
-            <p
-              role="status"
-              class="border-b border-line px-6 py-2 text-sm text-muted"
-            >
-              MCP · {issue.name}: {issue.reason}
-            </p>
-          )}
-        </For>
-      </Show>
       <div hidden={shell.view() !== "thread"} class="min-h-0 flex-1">
         <ThreadPanelLayout
           model={shell.threadPanels}
@@ -550,6 +517,7 @@ function ShellContent(props: { shell: AppShellModel }) {
               model={threads}
               agents={shell.agents()}
               onManage={shell.showAgents}
+              onManageMcps={shell.showMcps}
             />
           </WebLinkProvider>
         </ThreadPanelLayout>

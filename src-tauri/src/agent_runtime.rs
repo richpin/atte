@@ -606,14 +606,12 @@ async fn run_session(
                 }
                 Err(_) => {
                     updates.mcp_configured(crate::mcp::SessionState {
-                        issues: vec![crate::mcp::Issue {
-                            name: "MCP settings".into(),
-                            reason:
-                                "Correct the global or project settings file before reconnecting"
-                                    .into(),
-                        }],
+                        error: Some(
+                            "Correct the global or project settings file before reconnecting"
+                                .into(),
+                        ),
                         revision: "invalid".into(),
-                        reconnect_required: false,
+                        ..Default::default()
                     });
                     return Err(ConnectionFailure::SessionCreationFailed);
                 }
